@@ -139,6 +139,11 @@ span.del { color: $danger; }
 .la-slash-foot { color: $subtle; }
 /* A sessions-picker row's label (the row itself is the slash popup's). */
 .la-panel-label { width: 1fr; }
+/* An ask_user question, in flow above the composer (both clients). */
+.la-question { height: auto; layout: column; border: rounded; border-color: $accent; title-color: $accent; padding: 0 1; }
+.la-question-text { width: 1fr; }
+.la-question-rows { height: auto; layout: column; margin: 1 0 0 0; }
+.la-question-label { width: auto; }
 
 /* The help overlay's own rows (the commands section and the composer's
  * enter keys under the hints). */

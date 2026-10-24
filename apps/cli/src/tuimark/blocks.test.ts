@@ -325,6 +325,9 @@ test("a call summary names the path, the command or the arguments", () => {
   expect(named("task", { prompt: "\n\n  find the leak\nthen" })).toBe(
     "find the leak",
   );
+  expect(named("ask_user", { question: "Which store?\nIt matters" })).toBe(
+    "Which store?",
+  );
   expect(named("todo_write", { todos: [{}, {}] })).toBe("2 items");
   expect(named("todo_write", { todos: [{}] })).toBe("1 item");
   // A wrong-typed argument falls back to the generic line.
@@ -333,6 +336,7 @@ test("a call summary names the path, the command or the arguments", () => {
 
 test("a card names its tool as a reader says it", () => {
   expect(toolTitle("run_command")).toBe("Command");
+  expect(toolTitle("ask_user")).toBe("Question");
   expect(toolTitle("web_search")).toBe("Web search");
   expect(toolTitle("cortex__status")).toBe("MCP · cortex · status");
   expect(toolTitle("custom")).toBe("custom");

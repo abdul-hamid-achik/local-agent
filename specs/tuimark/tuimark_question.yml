@@ -1,0 +1,96 @@
+version: 1
+name: bun_tuimark_question
+intent: |
+    the Tuimark client shows a model's ask_user question in flow above the
+    composer: down moves the choice and enter answers it once the status
+    line says it waits for the answer (a moment after it opens), the model
+    reads the chosen label back, and a typed answer is
+    sent from the composer to the question, not as a new message; esc on a
+    third question skips it and the turn goes on.
+target:
+    cmd: ["bun", "specs/tuimark/fixture.ts", "chat"]
+    cwd: "${projectRoot}"
+terminal:
+    cols: 100
+    rows: 32
+    alternateScreen: require
+steps:
+    - wait:
+        screen:
+            contains: "Message the model"
+        timeoutMs: 15000
+    - type: "ask me which store"
+    - press: enter
+    - wait:
+        screen:
+            contains: "Question · choose one"
+        timeoutMs: 15000
+    - wait:
+        screen:
+            contains: "Waiting for your answer"
+        timeoutMs: 5000
+    - snapshot: choice
+    - press: down
+    - wait:
+        screen:
+            contains: "› 2 SQLite"
+        timeoutMs: 5000
+    - press: enter
+    - wait:
+        screen:
+            contains: "noted: The user chose: SQLite (id lite)"
+        timeoutMs: 15000
+    - wait:
+        screen:
+            notContains: "Question · choose one"
+        timeoutMs: 5000
+    - type: "ask for text"
+    - press: enter
+    - wait:
+        screen:
+            contains: "Type your answer"
+        timeoutMs: 15000
+    - wait:
+        screen:
+            contains: "Waiting for your answer"
+        timeoutMs: 5000
+    - type: "8080"
+    - press: enter
+    - wait:
+        screen:
+            contains: "noted: The user answered: 8080"
+        timeoutMs: 15000
+    - snapshot: answered
+    - type: "ask me again"
+    - press: enter
+    - wait:
+        screen:
+            contains: "Question · choose one"
+        timeoutMs: 15000
+    - press: esc
+    - wait:
+        screen:
+            contains: "noted: The user declined to answer"
+        timeoutMs: 15000
+    - press: ctrl+c
+    - wait:
+        process:
+            exitCode: 0
+        timeoutMs: 10000
+outcomes:
+    - id: tuimark_question_skip
+      description: esc skips a question and the turn goes on (the chosen row's answer is a step above)
+      verify:
+        screen:
+            contains: "noted: The user declined to answer"
+    - id: tuimark_question_text
+      description: a typed answer reaches the question, not a new turn
+      verify:
+        screen:
+            contains: "noted: The user answered: 8080"
+    - id: tuimark_question_exits
+      description: the client exits cleanly
+      verify:
+        process:
+            exitCode: 0
+contractHash: sha256:0b61b911219f00c2260d074e9e48ab74cb0d71c450225a03585c563ab9a3bc8c

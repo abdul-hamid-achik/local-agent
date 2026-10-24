@@ -2,7 +2,7 @@
 // They are built with the same code the client runs (blocks.ts, store.ts), so a
 // change to a store shape shows up in the goldens instead of in a terminal.
 
-import type { ApprovalRequest, Message } from "@local-agent/runtime";
+import type { ApprovalRequest, Message, Question } from "@local-agent/runtime";
 import {
   type Block,
   liveToolView,
@@ -22,6 +22,10 @@ import {
   initialStore,
   mcpLines,
   panelState,
+  QUESTION_PLACEHOLDER_CHOICE,
+  QUESTION_PLACEHOLDER_TEXT,
+  QUESTION_STATUS,
+  questionState,
   type Store,
   sessionRows,
   statusLines,
@@ -329,6 +333,58 @@ export function longDiffText(): string {
   return lines.join("\n");
 }
 
+/** A choice the model asked for, open above the composer. */
+const CHOICE_QUESTION: Question = {
+  question: "Which store should the cache use?",
+  kind: "single",
+  options: [
+    { id: "pg", label: "Postgres", detail: "the existing database" },
+    { id: "lite", label: "SQLite", detail: "one file next to the binary" },
+    { id: "mem", label: "Memory only" },
+  ],
+};
+
+/** An open ask_user question: its card waits, the composer answers. */
+function questionStore(question: Question, sel = 0): Store {
+  const { store, builder } = base();
+  builder.fromMessage({
+    role: "assistant",
+    content: "",
+    tool_calls: [
+      {
+        id: "call-ask",
+        function: { name: "ask_user", arguments: { ...question } },
+      },
+    ],
+  });
+  const live = liveToolView(builder.takeCall(), "ask_user", "requested");
+  store.live = {
+    ...live,
+    card: { ...live.card, status: "waiting for your answer", running: true },
+  };
+  store.question = questionState(question, sel);
+  store.busy = true;
+  store.placeholder =
+    question.kind === "freetext"
+      ? QUESTION_PLACEHOLDER_TEXT
+      : QUESTION_PLACEHOLDER_CHOICE;
+  store.status = QUESTION_STATUS;
+  return store;
+}
+
+export function questionSample(): Store {
+  return questionStore(CHOICE_QUESTION);
+}
+
+/** A typed answer: no rows, the composer is the answer. */
+export function questionTextSample(): Store {
+  return questionStore({
+    question: "Which port does the staging server listen on?",
+    kind: "freetext",
+    options: [],
+  });
+}
+
 /** The edit dialog over a diff taller than its viewport. */
 export function longApprovalSample(): Store {
   const store = approvalSample();
@@ -621,6 +677,8 @@ export const SAMPLES = {
   "sample-approval-mcp": mcpApprovalSample,
   "sample-approval-truncated": truncatedApprovalSample,
   "sample-approval-command": commandApprovalSample,
+  "sample-question": questionSample,
+  "sample-question-text": questionTextSample,
   "sample-thinking": thinkingSample,
   "sample-streaming": streamingSample,
   "sample-palette": paletteSample,
@@ -676,6 +734,7 @@ export const INLINE_SAMPLES = {
   "inline-sample-thinking": () => toInline(thinkingSample()),
   "inline-sample-approval": inlineApprovalSample,
   "inline-sample-approval-long": inlineLongApprovalSample,
+  "inline-sample-question": () => toInline(questionSample()),
   "inline-sample-palette": () => toInline(paletteSample()),
   "inline-sample-help": () => toInline(helpSample()),
   "inline-sample-details": inlineDetailsSample,

@@ -4,12 +4,14 @@ import { join } from "node:path";
 import type {
   AgentEvent,
   AgentOptions,
+  Answer,
   Approval,
   ApprovalRequest,
   McpConnection,
   Message,
   OllamaAdmission,
   Provider,
+  Question,
   SessionContext,
   Workspace,
 } from "@local-agent/runtime";
@@ -38,6 +40,13 @@ import {
   APPROVAL_WAIT_STATUS,
   IDLE_STATUS,
   NO_DETAILS_STATUS,
+  QUESTION_EMPTY_STATUS,
+  QUESTION_NO_MATCH_STATUS,
+  QUESTION_PLACEHOLDER_CHOICE,
+  QUESTION_PLACEHOLDER_TEXT,
+  QUESTION_STATUS,
+  QUESTION_UNARMED_STATUS,
+  QUESTION_WAIT_STATUS,
   type Store,
 } from "#cli/tuimark/store";
 
@@ -571,6 +580,233 @@ test("a parallel batch times each call from its start to its own result", async 
     ["p2.txt", "3.0s"],
     ["p3.txt", "0.3s"],
   ]);
+});
+
+// ------------------------------------------------------------------ ask_user
+
+const STORE_QUESTION: Question = {
+  question: "Which store?",
+  kind: "single",
+  options: [
+    { id: "pg", label: "Postgres" },
+    { id: "lite", label: "SQLite", detail: "one file" },
+    { id: "mem", label: "Memory" },
+  ],
+};
+const PORT_QUESTION: Question = {
+  question: "Which port?",
+  kind: "freetext",
+  options: [],
+};
+const DEPLOY_QUESTION: Question = {
+  question: "Deploy now?",
+  kind: "yes_no",
+  options: [],
+};
+
+/**
+ * A turn that asks `question` once `gate` opens (the user may type
+ * meanwhile), records the answer in `answers`, and finishes with a reply.
+ */
+function asking(
+  question: Question,
+  answers: Answer[],
+  gate: Promise<void> = Promise.resolve(),
+): Script {
+  return async function* ({ options }) {
+    await gate;
+    yield {
+      type: "message",
+      message: {
+        role: "assistant",
+        content: "",
+        tool_calls: [
+          {
+            id: "q1",
+            function: { name: "ask_user", arguments: { ...question } },
+          },
+        ],
+      },
+    };
+    yield { type: "tool_requested", id: "a1", name: "ask_user" };
+    if (!options.ask) throw new Error("the client offers no ask");
+    const answer = await options.ask(question, options.signal);
+    answers.push(answer);
+    yield { type: "tool_start", id: "a1", name: "ask_user" };
+    const status = answer.kind === "declined" ? "denied" : "succeeded";
+    yield {
+      type: "message",
+      message: {
+        role: "tool",
+        tool_name: "ask_user",
+        tool_call_id: "q1",
+        content: JSON.stringify({ status, output: "o" }),
+      },
+    };
+    yield {
+      type: "tool_result",
+      id: "a1",
+      name: "ask_user",
+      status,
+      output: "o",
+    };
+    yield {
+      type: "message",
+      message: { role: "assistant", content: "after the answer" },
+    };
+  };
+}
+
+/** The question is open and has armed itself (the status line says so). */
+async function untilQuestion(ui: FakeHost) {
+  await until(() => store(ui).status === QUESTION_STATUS);
+  expect(store(ui).question.open).toBe(true);
+}
+
+test("a question opens above the composer: the arrows choose, enter answers, the draft comes back", async () => {
+  const answers: Answer[] = [];
+  let release: () => void = () => {};
+  const gate = new Promise<void>((r) => {
+    release = r;
+  });
+  const { ui, client } = setup(asking(STORE_QUESTION, answers, gate));
+  await ui.fire("send", "go");
+  // A follow-up half typed while the turn runs is put aside, not answered with.
+  await ui.fire("typed", "and then the tests");
+  release();
+  await until(() => store(ui).question.open);
+  expect(store(ui).draft).toBe("");
+  expect(store(ui).status).toBe(QUESTION_WAIT_STATUS);
+  expect(store(ui).placeholder).toBe(QUESTION_PLACEHOLDER_CHOICE);
+  expect(store(ui).live.card).toMatchObject({
+    title: "Question",
+    status: "waiting for your answer",
+    running: true,
+  });
+  const q = store(ui).question;
+  expect(q.rows.map((row) => [row.label, row.detail, row.mark])).toEqual([
+    ["1 Postgres", "", "›"],
+    ["2 SQLite", "· one file", ""],
+    ["3 Memory", "", ""],
+  ]);
+  // An enter already on its way when it opened is not the answer.
+  await ui.fire("send", "");
+  expect(store(ui).status).toBe(QUESTION_UNARMED_STATUS);
+  expect(answers).toEqual([]);
+  await untilQuestion(ui);
+  for (const action of ["question_next", "question_next", "question_next"])
+    await ui.fire(action);
+  // Clamped at the last row, then back one.
+  expect(store(ui).question.rows.map((row) => row.sel)).toEqual([
+    false,
+    false,
+    true,
+  ]);
+  await ui.fire("question_prev");
+  await ui.fire("send", "");
+  await client.idle();
+  expect(answers).toEqual([{ kind: "choice", id: "lite" }]);
+  expect(store(ui).question.open).toBe(false);
+  expect(store(ui).draft).toBe("and then the tests");
+  // The card has no duration: the wait was the user's.
+  const card = store(ui).messages.find((m: MessageView) => m.is_tool)?.card;
+  expect(card).toMatchObject({ title: "Question", took: "", mark: "✓" });
+  expect(liveText(store(ui))).toBe("");
+  expect(
+    store(ui).messages.some((m: MessageView) =>
+      runsText(m.blocks.flatMap((b) => b.runs)).includes("after the answer"),
+    ),
+  ).toBe(true);
+});
+
+test("a typed answer goes to the question: never the queue, a command or the popup", async () => {
+  const answers: Answer[] = [];
+  const { ui, client } = setup(asking(PORT_QUESTION, answers));
+  await ui.fire("send", "go");
+  await untilQuestion(ui);
+  expect(store(ui).placeholder).toBe(QUESTION_PLACEHOLDER_TEXT);
+  await ui.fire("typed", "/he");
+  expect(store(ui).slash.open).toBe(false);
+  await ui.fire("send", "  \n ");
+  expect(store(ui).status).toBe(QUESTION_EMPTY_STATUS);
+  await ui.fire("send", "/help");
+  await client.idle();
+  expect(answers).toEqual([{ kind: "text", text: "/help" }]);
+  expect(store(ui).status).not.toContain("Queued");
+  expect(store(ui).help.open).toBe(false);
+  expect(store(ui).placeholder).not.toBe(QUESTION_PLACEHOLDER_TEXT);
+});
+
+test("a choice can be typed: its number, its label, y or n; anything else says so", async () => {
+  const answers: Answer[] = [];
+  const { ui, client } = setup(asking(DEPLOY_QUESTION, answers));
+  await ui.fire("send", "go");
+  await untilQuestion(ui);
+  // A yes/no starts on no, as a skipped one reads.
+  expect(store(ui).question.rows.map((row) => row.mark)).toEqual(["", "›"]);
+  await ui.fire("send", "maybe");
+  expect(store(ui).status).toBe(QUESTION_NO_MATCH_STATUS);
+  expect(store(ui).question.open).toBe(true);
+  await ui.fire("send", "Y");
+  await client.idle();
+  expect(answers).toEqual([{ kind: "choice", id: "yes" }]);
+
+  const picked: Answer[] = [];
+  const second = setup(asking(STORE_QUESTION, picked));
+  await second.ui.fire("send", "go");
+  await untilQuestion(second.ui);
+  await second.ui.fire("send", "3");
+  await second.client.idle();
+  const third: Answer[] = [];
+  const byLabel = setup(asking(STORE_QUESTION, third));
+  await byLabel.ui.fire("send", "go");
+  await untilQuestion(byLabel.ui);
+  await byLabel.ui.fire("send", " sqlite ");
+  await byLabel.client.idle();
+  expect([...picked, ...third]).toEqual([
+    { kind: "choice", id: "mem" },
+    { kind: "choice", id: "lite" },
+  ]);
+});
+
+test("esc skips the question and the turn goes on; the status line is the question's", async () => {
+  let nowMs = 1_000_000;
+  const answers: Answer[] = [];
+  const { ui, client } = setup(asking(STORE_QUESTION, answers), {
+    now: () => nowMs,
+  });
+  await ui.fire("send", "go");
+  await untilQuestion(ui);
+  // The elapsed ticker does not write over the question's status.
+  nowMs += 5_000;
+  await client.flush();
+  expect(store(ui).status).toBe(QUESTION_STATUS);
+  await ui.fire("question_skip");
+  await client.idle();
+  expect(answers).toEqual([{ kind: "declined" }]);
+  expect(store(ui).question.open).toBe(false);
+  const card = store(ui).messages.find((m: MessageView) => m.is_tool)?.card;
+  expect(card).toMatchObject({ mark: "✗", status: "denied" });
+  expect(
+    store(ui).messages.some((m: MessageView) =>
+      runsText(m.blocks.flatMap((b) => b.runs)).includes("after the answer"),
+    ),
+  ).toBe(true);
+});
+
+test("cancelling the turn closes an open question without an answer", async () => {
+  const answers: Answer[] = [];
+  const { ui, client } = setup(asking(STORE_QUESTION, answers));
+  await ui.fire("send", "go");
+  await untilQuestion(ui);
+  await ui.fire("cancel");
+  await client.idle();
+  expect(answers).toEqual([]);
+  expect(store(ui).question.open).toBe(false);
+  expect(store(ui).status).toBe("Cancelled");
+  expect(store(ui).placeholder).not.toBe(QUESTION_PLACEHOLDER_CHOICE);
+  // A later send is a message again.
+  expect(store(ui).busy).toBe(false);
 });
 
 test("approval: deny, and esc (also dialog_cancel), keep the edit out", async () => {
@@ -1146,14 +1382,31 @@ test("the pace keeps one sample per second: missed seconds read zero, an activit
 
 test("an open approval keeps its status line while the pace still samples", async () => {
   let nowMs = 1_000_000;
-  const { ui, client } = setup(withApproval, { now: () => nowMs });
+  const talky: Script = async function* (ctx) {
+    yield { type: "text", text: "Editing it now." };
+    yield* withApproval(ctx);
+  };
+  const { ui, client } = setup(talky, { now: () => nowMs });
   await ui.fire("send", "edit");
   await untilApproval(ui);
-  const before = store(ui).rate.length;
   nowMs += 2_000;
   await client.flush();
   expect(store(ui).status).toBe(APPROVAL_STATUS);
-  expect(store(ui).rate.slice(before)).toEqual([0, 0]);
+  // The piece closes the first second; the wait is a zero after it.
+  expect(store(ui).rate).toEqual([1, 0]);
+  await ui.fire("dialog_cancel");
+  await client.idle();
+});
+
+test("with nothing streamed in the window the pace draws no line", async () => {
+  let nowMs = 1_000_000;
+  const { ui, client } = setup(withApproval, { now: () => nowMs });
+  await ui.fire("send", "edit");
+  await untilApproval(ui);
+  nowMs += 2_000;
+  await client.flush();
+  // All zeros would scale to mid-height bars and read as a stream.
+  expect(store(ui).rate).toEqual([]);
   await ui.fire("dialog_cancel");
   await client.idle();
 });

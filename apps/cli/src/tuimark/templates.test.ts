@@ -27,7 +27,7 @@ function template(file: string, id: string): string {
     .join("\n");
 }
 
-test.each(["la-message", "la-blocks", "la-tool", "la-turn"])(
+test.each(["la-message", "la-blocks", "la-tool", "la-turn", "la-question"])(
   "inline.tui's %s is app.tui's",
   (id) => {
     expect(template("inline.tui", id)).toBe(template("app.tui", id));

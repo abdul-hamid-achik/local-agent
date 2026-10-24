@@ -16,8 +16,10 @@ export {
 export {
   type AgentEvent,
   type AgentOptions,
+  type Answer,
   type Approval,
   type ApprovalRequest,
+  type Question,
   runAgent,
   type SessionContext,
   sessionProblem,

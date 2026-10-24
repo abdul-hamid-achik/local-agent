@@ -957,6 +957,7 @@ const TOOL_TITLES: Record<string, string> = {
   web_search: "Web search",
   task: "Subagent",
   todo_write: "Todo",
+  ask_user: "Question",
   edit: "Edit",
   write: "Write",
   run_command: "Command",
@@ -1042,6 +1043,12 @@ function callLine(call: ToolCall | undefined): { text: string; path: boolean } {
     case "task": {
       const prompt = str(args.prompt);
       if (prompt !== undefined) return line(prompt.trim().split("\n")[0] ?? "");
+      break;
+    }
+    case "ask_user": {
+      const question = str(args.question);
+      if (question !== undefined)
+        return line(question.trim().split("\n")[0] ?? "");
       break;
     }
     case "todo_write":

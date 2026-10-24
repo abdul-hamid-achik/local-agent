@@ -6,6 +6,7 @@ import {
   type ApprovalRequest,
   COMMAND_WRAPPERS,
   type Provider,
+  type Question,
 } from "@local-agent/runtime";
 import { approvalPreview } from "#cli/preview";
 import {
@@ -191,6 +192,8 @@ export interface Store {
   /** The model's reasoning while it streams; gone once the answer starts. */
   thinking: ThinkingView;
   approval: ApprovalState;
+  /** An open ask_user question (see QuestionState). */
+  question: QuestionState;
   /**
    * The `/details` viewer over the latest tool receipt: a modal fullscreen,
    * an in-flow block inline (region state, never committed).
@@ -347,6 +350,133 @@ export function noPanel(): PanelState {
   };
 }
 
+/** One choice of an open ask_user question. */
+export interface QuestionRow {
+  /** The choice's id, also the row key ("yes"/"no" for a yes/no question). */
+  id: string;
+  /** "1 Postgres": its number (what typing it picks), then its label. */
+  label: string;
+  /** The model's one-line detail, "" for none. */
+  detail: string;
+  sel: boolean;
+  /** "›" on the chosen row, "" on the rest (selection must read as text). */
+  mark: string;
+}
+
+/**
+ * An open ask_user question, in flow above the composer in both clients.
+ * The composer answers it: enter takes the chosen row, or sends the typed
+ * answer; its arrows (at the draft's edges) move the choice.
+ */
+export interface QuestionState {
+  open: boolean;
+  title: string;
+  /** The question, without control characters; it wraps. */
+  text: string;
+  /** The choices (yes/no included); empty for a typed answer. */
+  rows: QuestionRow[];
+  /** True when a row is the answer; false for a typed one. */
+  choosing: boolean;
+  /** The keys, spelled out under the question. */
+  hint: string;
+}
+
+export function noQuestion(): QuestionState {
+  return {
+    open: false,
+    title: "",
+    text: "",
+    rows: [],
+    choosing: false,
+    hint: "",
+  };
+}
+
+/** The rows a question offers: yes/no as two, a single choice its options. */
+export function questionChoices(
+  question: Question,
+): readonly Readonly<{ id: string; label: string; detail?: string | null }>[] {
+  if (question.kind === "yes_no")
+    return [
+      { id: "yes", label: "Yes" },
+      { id: "no", label: "No" },
+    ];
+  return question.kind === "single" ? question.options : [];
+}
+
+/** While the question is not armed yet: only esc works. */
+export const QUESTION_WAIT_STATUS = "Question for you · esc skip";
+/** Once enter answers it. */
+export const QUESTION_STATUS = "Waiting for your answer · esc skip";
+/** The composer's placeholder while it answers a question. */
+export const QUESTION_PLACEHOLDER_CHOICE = "enter takes the chosen row";
+export const QUESTION_PLACEHOLDER_TEXT = "Type your answer";
+/** An enter swallowed by the arm delay, as an approval's `y` is. */
+export const QUESTION_UNARMED_STATUS =
+  "The question just opened — press enter again";
+export const QUESTION_EMPTY_STATUS =
+  "Type an answer and press enter, or esc to skip";
+export const QUESTION_NO_MATCH_STATUS =
+  "Not one of the choices: type its number, or ↑/↓ and enter";
+
+/** The question box for `question` with row `sel` chosen. */
+export function questionState(question: Question, sel: number): QuestionState {
+  const rows = questionChoices(question).map((choice, index) => ({
+    id: choice.id,
+    label: `${index + 1} ${clip(cleanText(choice.label), 120)}`,
+    detail: choice.detail?.trim()
+      ? `· ${clip(cleanText(choice.detail).replace(/\s+/gu, " ").trim(), 200)}`
+      : "",
+    sel: index === sel,
+    mark: index === sel ? "›" : "",
+  }));
+  const choosing = rows.length > 0;
+  return {
+    open: true,
+    title:
+      question.kind === "yes_no"
+        ? "Question · yes or no"
+        : choosing
+          ? "Question · choose one"
+          : "Question",
+    text: clip(cleanText(question.question), 2048),
+    rows,
+    choosing,
+    hint:
+      question.kind === "yes_no"
+        ? "↑/↓ choose · enter answer · or type y or n · esc skip"
+        : choosing
+          ? "↑/↓ choose · enter answer · or type its number · esc skip"
+          : "type the answer · enter send · shift+enter new line · esc skip",
+  };
+}
+
+/**
+ * What a draft sent under an open choice picks: its number, its id or
+ * label (any case), y/yes/n/no for a yes/no question, or (empty) the
+ * chosen row. Undefined when it names none of them.
+ */
+export function questionPick(
+  question: Question,
+  sel: number,
+  draft: string,
+): string | undefined {
+  const choices = questionChoices(question);
+  const typed = draft.trim().toLowerCase();
+  if (!typed) return choices[sel]?.id;
+  if (question.kind === "yes_no") {
+    if (typed === "y" || typed === "yes") return "yes";
+    if (typed === "n" || typed === "no") return "no";
+  }
+  const number = /^\d+$/u.test(typed) ? Number(typed) : 0;
+  if (number >= 1 && number <= choices.length) return choices[number - 1]?.id;
+  return choices.find(
+    (choice) =>
+      choice.id.toLowerCase() === typed ||
+      choice.label.trim().toLowerCase() === typed,
+  )?.id;
+}
+
 export function noApproval(): ApprovalState {
   return {
     open: false,
@@ -415,6 +545,7 @@ export function initialStore(init: StoreInit): Store {
     live: IDLE_LIVE,
     thinking: IDLE_THINKING,
     approval: noApproval(),
+    question: noQuestion(),
     details: noDetails(),
     panel: noPanel(),
     palette: { open: false, query: "", cur: found[0]?.id ?? "" },

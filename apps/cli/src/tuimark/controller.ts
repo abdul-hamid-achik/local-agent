@@ -17,6 +17,7 @@ import { join } from "node:path";
 import {
   type AgentEvent,
   type AgentOptions,
+  type Answer,
   type Approval,
   type ApprovalRequest,
   admitOllamaModel,
@@ -35,6 +36,7 @@ import {
   permissionsPath,
   planContextSize,
   proposeRule,
+  type Question,
   runAgent,
   type SessionContext,
   sandboxUnavailable,
@@ -106,9 +108,20 @@ import {
   noApproval,
   noDetails,
   noPanel,
+  noQuestion,
   PLACEHOLDER,
   PLACEHOLDER_BUSY,
   panelState,
+  QUESTION_EMPTY_STATUS,
+  QUESTION_NO_MATCH_STATUS,
+  QUESTION_PLACEHOLDER_CHOICE,
+  QUESTION_PLACEHOLDER_TEXT,
+  QUESTION_STATUS,
+  QUESTION_UNARMED_STATUS,
+  QUESTION_WAIT_STATUS,
+  questionChoices,
+  questionPick,
+  questionState,
   RATE_POINTS,
   type SessionSummary,
   type Store,
@@ -346,6 +359,19 @@ export class TuimarkClient {
   ) => Promise<void>;
   private armed = false;
   private armTimer?: ReturnType<typeof setTimeout>;
+  /**
+   * The open ask_user question: the chosen row, whether enter is taken yet
+   * (the approval's arm delay), and how an answer closes it.
+   */
+  private asking?: {
+    question: Question;
+    sel: number;
+    armed: boolean;
+    answer: (answer: Answer) => Promise<void>;
+  };
+  private askArmTimer?: ReturnType<typeof setTimeout>;
+  /** The composer's draft as last typed or written: a question puts it aside. */
+  private draftNow = "";
   private proposal?: ApprovalRequest;
   /** The open proposal's preview was truncated: `a` must not grant from it. */
   private proposalTruncated = false;
@@ -608,6 +634,10 @@ export class TuimarkClient {
       );
     });
     ui.on("dialog_cancel", () => this.decide?.(false));
+    ui.on("question_next", () => this.questionMove(1));
+    ui.on("question_prev", () => this.questionMove(-1));
+    // Esc skips the question; the turn goes on without an answer.
+    ui.on("question_skip", () => this.asking?.answer({ kind: "declined" }));
     ui.on("palette_open", () => this.paletteOpen());
     ui.on("palette_query", (ev) => this.paletteQuery(ev));
     ui.on("palette_run", () => this.paletteRun());
@@ -1256,6 +1286,9 @@ export class TuimarkClient {
    * `writeErrors` and resolves false.
    */
   private write(writes: Write[]): Promise<boolean> {
+    for (const write of writes)
+      if (write.path === "draft" && typeof write.value === "string")
+        this.draftNow = write.value;
     const ui = this.ui;
     if (!ui) return Promise.resolve(true);
     let ok = true;
@@ -1606,7 +1639,8 @@ export class TuimarkClient {
    * Names what the busy status shows: the first text/thinking/tool event of
    * the turn turns waiting into generating, and a tool result names itself
    * until the next event. An open approval owns the status line, so it wins:
-   * the activity is remembered but not written over it. Not awaited by the
+   * the activity is remembered but not written over it (an open question
+   * likewise). Not awaited by the
    * event loop: the write serializes on the writer's tail like every other,
    * and event processing must not pause for a status paint (an abort that
    * lands in such a pause can pass a generator still suspended at its yield).
@@ -1614,7 +1648,7 @@ export class TuimarkClient {
   private noteActivity(activity = BUSY_STATUS_LINE): void {
     if (this.activity === activity) return;
     this.activity = activity;
-    if (!this.decide)
+    if (!this.decide && !this.asking)
       void this.write([{ path: "status", value: this.busyStatus() }]);
   }
 
@@ -1628,7 +1662,7 @@ export class TuimarkClient {
     if (!this.busy) return;
     const seconds = Math.floor((this.now() - this.turnStartedAt) / 1000);
     const writes: Write[] = [];
-    if (!this.decide && seconds !== this.elapsedShown)
+    if (!this.decide && !this.asking && seconds !== this.elapsedShown)
       writes.push({ path: "status", value: this.busyStatus() });
     // Its own second, not elapsedShown: an activity change repaints the
     // status mid-second and must not swallow that second's sample. Seconds
@@ -1642,7 +1676,12 @@ export class TuimarkClient {
       ].slice(-RATE_POINTS);
       this.pieces = 0;
       this.rateAt = seconds;
-      writes.push({ path: "rate", value: this.rate });
+      // Nothing streamed in the window: no line at all. The sparkline
+      // scales an all-zero series to mid-height, which reads as a stream.
+      writes.push({
+        path: "rate",
+        value: this.rate.some((pieces) => pieces > 0) ? this.rate : [],
+      });
     }
     if (writes.length > 0) await this.write(writes);
   }
@@ -1771,6 +1810,9 @@ export class TuimarkClient {
 
   private async onTyped(ev: HostEvent): Promise<void> {
     const draft = typeof ev.value === "string" ? ev.value : "";
+    this.draftNow = draft;
+    // An answer is not a command: no popup while a question is open.
+    if (this.asking) return;
     const writes = this.syncSlash(draft);
     if (writes.length > 0) await this.write(writes);
   }
@@ -1836,6 +1878,12 @@ export class TuimarkClient {
       return;
     }
     const raw = typeof ev.value === "string" ? ev.value : "";
+    // An open question takes the send: it is the answer, never a message,
+    // a command or the queue.
+    if (this.asking) {
+      await this.answerSend(raw);
+      return;
+    }
     // Enter over an open popup completes instead of sending when the
     // chosen row's completion differs from the typed text; a fully
     // typed command ("/mcp") sends. See the popup rules above.
@@ -2416,6 +2464,132 @@ export class TuimarkClient {
     });
   };
 
+  /**
+   * The runtime's ask_user: the question opens in flow above the composer,
+   * which answers it (see onSend), with the draft put aside until it
+   * closes. An abort closes it and rejects; esc answers `declined`.
+   */
+  private readonly ask = (
+    question: Question,
+    signal: AbortSignal,
+  ): Promise<Answer> =>
+    new Promise<Answer>((resolve, reject) => {
+      if (signal.aborted) {
+        reject(signal.reason);
+        return;
+      }
+      const stash = this.draftNow;
+      const finish = async (answer?: Answer): Promise<void> => {
+        if (this.asking !== state) return;
+        signal.removeEventListener("abort", abort);
+        clearTimeout(this.askArmTimer);
+        this.asking = undefined;
+        const verdict =
+          answer === undefined
+            ? undefined
+            : answer.kind === "declined"
+              ? "Question skipped"
+              : "Answered";
+        // Like an approval's verdict, it is the activity until the next event.
+        if (verdict !== undefined) this.activity = verdict;
+        if (answer) resolve(answer);
+        else reject(signal.reason);
+        await this.write([
+          { path: "question", value: noQuestion() },
+          { path: "placeholder", value: PLACEHOLDER_BUSY },
+          { path: "draft", value: stash },
+          ...(verdict !== undefined
+            ? [{ path: "status", value: verdict }]
+            : []),
+        ]);
+      };
+      const state = {
+        question,
+        // A yes/no defaults to no, as a skipped one reads.
+        sel: question.kind === "yes_no" ? 1 : 0,
+        armed: false,
+        answer: finish,
+      };
+      const abort = () => void finish();
+      this.asking = state;
+      signal.addEventListener("abort", abort, { once: true });
+      const writes: Write[] = [
+        { path: "palette.open", value: false },
+        { path: "help.open", value: false },
+        ...this.closeSlash(),
+        ...this.closeDetailsWrite(),
+        ...this.closePanelWrite(),
+        { path: "question", value: questionState(question, state.sel) },
+        {
+          path: "placeholder",
+          value:
+            question.kind === "freetext"
+              ? QUESTION_PLACEHOLDER_TEXT
+              : QUESTION_PLACEHOLDER_CHOICE,
+        },
+        { path: "draft", value: "" },
+        { path: "status", value: QUESTION_WAIT_STATUS },
+      ];
+      if (this.liveTool) {
+        this.liveTool = {
+          ...this.liveTool,
+          card: {
+            ...this.liveTool.card,
+            status: "waiting for your answer",
+            running: true,
+          },
+        };
+        this.dirty = false;
+        writes.unshift({ path: "live", value: this.liveTool });
+      }
+      // Enter answers only a moment after the write that opens it landed:
+      // a send already on its way is not taken for the answer.
+      void this.write(writes).then(() => {
+        if (this.asking !== state) return;
+        this.askArmTimer = setTimeout(() => {
+          if (this.asking !== state) return;
+          state.armed = true;
+          void this.write([{ path: "status", value: QUESTION_STATUS }]);
+        }, this.options.armMs ?? APPROVAL_ARM_MS);
+      });
+    });
+
+  /** A send while a question is open: the typed answer, or the choice it names. */
+  private async answerSend(raw: string): Promise<void> {
+    const asking = this.asking;
+    if (!asking) return;
+    if (!asking.armed) {
+      await this.write([{ path: "status", value: QUESTION_UNARMED_STATUS }]);
+      return;
+    }
+    if (asking.question.kind === "freetext") {
+      if (!raw.trim()) {
+        await this.write([{ path: "status", value: QUESTION_EMPTY_STATUS }]);
+        return;
+      }
+      await asking.answer({ kind: "text", text: raw });
+      return;
+    }
+    const id = questionPick(asking.question, asking.sel, raw);
+    if (id === undefined) {
+      await this.write([{ path: "status", value: QUESTION_NO_MATCH_STATUS }]);
+      return;
+    }
+    await asking.answer({ kind: "choice", id });
+  }
+
+  /** Up and down under an open choice: the chosen row moves, clamped. */
+  private async questionMove(by: number): Promise<void> {
+    const asking = this.asking;
+    if (!asking) return;
+    const count = questionChoices(asking.question).length;
+    if (count === 0) return;
+    asking.sel = Math.max(0, Math.min(asking.sel + by, count - 1));
+    await this.write([
+      { path: "question", value: questionState(asking.question, asking.sel) },
+    ]);
+  }
+
   private async beginTurn(prompt: string): Promise<void> {
     if (this.switching) return;
     this.busy = true;
@@ -2542,6 +2716,7 @@ export class TuimarkClient {
         workspace,
         intent: this.intent,
         approve: this.approve,
+        ask: this.ask,
         deniedRead: this.deniedRead,
         signal: turnSignal,
         session,
@@ -2570,8 +2745,10 @@ export class TuimarkClient {
               event.message.role === "tool" ? callOrder.shift() : undefined;
             const started =
               callId === undefined ? undefined : startedAt.get(callId);
+            // A question's wait is the user's, not the tool's: no duration.
             if (
               view?.is_tool &&
+              view.card.name !== "ask_user" &&
               callId !== undefined &&
               started !== undefined
             ) {
@@ -2731,6 +2908,8 @@ export class TuimarkClient {
       this.armed = false;
       this.proposal = undefined;
       this.proposalTruncated = false;
+      clearTimeout(this.askArmTimer);
+      this.asking = undefined;
       if (this.turn === request) this.turn = undefined;
       // Inline, a cancelled or failed reply still prints what arrived, and
       // a failed turn's notice is committed after it like any finished view.
@@ -2743,6 +2922,7 @@ export class TuimarkClient {
         { path: "placeholder", value: PLACEHOLDER },
         { path: "status", value: status },
         { path: "approval", value: noApproval() },
+        { path: "question", value: noQuestion() },
         // The turn's last observed usage is the resting baseline (CtxMeter).
         ...this.ctxWrites(this.ctx.finishTurn()),
       ]);

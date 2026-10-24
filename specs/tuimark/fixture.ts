@@ -7,9 +7,12 @@
 //
 // The reply depends only on the last message, so one run can hold several turns:
 //
-//   last message is a tool result  -> "edit applied N" (N counts tool replies) or "edit denied"
+//   last message is a tool result  -> "edit applied N" (N counts tool replies) or "edit denied";
+//                                      an ask_user answer -> "noted: " and the answer, on one line
 //   prompt starts with "count"     -> "The message had N lines: FIRST LINE" (one message,
 //                                      however it was typed or pasted)
+//   prompt contains "ask me"       -> one ask_user call: a choice of three stores
+//   prompt contains "ask for text" -> one ask_user call with a typed answer
 //   prompt contains "read the long file" -> one `read` tool call on long.txt
 //                                      (20 lines: its card truncates, /details does not)
 //   prompt contains "edit again"   -> one `edit` tool call, after -> final
@@ -107,6 +110,19 @@ const assistant = (content: string, extra: object = {}) => ({
 });
 const done = { done: true, prompt_eval_count: 40, eval_count: 60 };
 
+/** An ask_user receipt's output on one line, or undefined for another tool's. */
+function askAnswer(content: string): string | undefined {
+  try {
+    const output = (JSON.parse(content) as { output?: unknown }).output;
+    return typeof output === "string" &&
+      /^The user (answered|chose|declined|sent)/u.test(output)
+      ? output.replace(/\s+/gu, " ")
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /** Tool-result replies so far: "edit applied 2" proves a second edit landed. */
 let toolReplies = 0;
 
@@ -132,6 +148,10 @@ const server = Bun.serve({
       messages?: Array<{ role?: string; content?: string }>;
     };
     const last = body.messages?.at(-1);
+    const answered =
+      last?.role === "tool" ? askAnswer(last.content ?? "") : undefined;
+    if (answered !== undefined)
+      return stream([assistant(`noted: ${answered}`), done], 5);
     if (last?.role === "tool")
       return stream(
         [
@@ -151,6 +171,47 @@ const server = Bun.serve({
           assistant(
             `The message had ${prompt.split("\n").length} lines: ${prompt.split("\n")[0]}`,
           ),
+          done,
+        ],
+        5,
+      );
+    if (prompt.includes("ask for text"))
+      return stream(
+        [
+          assistant("", {
+            tool_calls: [
+              {
+                function: {
+                  name: "ask_user",
+                  arguments: { question: "Which port does staging use?" },
+                },
+              },
+            ],
+          }),
+          done,
+        ],
+        5,
+      );
+    if (prompt.includes("ask me"))
+      return stream(
+        [
+          assistant("", {
+            tool_calls: [
+              {
+                function: {
+                  name: "ask_user",
+                  arguments: {
+                    question: "Which store should the cache use?",
+                    options: [
+                      { id: "pg", label: "Postgres" },
+                      { id: "lite", label: "SQLite", detail: "one file" },
+                      { id: "mem", label: "Memory only" },
+                    ],
+                  },
+                },
+              },
+            ],
+          }),
           done,
         ],
         5,

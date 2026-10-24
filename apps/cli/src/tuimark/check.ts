@@ -729,6 +729,46 @@ const plays: Expect[] = [
   },
   { sample: "sample-slash", input: "esc", actions: ["slash_close"] },
   { sample: "sample-slash", input: "enter", actions: ["send"], value: "/m" },
+  // An ask_user question: the box names its choices and keys; the arrows
+  // move the choice and esc skips it (never the history, never cancel);
+  // enter, a typed number or a typed answer is the composer's send.
+  {
+    sample: "sample-question",
+    input: "",
+    actions: [],
+    screen: [
+      "Question · choose one",
+      "› 1 Postgres",
+      "2 SQLite",
+      "the existing database",
+      "Which store should the cache use?",
+      "waiting for your answer",
+      "esc skip",
+    ],
+    notScreen: ["esc cancel", "↑/↓ history"],
+  },
+  { sample: "sample-question", input: "down", actions: ["question_next"] },
+  { sample: "sample-question", input: "up", actions: ["question_prev"] },
+  { sample: "sample-question", input: "esc", actions: ["question_skip"] },
+  { sample: "sample-question", input: "enter", actions: ["send"], value: "" },
+  {
+    sample: "sample-question",
+    input: "text:2 enter",
+    actions: ["typed", "send"],
+    value: "2",
+  },
+  {
+    sample: "sample-question-text",
+    input: "text:8080 enter",
+    actions: ["typed", "send"],
+    value: "8080",
+    screen: ["type the answer · enter send", "Which port does the staging"],
+  },
+  {
+    sample: "sample-question-text",
+    input: "esc",
+    actions: ["question_skip"],
+  },
   // With the popup closed, tab is focus travel again and fires nothing.
   { sample: "sample", input: "tab", actions: [] },
   // Shift+tab toggles the mode: the composer does not take the key, and
@@ -844,6 +884,32 @@ const plays: Expect[] = [
   { sample: "sample-sessions", input: "ctrl+c", actions: ["quit_request"] },
 
   // ---------------------------------------------------------- the inline doc
+  {
+    sample: "inline-sample-question",
+    doc: "inline.tui",
+    inline: true,
+    rows: 30,
+    input: "down",
+    actions: ["question_next"],
+    screen: ["› 1 Postgres", "esc skip"],
+  },
+  {
+    sample: "inline-sample-question",
+    doc: "inline.tui",
+    inline: true,
+    rows: 30,
+    input: "esc",
+    actions: ["question_skip"],
+  },
+  {
+    sample: "inline-sample-question",
+    doc: "inline.tui",
+    inline: true,
+    rows: 30,
+    input: "text:y enter",
+    actions: ["typed", "send"],
+    value: "y",
+  },
   {
     sample: "inline-sample",
     doc: "inline.tui",

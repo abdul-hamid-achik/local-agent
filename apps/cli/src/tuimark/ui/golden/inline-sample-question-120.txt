@@ -1,0 +1,19 @@
+=== grid 120x18 ===
+ Local Agent           Ollama / loopback  qwen3-coder:30b  build            session a1b2c3d  ctx 9.6k/32k  ███▋░░░░░░░░ 
+╭─ Question ───────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ ⠋  waiting for your answer                                                                                           │
+│ Which store should the cache use?                                                                                    │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+                                                                                                                        
+╭─ Question · choose one ──────────────────────────────────────────────────────────────────────────────────────────────╮
+│ Which store should the cache use?                                                                                    │
+│                                                                                                                      │
+│ › 1 Postgres · the existing database                                                                                 │
+│   2 SQLite · one file next to the binary                                                                             │
+│   3 Memory only                                                                                                      │
+│ ↑/↓ choose · enter answer · or type its number · esc skip                                                            │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+╔══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╗
+║ enter takes the chosen row                                                                                           ║
+╚══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╝
+ ⠋  Waiting for your answer · esc skip                    ^P commands  ctrl+c quit  pgup/pgdn scroll  ^L latest         

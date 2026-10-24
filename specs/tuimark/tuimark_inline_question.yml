@@ -1,0 +1,57 @@
+version: 1
+name: bun_tuimark_inline_question
+intent: |
+    the opt-in Tuimark inline client shows a model's ask_user question in its
+    live region above the composer; a typed number answers it once the status
+    line says it waits for the answer, the turn goes on, and the finished
+    question card and reply are committed into the terminal's scrollback.
+target:
+    cmd: ["bun", "specs/tuimark/fixture.ts", "chat-inline"]
+    cwd: "${projectRoot}"
+terminal:
+    cols: 100
+    rows: 40
+    alternateScreen: forbid
+steps:
+    - wait:
+        screen:
+            contains: "Message the model"
+        timeoutMs: 15000
+    - type: "ask me which store"
+    - press: enter
+    - wait:
+        screen:
+            contains: "Question · choose one"
+        timeoutMs: 15000
+    - wait:
+        screen:
+            contains: "Waiting for your answer"
+        timeoutMs: 5000
+    - snapshot: choice
+    - type: "2"
+    - press: enter
+    - wait:
+        screen:
+            contains: "noted: The user chose: SQLite (id lite)"
+        timeoutMs: 15000
+    - wait:
+        screen:
+            notContains: "Question · choose one"
+        timeoutMs: 5000
+    - press: ctrl+c
+    - wait:
+        process:
+            exitCode: 0
+        timeoutMs: 10000
+outcomes:
+    - id: tuimark_inline_question_scrollback
+      description: the answer the model read back stays in the scrollback after exit
+      verify:
+        screen:
+            contains: "noted: The user chose: SQLite (id lite)"
+    - id: tuimark_inline_question_exits
+      description: the inline client exits cleanly
+      verify:
+        process:
+            exitCode: 0
+contractHash: sha256:22bda3c8142da9735c1bf24eeef67e2f18e1a8bc607f4c5cfa45d733a7dd5ce6

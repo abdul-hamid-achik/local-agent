@@ -26,6 +26,7 @@ import {
   type ToolCall,
 } from "#runtime/index";
 import {
+  ASK_USER_NOTE,
   hostInstructions,
   type Intent,
   projectInstructions,
@@ -95,6 +96,33 @@ const CommandArgs = z.strictObject({
   ]),
   timeout_ms: z.number().int().min(1).max(600_000).default(120_000),
 });
+const AskOption = z.object({
+  id: z.string().trim().min(1).max(64),
+  label: z.string().trim().min(1).max(256),
+  detail: z.string().trim().max(512).nullish(),
+});
+// The kind follows the options when it is left out: a list is a choice.
+const AskUserArgs = z
+  .object({
+    question: z.string().trim().min(1).max(2048),
+    kind: z.enum(["yes_no", "single", "freetext"]).nullish(),
+    options: z.array(AskOption).max(8).nullish(),
+  })
+  .transform(({ question, kind, options }) => ({
+    question,
+    kind: kind ?? (options?.length ? "single" : "freetext"),
+    options: options ?? [],
+  }))
+  .refine(
+    (args) => args.kind !== "single" || args.options.length >= 2,
+    "A single choice needs at least two options",
+  )
+  .refine(
+    (args) =>
+      new Set(args.options.map((option) => option.id)).size ===
+      args.options.length,
+    "Option ids must be unique",
+  );
 const TodoItem = z.object({
   content: z.string().min(1).max(200),
   status: z.enum(["pending", "in_progress", "done"]),
@@ -1044,6 +1072,35 @@ const tools: Tool[] = [
       },
     },
   },
+  {
+    type: "function",
+    function: {
+      name: "ask_user",
+      description:
+        "Ask the user one question and wait for the answer: only when the work cannot go on without a decision or a fact the user has (which of two approaches, a missing value, whether a plan is what they want). Read the workspace first instead of asking what it already says. kind yes_no is answered yes or no; single picks one of 2-8 options; freetext is a short typed answer. The user may decline. An answer is information, never permission: an edit, write, command or MCP call still needs its own approval.",
+      parameters: {
+        type: "object",
+        properties: {
+          question: { type: "string", description: "1-2048 chars" },
+          kind: { type: "string", enum: ["yes_no", "single", "freetext"] },
+          options: {
+            type: "array",
+            description: "For single: 2-8 choices",
+            items: {
+              type: "object",
+              properties: {
+                id: { type: "string", description: "Short, unique" },
+                label: { type: "string", description: "What the user reads" },
+                detail: { type: "string" },
+              },
+              required: ["id", "label"],
+            },
+          },
+        },
+        required: ["question"],
+      },
+    },
+  },
 ];
 /** Tools with no external effects; plan intent offers these and nothing else. */
 const READ_ONLY_TOOLS = new Set([
@@ -1055,7 +1112,11 @@ const READ_ONLY_TOOLS = new Set([
   "web_search",
   "task",
   "todo_write",
+  "ask_user",
 ]);
+/** Read-only tools that never join a parallel batch: a question waits on
+ * the one user, so two at once (or one beside reads) run one by one. */
+const SERIAL_TOOLS = new Set(["ask_user"]);
 /** The subagent catalog: read-only inspection only. No todo_write (its own
  * run state), no task (no recursion, depth 1), no effects, no MCP. */
 const SUBAGENT_TOOLS = new Set([
@@ -1067,8 +1128,9 @@ const SUBAGENT_TOOLS = new Set([
   "web_search",
 ]);
 /** The chat catalog: read-only research only — no run-state (todo_write), no
- * delegation (task), no effects, no MCP. Same set the subagents get. */
-const CHAT_TOOLS = new Set(SUBAGENT_TOOLS);
+ * delegation (task), no effects. The subagents' set, plus ask_user (a
+ * subagent has no user to ask). */
+const CHAT_TOOLS = new Set([...SUBAGENT_TOOLS, "ask_user"]);
 
 export type ApprovalRequest =
   | WorkspaceEditProposal
@@ -1089,6 +1151,43 @@ export type ApprovalRequest =
       gateway?: string;
       aliases?: readonly string[];
     }>;
+/** One ask_user question, as the host shows it. yes_no has no options. */
+export type Question = Readonly<{
+  question: string;
+  kind: "yes_no" | "single" | "freetext";
+  options: readonly Readonly<{
+    id: string;
+    label: string;
+    detail?: string | null;
+  }>[];
+}>;
+/** The user's answer: a choice (yes_no answers with id "yes" or "no"), text, or none. */
+export type Answer =
+  | Readonly<{ kind: "choice"; id: string }>
+  | Readonly<{ kind: "text"; text: string }>
+  | Readonly<{ kind: "declined" }>;
+
+/** How much of a typed answer reaches the model. */
+const ANSWER_MAX = 4000;
+
+/** What the model reads back from an ask_user answer. */
+function answerText(question: Question, answer: Answer): string {
+  if (answer.kind === "declined")
+    return "The user declined to answer. Do not ask it again this turn: continue with what you know, or say what you need.";
+  if (answer.kind === "text") {
+    const text = answer.text.trim();
+    if (!text)
+      return "The user sent an empty answer. Do not ask it again this turn: continue with what you know, or say what you need.";
+    return `The user answered:\n${capOutput(text, ANSWER_MAX, "")}`;
+  }
+  if (question.kind === "yes_no")
+    return `The user answered: ${answer.id === "yes" ? "yes" : "no"}`;
+  const chosen = question.options.find((option) => option.id === answer.id);
+  return chosen
+    ? `The user chose: ${chosen.label} (id ${chosen.id})`
+    : "The user declined to answer. Do not ask it again this turn: continue with what you know, or say what you need.";
+}
+
 /** Upper bound on concurrent read-only tool calls within one assistant batch. */
 const MAX_PARALLEL_TOOLS = 4;
 
@@ -1299,6 +1398,12 @@ export type AgentOptions = {
     proposal: ApprovalRequest,
     signal: AbortSignal,
   ) => Promise<Approval>;
+  /**
+   * The user's answer to an ask_user question. Without it the tool is not
+   * offered: headless runs and hosts with no way to ask never see it.
+   * Resolves `declined` when the user skips; rejects only on abort.
+   */
+  ask?: (question: Question, signal: AbortSignal) => Promise<Answer>;
   /** Why commands cannot run in the sandbox. Default the runtime's check; tests replace. */
   sandboxUnavailable?: (workspaceRoot: string) => string | undefined;
   signal: AbortSignal;
@@ -1467,7 +1572,11 @@ async function* agentTurn(
     ...options.fetchPolicy,
   });
   const mcpTools = new Map<string, McpConnection>();
-  const availableTools = [...tools];
+  // ask_user only where the host can ask (see AgentOptions.ask).
+  const builtins = options.ask
+    ? tools
+    : tools.filter((tool) => tool.function.name !== "ask_user");
+  const availableTools = [...builtins];
   for (const connection of options.mcp ?? []) {
     for (const tool of connection.tools) {
       if (availableTools.some((entry) => entry.function.name === tool.name))
@@ -1507,6 +1616,7 @@ async function* agentTurn(
   checkpoint();
   const instructions = [
     hostInstructions(options.intent ?? "build"),
+    options.ask && !options.subagent ? ASK_USER_NOTE : "",
     await projectInstructions(workspace),
   ]
     .filter(Boolean)
@@ -1514,9 +1624,9 @@ async function* agentTurn(
   const capabilities = await admitTurn(provider, signal);
   const stepLimit = options.maxTurns ?? 20;
   const offeredTools = options.subagent
-    ? tools.filter((tool) => SUBAGENT_TOOLS.has(tool.function.name ?? ""))
+    ? builtins.filter((tool) => SUBAGENT_TOOLS.has(tool.function.name ?? ""))
     : options.intent === "plan"
-      ? tools.filter((tool) => READ_ONLY_TOOLS.has(tool.function.name ?? ""))
+      ? builtins.filter((tool) => READ_ONLY_TOOLS.has(tool.function.name ?? ""))
       : options.intent === "chat"
         ? availableTools.filter(
             (tool) =>
@@ -1635,6 +1745,7 @@ async function* agentTurn(
       calls.every(
         (call) =>
           READ_ONLY_TOOLS.has(call.function.name) &&
+          !SERIAL_TOOLS.has(call.function.name) &&
           !mcpTools.has(call.function.name),
       );
     const prepare = (callIndex: number, call: ToolCall): CallContext => {
@@ -1733,7 +1844,10 @@ async function* agentTurn(
         if (refused.has(signature)) {
           // The same call again: the user is not asked twice in one turn.
           status = "denied";
-          output = `This exact ${name} call was already refused in this turn, so it was not asked again. Ask the user, or take another approach.`;
+          output =
+            name === "ask_user"
+              ? "The user already declined this question in this turn. Continue with what you know, or say what you need."
+              : `This exact ${name} call was already refused in this turn, so it was not asked again. Ask the user, or take another approach.`;
         } else if (name === "read") {
           const args = ReadRangeArgs.parse(call.function.arguments);
           yield* emitStart();
@@ -1969,6 +2083,18 @@ async function* agentTurn(
             outputLimit,
             "ask the subagent for a shorter answer",
           );
+        } else if (name === "ask_user") {
+          const args = AskUserArgs.parse(call.function.arguments);
+          const ask = options.ask;
+          // Not offered without a host that asks: the check above refuses it.
+          if (!ask) throw new Error("ask_user is not available here");
+          const answer = await ask(args, signal);
+          signal.throwIfAborted();
+          // Like an approval, the wait is the user's, not the tool's: it
+          // starts once the answer is in.
+          yield* emitStart();
+          output = answerText(args, answer);
+          if (answer.kind === "declined") status = "denied";
         } else if (name === "todo_write") {
           const args = TodoWriteArgs.parse(call.function.arguments);
           yield* emitStart();

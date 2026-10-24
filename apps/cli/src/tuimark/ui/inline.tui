@@ -49,6 +49,16 @@
     <bind keys="home" action="move-first" to="#approval_diff" label="top/end" keycap="home/end"/>
     <bind keys="end" action="move-last" to="#approval_diff"/>
   </keymap>
+  <!-- An open question's keys (the screen carries the class): before the
+       popup, history and cancel rows, so the arrows at the draft's edges
+       move the choice and esc skips the question instead of cancelling the
+       turn. Enter stays the composer's: the parent takes that send as the
+       answer. No labels: the box names its own keys, like the popup. -->
+  <keymap when=".asking">
+    <bind keys="esc" action="question_skip"/>
+    <bind keys="down" action="question_next"/>
+    <bind keys="up" action="question_prev"/>
+  </keymap>
   <!-- The slash popup's keys, while it is open (the screen carries the
        class): before the history and cancel rows below, so up and down
        move the popup's choice and esc closes it instead of cancelling.
@@ -202,7 +212,26 @@
     </use>
   </template>
 
-  <screen id="main" focus="#composer" class:approving="approval.open" class:slashpop="slash.open" class:viewing="details.open" class:paneling="panel.open" class:picking="panel.picking">
+  <!-- An ask_user question, in flow above the composer. with="question as q".
+       The composer answers it (the parent takes its send); the rows are
+       display-only, the parent moves the choice. -->
+  <template id="la-question">
+    <box class="la-question" title="{q.title}">
+      <text class="la-question-text">{q.text}</text>
+      <col class="la-question-rows" if="q.choosing">
+        <col class="la-slash-rows" each="q.rows as r" key="r.id">
+          <row class="la-slash-row" class:sel="r.sel">
+            <text class="la-slash-mark">{r.mark}</text>
+            <text class="la-question-label">{r.label}</text>
+            <text class="la-slash-desc" wrap="truncate">{r.detail}</text>
+          </row>
+        </col>
+      </col>
+      <text class="la-muted">{q.hint}</text>
+    </box>
+  </template>
+
+  <screen id="main" focus="#composer" class:approving="approval.open" class:slashpop="slash.open" class:asking="question.open" class:viewing="details.open" class:paneling="panel.open" class:picking="panel.picking">
     <col id="app">
       <use template="k-appbar" brand="Local Agent" title="">
         <text class="la-muted la-provider">{header.provider}</text>
@@ -300,6 +329,9 @@
         <text class="la-muted la-granthint">{approval.grant_hint}</text>
         <text class="la-muted">y allow · n deny · esc deny</text>
       </box>
+
+      <!-- An open ask_user question, answered from the composer below. -->
+      <use id="question" template="la-question" if="question.open" with="question as q"/>
 
       <!-- Room for the kit modals while they are open (inline.tcss sizes them). -->
       <col if="palette.open" class="la-space-palette"/>

@@ -20,10 +20,13 @@ import {
   noApproval,
   noDetails,
   noPanel,
+  noQuestion,
   panelState,
   previewRows,
   previewWidth,
   previewWidthInline,
+  questionPick,
+  questionState,
   sessionRows,
   statusLines,
   TRUNCATED_BODY,
@@ -103,6 +106,7 @@ test("the initial store has every path the document reads", () => {
       "palette",
       "panel",
       "placeholder",
+      "question",
       "rate",
       "slash",
       "status",
@@ -112,6 +116,7 @@ test("the initial store has every path the document reads", () => {
   expect(store.approval).toEqual(noApproval());
   expect(store.details).toEqual(noDetails());
   expect(store.panel).toEqual(noPanel());
+  expect(store.question).toEqual(noQuestion());
   expect(NO_DETAILS_STATUS).toBe(
     "No tool output yet. Run something first, then /details",
   );
@@ -830,3 +835,62 @@ function storeInitForPanel() {
     transcript: { messages: [], earlier: { n: 0 } },
   };
 }
+
+test("a question's box numbers its choices and spells out its keys", () => {
+  const single = questionState(
+    {
+      question: "Pick\u001b[31m one",
+      kind: "single",
+      options: [
+        { id: "a", label: "Alpha", detail: "first\nline" },
+        { id: "b", label: "Beta" },
+      ],
+    },
+    1,
+  );
+  expect(single).toMatchObject({
+    open: true,
+    title: "Question · choose one",
+    text: "Pick one",
+    choosing: true,
+  });
+  expect(single.rows).toEqual([
+    { id: "a", label: "1 Alpha", detail: "· first line", sel: false, mark: "" },
+    { id: "b", label: "2 Beta", detail: "", sel: true, mark: "›" },
+  ]);
+  const yesNo = questionState(
+    { question: "Go?", kind: "yes_no", options: [] },
+    1,
+  );
+  expect(yesNo.rows.map((row) => row.id)).toEqual(["yes", "no"]);
+  expect(yesNo.hint).toContain("type y or n");
+  const text = questionState(
+    { question: "Port?", kind: "freetext", options: [] },
+    0,
+  );
+  expect(text).toMatchObject({ title: "Question", choosing: false, rows: [] });
+  expect(text.hint).toContain("enter send");
+});
+
+test("a typed choice is its number, id or label; y/n only for yes/no", () => {
+  const single = {
+    question: "Pick",
+    kind: "single" as const,
+    options: [
+      { id: "pg", label: "Postgres" },
+      { id: "lite", label: "SQLite" },
+    ],
+  };
+  expect(questionPick(single, 1, "")).toBe("lite");
+  expect(questionPick(single, 0, " 2 ")).toBe("lite");
+  expect(questionPick(single, 0, "PG")).toBe("pg");
+  expect(questionPick(single, 0, "sqlite")).toBe("lite");
+  expect(questionPick(single, 0, "3")).toBeUndefined();
+  expect(questionPick(single, 0, "0")).toBeUndefined();
+  expect(questionPick(single, 0, "y")).toBeUndefined();
+  const yesNo = { question: "Go?", kind: "yes_no" as const, options: [] };
+  expect(questionPick(yesNo, 1, "")).toBe("no");
+  expect(questionPick(yesNo, 1, "Yes")).toBe("yes");
+  expect(questionPick(yesNo, 0, "n")).toBe("no");
+  expect(questionPick(yesNo, 0, "1")).toBe("yes");
+});

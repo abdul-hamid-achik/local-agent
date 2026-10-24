@@ -154,6 +154,14 @@
       }
     ]
   },
+  "question": {
+    "open": false,
+    "title": "",
+    "text": "",
+    "rows": [],
+    "choosing": false,
+    "hint": ""
+  },
   "details": {
     "open": false,
     "title": "",
