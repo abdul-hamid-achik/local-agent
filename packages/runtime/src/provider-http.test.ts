@@ -181,7 +181,7 @@ describe("SSE framing", () => {
       }
       expect(seen).toMatchObject([
         { type: "text", text: "crlf" },
-        { type: "done" },
+        { type: "done", finishReason: "stop" },
       ]);
     } finally {
       release();
@@ -226,6 +226,7 @@ describe("stream ends", () => {
           type: "done",
           inputTokens: 7,
           outputTokens: 2,
+          finishReason: "stop",
         },
       ]);
     } finally {
@@ -326,4 +327,52 @@ describe("tool_call fragments", () => {
       },
     ]);
   });
+});
+
+describe("finish reasons", () => {
+  test("openai finish_reason length is surfaced on done", async () => {
+    const server = serve(() =>
+      sseResponse(sse(delta({ content: "cut off" }, "length"), "[DONE]")),
+    );
+    try {
+      expect(await events(localProvider(`${server.url.origin}/v1`))).toEqual([
+        { type: "text", text: "cut off" },
+        {
+          type: "done",
+          inputTokens: 0,
+          outputTokens: 0,
+          finishReason: "length",
+        },
+      ]);
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test.each(["stop", "length"])(
+    "ollama done_reason %s is surfaced on done",
+    async (reason) => {
+      const server = serve(
+        () =>
+          new Response(
+            `${JSON.stringify({
+              message: { role: "assistant", content: "x" },
+              done: true,
+              done_reason: reason,
+            })}\n`,
+          ),
+      );
+      try {
+        const seen = await events(
+          resolveProvider({ OLLAMA_HOST: server.url.origin }, "fixture"),
+        );
+        expect(seen.at(-1)).toMatchObject({
+          type: "done",
+          finishReason: reason,
+        });
+      } finally {
+        server.stop(true);
+      }
+    },
+  );
 });

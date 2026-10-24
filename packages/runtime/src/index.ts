@@ -130,6 +130,12 @@ export const RunEventSchema = z.discriminatedUnion("type", [
     evalCount: z.number().int().nonnegative().optional(),
     evalDuration: z.number().nonnegative().optional(),
     totalDuration: z.number().nonnegative().optional(),
+    /**
+     * Why the reply ended, as the server says it (Ollama's `done_reason`,
+     * OpenAI's `finish_reason`): "stop" is a finished reply, "length" one cut
+     * at the output or context limit. Absent when the server did not say.
+     */
+    finishReason: z.string().min(1).max(64).optional(),
   }),
 ]);
 export type RunEvent = z.infer<typeof RunEventSchema>;
@@ -393,6 +399,7 @@ async function* openAILocalChat(
     }
   };
   let usage: OpenAIStreamPart["usage"];
+  let finishReason: string | undefined;
   let lastIndex: number | undefined;
   for await (const part of parseOpenAISSE(response.body)) {
     signal.throwIfAborted();
@@ -438,6 +445,8 @@ async function* openAILocalChat(
         entry.args += fragment.function.arguments;
       pendingCalls.set(index, entry);
     }
+    const reason = part.choices?.[0]?.finish_reason;
+    if (reason) finishReason = reason;
     if (part.usage) usage = part.usage;
   }
   yield* emitToolCalls();
@@ -445,6 +454,7 @@ async function* openAILocalChat(
     type: "done",
     inputTokens: usage?.prompt_tokens ?? 0,
     outputTokens: usage?.completion_tokens ?? 0,
+    ...(finishReason ? { finishReason: finishReason.slice(0, 64) } : {}),
   });
 }
 
@@ -538,6 +548,9 @@ export async function* chat(
           inputTokens: part.prompt_eval_count ?? 0,
           outputTokens: part.eval_count ?? 0,
           ...reported,
+          ...(part.done_reason
+            ? { finishReason: part.done_reason.slice(0, 64) }
+            : {}),
         });
         return;
       }
