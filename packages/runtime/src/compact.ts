@@ -55,22 +55,25 @@ export function promptChars(messages: readonly Message[]): number {
  * first lines and a note of what went.
  */
 function elidedResult(content: string): string {
-  let status = "unknown";
+  let receipt: Record<string, unknown> = { status: "unknown" };
   let output = content;
   try {
-    const parsed = JSON.parse(content) as {
-      status?: unknown;
-      output?: unknown;
-    };
-    if (typeof parsed.status === "string") status = parsed.status;
-    if (typeof parsed.output === "string") output = parsed.output;
+    const parsed = JSON.parse(content) as Record<string, unknown>;
+    if (
+      typeof parsed.status === "string" &&
+      typeof parsed.output === "string"
+    ) {
+      // Every other field (an external result's `source`) stays.
+      receipt = parsed;
+      output = parsed.output;
+    }
   } catch {
     // Not the runtime's receipt: its status is unknown.
   }
   const end = output.lastIndexOf("\n", PREVIEW);
   const preview = output.slice(0, end > PREVIEW / 2 ? end : PREVIEW);
   return JSON.stringify({
-    status,
+    ...receipt,
     output: `${preview}\n[${output.length - preview.length} more ${ELIDED}`,
   });
 }

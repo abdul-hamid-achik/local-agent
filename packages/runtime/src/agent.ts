@@ -1097,6 +1097,9 @@ const MAX_PARALLEL_TOOLS = 4;
  * from 4,000 to 100,000. A result as big as the window would push the rest
  * of the conversation out of it.
  */
+/** The receipt `source` of a fetch, web_search or MCP result. */
+export const EXTERNAL_SOURCE = "external";
+
 export function toolOutputLimit(contextSize: number): number {
   return Math.min(100_000, Math.max(4_000, Math.floor((contextSize * 3) / 4)));
 }
@@ -2043,11 +2046,20 @@ async function* agentTurn(
       }
       if (uncertain) status = "outcome_unknown";
       if (status === "denied") refused.add(signature);
+      // What the web or an MCP server returned is marked as such, ahead of
+      // the text, so a page that reads like instructions reads as data.
+      const external =
+        (status === "succeeded" || status === "unverified") &&
+        (name === "fetch" || name === "web_search" || mcpConnection);
       const message: Message = {
         role: "tool",
         tool_name: name,
         tool_call_id: call.id,
-        content: JSON.stringify({ status, output }),
+        content: JSON.stringify(
+          external
+            ? { status, source: EXTERNAL_SOURCE, output }
+            : { status, output },
+        ),
       };
       if (images.length) message.images = images.splice(0);
       return { status, output, message, uncertain };

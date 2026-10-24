@@ -103,6 +103,27 @@ test("compaction frees images first, then read results, oldest first", () => {
   });
   // The status survives: a failed result still reads as failed.
   expect(JSON.parse(b?.content ?? "").status).toBe("failed");
+  // So does the mark of a result from outside.
+  const external = compactHistory(
+    [
+      {
+        role: "tool",
+        tool_name: "fetch",
+        tool_call_id: "f",
+        content: JSON.stringify({
+          status: "succeeded",
+          source: "external",
+          output: "W".repeat(5_000),
+        }),
+      },
+      { role: "user", content: "next" },
+    ],
+    1_000,
+  );
+  expect(JSON.parse(external.messages[0]?.content ?? "")).toMatchObject({
+    status: "succeeded",
+    source: "external",
+  });
   // Enough was freed: the current turn's reasoning is untouched.
   expect(more.messages[5]?.thinking).toBe(history[5]?.thinking);
   // The input is not changed.
