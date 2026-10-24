@@ -24,10 +24,21 @@ function viewText(view: MessageView): string {
   return view.blocks.map(blockText).join("\n\n");
 }
 
+/**
+ * What an export says instead of a message's images: their base64 stays out of
+ * the file (a 2 MiB data URI per image makes the markdown unusable), so the
+ * count is all a reader gets.
+ */
+function imagesNote(view: MessageView): string {
+  const n = view.images.length + view.images_more;
+  return n > 0 ? `_${n} image${n === 1 ? "" : "s"} not included_` : "";
+}
+
 /** The whole conversation the views show, as one markdown document. */
 export function transcriptMarkdown(views: readonly MessageView[]): string {
   const parts = ["# Local Agent transcript", ""];
   for (const view of views) {
+    const note = imagesNote(view);
     if (view.is_user) parts.push("## You", "", viewText(view), "");
     else if (view.is_asst) parts.push("## Assistant", "", viewText(view), "");
     else if (view.is_notice) parts.push("## Error", "", viewText(view), "");
@@ -38,6 +49,7 @@ export function transcriptMarkdown(views: readonly MessageView[]): string {
       const output = runsText(card.out);
       if (output) parts.push("````", output, "````", "");
     }
+    if (note) parts.push(note);
   }
   return `${parts.join("\n").trimEnd()}\n`;
 }

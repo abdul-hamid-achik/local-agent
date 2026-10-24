@@ -21,6 +21,10 @@
 
 #app { layout: column; width: 1fr; height: 1fr; }
 .la-muted { color: $muted; }
+/* Sources and images ride the transcript width: an img sized in cells
+   would clip on a narrow column, so it fills its container instead. */
+.la-image > img { width: 100%; height: auto; }
+.la-sources { gap: 0; }
 .la-model { bold: true; width: auto; }
 .la-mode { color: $warn; width: auto; }
 .la-provider, .la-session, .la-ctx, .la-grants { width: auto; }

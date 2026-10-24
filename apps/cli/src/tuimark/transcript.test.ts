@@ -14,6 +14,9 @@ const make = (n: number): MessageView => ({
   is_notice: false,
   blocks: [],
   card: NO_CARD,
+  links: [],
+  images: [],
+  images_more: 0,
 });
 const fill = (t: Transcript, n: number) => {
   for (let i = 0; i < n; i++) t.push(make(i));

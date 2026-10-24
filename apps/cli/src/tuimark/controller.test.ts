@@ -1131,6 +1131,10 @@ function printed(ui: FakeHost): string[] {
   return ui.commits
     .filter((c) => c.ok)
     .map((c) => {
+      if (c.commit.template === "la-media") {
+        const view = c.buf as MessageView;
+        return `sources: ${view.links.map((l) => `[${l.n}] ${l.text}`).join(" · ")}`;
+      }
       if (c.commit.template === "la-turn") {
         const view = c.buf as MessageView;
         if (view.is_tool) return `tool ${view.card.name} ${view.card.status}`;
@@ -1193,6 +1197,25 @@ test("inline: the prompt is committed on send and the reply as its blocks close,
   expect(ui.maxInflight).toBe(1);
 });
 
+test("inline: a streamed reply prints its sources row once, numbered like the body", async () => {
+  const text =
+    "See [the docs](https://x.dev/a) and [the API](https://x.dev/b), then the [docs](https://x.dev/a) again.";
+  const { ui, client } = setup(async function* () {
+    yield { type: "text", text: `${text}\n\n` };
+    yield { type: "message", message: { role: "assistant", content: text } };
+  }, inline);
+  await ui.fire("send", "find the docs");
+  await client.idle();
+  const out = printed(ui);
+  expect(out[0]).toBe("You: find the docs");
+  // The body's markers and the sources row use the same numbers.
+  expect(out.slice(1).join("\n")).toContain("the docs[1]");
+  expect(out.slice(1).join("\n")).toContain("the API[2]");
+  const sources = out.filter((row) => row.startsWith("sources: "));
+  expect(sources).toEqual(["sources: [1] the docs · [2] the API"]);
+  expect(client.writeErrors).toEqual([]);
+});
+
 test("inline: a tool receipt is committed in its final state, and the approval still decides", async () => {
   const { ui, client } = setup(withApproval, inline);
   await ui.fire("send", "edit");
@@ -1207,6 +1230,63 @@ test("inline: a tool receipt is committed in its final state, and the approval s
   expect(out.join("\n")).not.toContain("requested");
   expect(out.join("\n")).not.toContain("waiting for approval");
   expect(out.join("\n")).not.toContain("running");
+});
+
+test("inline: a tool result's image reaches the committed view", async () => {
+  const tiny =
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+  const { ui, client } = setup(async function* () {
+    yield {
+      type: "message",
+      message: {
+        role: "assistant",
+        content: "",
+        tool_calls: [
+          {
+            id: "cimg",
+            function: {
+              name: "read_image",
+              arguments: { path: "shots/dot.png" },
+            },
+          },
+        ],
+      },
+    };
+    yield { type: "tool_requested", id: "img", name: "read_image" };
+    yield { type: "tool_start", id: "img", name: "read_image" };
+    yield {
+      type: "message",
+      message: {
+        role: "tool",
+        tool_name: "read_image",
+        tool_call_id: "cimg",
+        content: JSON.stringify({
+          status: "succeeded",
+          output: "image 1x1 png from shots/dot.png (attached)",
+        }),
+        images: [tiny],
+      } satisfies Message,
+    };
+  }, inline);
+  await ui.fire("send", "show it");
+  await client.idle();
+  const tool = ui.commits.find(
+    (c) =>
+      c.ok &&
+      c.commit.template === "la-turn" &&
+      (c.buf as { is_tool?: boolean } | undefined)?.is_tool,
+  );
+  expect(tool).toBeDefined();
+  const view = tool?.buf as MessageView;
+  expect(view.images).toEqual([
+    {
+      mime: "image/png",
+      b64: tiny,
+      src: `data:image/png;base64,${tiny}`,
+      alt: "image 1 (png)",
+    },
+  ]);
+  expect(client.writeErrors).toEqual([]);
 });
 
 test("inline: esc commits the partial reply that had arrived", async () => {

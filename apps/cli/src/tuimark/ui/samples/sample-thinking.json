@@ -46,7 +46,10 @@
         "warn": false,
         "running": false,
         "out": []
-      }
+      },
+      "links": [],
+      "images": [],
+      "images_more": 0
     },
     {
       "id": "m1",
@@ -162,7 +165,10 @@
         "warn": false,
         "running": false,
         "out": []
-      }
+      },
+      "links": [],
+      "images": [],
+      "images_more": 0
     },
     {
       "id": "m2",
@@ -182,7 +188,10 @@
         "out": [
           "Updated src/fetch.ts. Verification has not been run."
         ]
-      }
+      },
+      "links": [],
+      "images": [],
+      "images_more": 0
     },
     {
       "id": "m3",
@@ -215,7 +224,10 @@
         "warn": false,
         "running": false,
         "out": []
-      }
+      },
+      "links": [],
+      "images": [],
+      "images_more": 0
     }
   ],
   "earlier": {
@@ -238,6 +250,9 @@
       "running": false,
       "out": []
     },
+    "links": [],
+    "images": [],
+    "images_more": 0,
     "active": false,
     "tail": []
   },
@@ -476,7 +491,10 @@
       "warn": false,
       "running": false,
       "out": []
-    }
+    },
+    "links": [],
+    "images": [],
+    "images_more": 0
   },
   "commit_blocks": []
 }

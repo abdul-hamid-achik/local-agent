@@ -228,6 +228,7 @@ const MAX_SPILL = 50;
 /** One refused inline print, in the order it was first owed to scrollback. */
 type Spill =
   | { kind: "view"; view: MessageView }
+  | { kind: "links"; view: MessageView }
   | { kind: "blocks"; blocks: Block[]; head: boolean };
 /** The messages the composer's history keeps. */
 const MAX_SENT = 200;
@@ -1167,9 +1168,11 @@ export class TuimarkClient {
         const ok = await this.serializeCommit(() =>
           entry.kind === "view"
             ? this.printView(entry.view)
-            : entry.head
-              ? this.printView(this.assistantView(entry.blocks))
-              : this.printBlocks(entry.blocks),
+            : entry.kind === "links"
+              ? this.printLinks(entry.view)
+              : entry.head
+                ? this.printView(this.assistantView(entry.blocks))
+                : this.printBlocks(entry.blocks),
         );
         if (!ok) return;
         this.spill.shift();
@@ -1196,6 +1199,18 @@ export class TuimarkClient {
     return true;
   }
 
+  /** Prints a streamed reply's sources row once its message has closed. */
+  private async commitLinks(view: MessageView): Promise<boolean> {
+    await this.flushSpill();
+    if (this.spill.length > 0) {
+      this.pushSpill({ kind: "links", view });
+      return false;
+    }
+    const ok = await this.serializeCommit(() => this.printLinks(view));
+    if (!ok) this.pushSpill({ kind: "links", view });
+    return ok;
+  }
+
   /** Prints one finished view (a user turn, a tool receipt, history). */
   private async commitView(view: MessageView): Promise<boolean> {
     await this.flushSpill();
@@ -1214,6 +1229,22 @@ export class TuimarkClient {
     const ok = await this.enqueueCommit({
       template: "la-turn",
       with: "commit_buf as msg",
+    });
+    if (ok) await this.write([{ path: "commit_buf", value: null }]);
+    return ok;
+  }
+
+  /**
+   * Prints only a view's sources row: inline, a reply's text is already in the
+   * scrollback block by block, so its links are printed once when the message
+   * closes (the body's [n] markers came with the streamed blocks).
+   */
+  private async printLinks(view: MessageView): Promise<boolean> {
+    if (!(await this.write([{ path: "commit_buf", value: view }])))
+      return false;
+    const ok = await this.enqueueCommit({
+      template: "la-media",
+      with: "commit_buf as lm",
     });
     if (ok) await this.write([{ path: "commit_buf", value: null }]);
     return ok;
@@ -1240,6 +1271,9 @@ export class TuimarkClient {
       is_notice: false,
       blocks,
       card: NO_CARD,
+      links: [],
+      images: [],
+      images_more: 0,
     };
   }
 
@@ -2160,6 +2194,10 @@ export class TuimarkClient {
               const streamed = await this.commitStreamTail();
               if (view?.is_tool) await this.commitView(view);
               else if (view && !streamed) await this.commitView(view);
+              // A reply streamed block by block already shows its [n] markers;
+              // its sources row prints once, when the message closes.
+              else if (view && view.links.length > 0)
+                await this.commitLinks(view);
             }
             await this.publishMessages();
             break;

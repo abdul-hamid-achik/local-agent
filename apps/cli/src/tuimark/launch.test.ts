@@ -66,7 +66,7 @@ function fakeSpawn(
       reason instanceof Error ? fail(reason) : settle(reason);
     const host = {
       ready: {
-        version: "0.4.6",
+        version: "0.5.1",
         diagnostics: [],
         cols: 90,
         rows: 30,
@@ -125,31 +125,31 @@ const launch = (
   );
 
 test("the pinned release is the minimum, not the pre-release the SDK is packed as", () => {
-  expect(PINNED_TUIMARK).toBe("0.4.6");
+  expect(PINNED_TUIMARK).toBe("0.5.1");
   expect(PINNED_TUIMARK).toBe(MIN_TUIMARK);
 });
 
 test("versions compare as a minimum, not as equality", () => {
-  expect(MIN_TUIMARK).toBe("0.4.6");
-  expect(versionAtLeast("0.4.6", "0.4.6")).toBe(true);
-  expect(versionAtLeast("0.4.6-pre", "0.4.6")).toBe(true);
-  expect(versionAtLeast("0.4.7", "0.4.6")).toBe(true);
-  expect(versionAtLeast("0.5.0-dev", "0.4.6")).toBe(true);
-  expect(versionAtLeast("1.0.0", "0.4.6")).toBe(true);
-  expect(versionAtLeast("0.4.5", "0.4.6")).toBe(false);
-  expect(versionAtLeast("dev", "0.4.6")).toBe(false);
+  expect(MIN_TUIMARK).toBe("0.5.1");
+  expect(versionAtLeast("0.5.1", "0.5.1")).toBe(true);
+  expect(versionAtLeast("0.5.1-pre", "0.5.1")).toBe(true);
+  expect(versionAtLeast("0.5.1", "0.5.1")).toBe(true);
+  expect(versionAtLeast("0.6.0-dev", "0.5.1")).toBe(true);
+  expect(versionAtLeast("1.0.0", "0.5.1")).toBe(true);
+  expect(versionAtLeast("0.4.6", "0.5.1")).toBe(false);
+  expect(versionAtLeast("dev", "0.5.1")).toBe(false);
 });
 
 test("an old binary, or one that loads the document with errors, is refused with its path and version", async () => {
   const stdout = fakeStdout(true);
   const old = fakeSpawn({
-    version: "0.4.5",
+    version: "0.4.6",
     diagnostics: [{ severity: "error", code: "V001", msg: "no textarea" }],
   });
   await expect(
     launch({ spawn: old.spawn, resolve: async () => "/opt/tuimark", stdout }),
   ).rejects.toThrow(
-    /tuimark >= 0\.4\.6; \/opt\/tuimark is 0\.4\.5 and loads app\.tui with 1 error \(V001: no textarea\)/,
+    /tuimark >= 0\.5\.1; \/opt\/tuimark is 0\.4\.6 and loads app\.tui with 1 error \(V001: no textarea\)/,
   );
   expect(old.calls.closed).toBe(1);
   expect(stdout.written).toEqual([TERMINAL_RESET]);
@@ -165,23 +165,23 @@ test("an old binary, or one that loads the document with errors, is refused with
       resolve: async () => "/b/tuimark",
       stdout: fakeStdout(false),
     }),
-  ).rejects.toThrow(/\/b\/tuimark is 0\.4\.6 and loads app\.tui with 1 error/);
+  ).rejects.toThrow(/\/b\/tuimark is 0\.5\.1 and loads app\.tui with 1 error/);
 });
 
 test("readyProblem accepts a newer binary and ignores warnings", () => {
   expect(
-    readyProblem({ version: "0.4.7", diagnostics: [] }, "/b"),
+    readyProblem({ version: "0.5.1", diagnostics: [] }, "/b"),
   ).toBeUndefined();
   expect(
     readyProblem(
-      { version: "0.4.6", diagnostics: [{ severity: "warning" }] },
+      { version: "0.5.1", diagnostics: [{ severity: "warning" }] },
       "/b",
     ),
   ).toBeUndefined();
 });
 
 test("inline needs a child that accepts commit; fullscreen does not ask", async () => {
-  const ready = { version: "0.4.6", diagnostics: [] };
+  const ready = { version: "0.5.1", diagnostics: [] };
   expect(readyProblem(ready, "/b", "fullscreen")).toBeUndefined();
   expect(readyProblem(ready, "/b", "inline")).toMatch(
     /does not accept commit \(inline mode\)/,

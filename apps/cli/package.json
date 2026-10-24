@@ -13,7 +13,7 @@
   "dependencies": {
     "@local-agent/runtime": "workspace:*",
     "@local-agent/vue-tui": "workspace:*",
-    "@thelacanians/tuimark": "0.4.6",
+    "@thelacanians/tuimark": "0.5.1",
     "vue": "3.5.44"
   },
   "imports": {

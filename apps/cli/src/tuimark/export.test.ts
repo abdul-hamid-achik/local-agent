@@ -119,3 +119,36 @@ test("the file name carries the local timestamp, zero-padded", () => {
     "local-agent-transcript-20261022-090503.md",
   );
 });
+
+test("images are counted, never embedded: their base64 stays out of the file", () => {
+  const tiny =
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+  const views = viewsOf([
+    { role: "user", content: "Show me the screenshot." },
+    {
+      role: "assistant",
+      content: "",
+      tool_calls: [
+        {
+          id: "c-img",
+          function: {
+            name: "read_image",
+            arguments: { path: "shots/dot.png" },
+          },
+        },
+      ],
+    },
+    {
+      role: "tool",
+      tool_name: "read_image",
+      tool_call_id: "c-img",
+      content: JSON.stringify({ status: "succeeded", output: "attached" }),
+      images: [tiny, tiny],
+    },
+  ]);
+  const markdown = transcriptMarkdown(views);
+  expect(markdown).toContain("_2 images not included_");
+  expect(markdown).not.toContain("data:image");
+  expect(markdown).not.toContain(tiny.slice(0, 32));
+  expect((views.at(-1)?.images ?? []).length).toBe(2);
+});

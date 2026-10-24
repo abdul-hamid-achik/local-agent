@@ -203,6 +203,9 @@ export const EMPTY_COMMIT_VIEW: MessageView = Object.freeze({
   is_notice: false,
   blocks: [],
   card: NO_CARD,
+  links: [],
+  images: [],
+  images_more: 0,
 }) as MessageView;
 
 /** A token count in k = 1024 tokens: 32768 reads "32k", 9800 reads "9.6k". */

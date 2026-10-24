@@ -145,6 +145,27 @@
     </col>
   </template>
 
+
+  <!-- What a message carries besides its body, verbatim from app.tui: its
+       numbered link sources (each one an OSC 8 hyperlink on the 0.5.1 engine's
+       data-bound href) and its images. with="msg as lm". A streamed reply's
+       sources row is committed on its own when the message closes
+       (controller.printLinks). -->
+  <template id="la-media">
+    <col class="la-media">
+      <col if="lm.links" class="la-sources">
+        <text class="la-muted">sources</text>
+        <col each="lm.links as l" key="l.url">
+          <text href="{l.url}" class="link" wrap="wrap">[{l.n}] {l.text}</text>
+        </col>
+      </col>
+      <col each="lm.images as im" key="im.alt" class="la-image">
+        <img src="{im.src}" alt="{im.alt}" quality="auto"/>
+      </col>
+      <text if="lm.images_more" class="la-muted">+{lm.images_more} more image(s) not shown</text>
+    </col>
+  </template>
+
   <template id="la-tool">
     <box class="la-tool" class:ok="t.ok" class:bad="t.bad" class:warn="t.warn" class:run="t.running" title="Tool · {t.name}">
       <row class="la-tool-head">
@@ -159,16 +180,21 @@
   <template id="la-turn">
     <use template="la-message" label="You" class="user" if="msg.is_user">
       <use template="la-blocks" with="msg.blocks as blocks"/>
+      <use template="la-media" with="msg as lm"/>
     </use>
     <use template="la-message" label="Assistant" class="asst" if="msg.is_asst">
       <use template="la-blocks" with="msg.blocks as blocks"/>
+      <use template="la-media" with="msg as lm"/>
     </use>
     <use template="la-tool" if="msg.is_tool" with="msg.card as t">
       <text class="la-out" runs="msg.card.out" wrap="pre-wrap"/>
     </use>
+    <!-- A tool result's images (read_image, a fetched image) and links. -->
+    <use template="la-media" with="msg as lm" if="msg.is_tool"/>
     <!-- A UI-local notice (a failed turn's error): the client's words, never the model's. -->
     <use template="la-message" label="Error" class="notice" if="msg.is_notice">
       <use template="la-blocks" with="msg.blocks as blocks"/>
+      <use template="la-media" with="msg as lm"/>
     </use>
   </template>
 
@@ -200,6 +226,7 @@
           <use template="la-message" label="Assistant" class="asst" if="live.is_asst">
             <use template="la-blocks" with="live.blocks as blocks"/>
             <use template="la-blocks" with="live.tail as blocks"/>
+            <use template="la-media" with="live as lm"/>
           </use>
           <use template="la-tool" if="live.is_tool" with="live.card as t">
             <text class="la-out" runs="live.card.out" wrap="pre-wrap"/>

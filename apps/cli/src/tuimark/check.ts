@@ -93,6 +93,51 @@ for (const [name, make] of Object.entries(SAMPLES)) {
   }
 }
 
+// Links and images in the rendered document (tuimark 0.5.1 and later: the
+// data-bound href/src contract these samples are written against). A link
+// paints OSC 8 cells whose `link` index is non-zero, and an image lays out an
+// <img> node with a size. This fails on 0.5.0, where href/src stay literal.
+{
+  const links = JSON.parse(
+    tuimark([
+      "dump",
+      "app.tui",
+      "--data",
+      "samples/sample-links.json",
+      "--cols",
+      "80",
+      "--rows",
+      String(rows),
+      "--format",
+      "json",
+      "--cells",
+    ]).out,
+  ) as { cells?: { link?: number }[] };
+  if (!links.cells?.some((cell) => cell.link !== undefined && cell.link > 0))
+    failures.push(
+      "sample-links: no cell carries a hyperlink index (needs tuimark >= 0.5.1)",
+    );
+  const image = JSON.parse(
+    tuimark([
+      "dump",
+      "app.tui",
+      "--data",
+      "samples/sample-image.json",
+      "--cols",
+      "80",
+      "--rows",
+      String(rows),
+      "--format",
+      "json",
+    ]).out,
+  ) as { nodes: { tag: string; w: number; h: number }[] };
+  const img = image.nodes.find((node) => node.tag === "img");
+  if (!img || img.w < 1 || img.h < 1)
+    failures.push(
+      "sample-image: no laid-out <img> node (needs tuimark >= 0.5.1)",
+    );
+}
+
 // The inline document: same loop, dumped as a live region (--inline), so the
 // dump's `rows` is the region's height and `terminal_rows` the terminal's.
 for (const [name, make] of Object.entries(INLINE_SAMPLES)) {

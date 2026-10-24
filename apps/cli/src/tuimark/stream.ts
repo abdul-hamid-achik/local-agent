@@ -25,6 +25,7 @@ import {
   cleanText,
   IDLE_LIVE,
   IDLE_THINKING,
+  type LinkRef,
   type LiveView,
   MAX_MESSAGE_BLOCKS,
   MAX_MESSAGE_CHARS,
@@ -53,8 +54,8 @@ export const FENCE_REPARSE_MS = 1500;
 
 const PREFIX = "l";
 
-function liveWith(blocks: Block[], tail: Block[]): LiveView {
-  return { ...IDLE_LIVE, active: true, blocks, tail };
+function liveWith(blocks: Block[], tail: Block[], links: LinkRef[]): LiveView {
+  return { ...IDLE_LIVE, active: true, blocks, tail, links };
 }
 
 export class LiveStream {
@@ -62,6 +63,14 @@ export class LiveStream {
   private pending = "";
   /** Text that arrived since the last drain, cleaned. */
   private unsent = "";
+  /**
+   * The reply's link targets so far. The live blocks carry the body's [n]
+   * markers, and the committed view renders the same sources row from this
+   * list (deduped by url, so a tail parsed again keeps its numbers).
+   */
+  private linkRefs: LinkRef[] = [];
+  /** How many of `linkRefs` the store already holds. */
+  private linksSent = 0;
   /** The final blocks, kept so a refused write can be made good. */
   private blocks: Block[] = [];
   private tail: Block[] = [];
@@ -99,6 +108,8 @@ export class LiveStream {
   reset(): void {
     this.pending = "";
     this.unsent = "";
+    this.linkRefs = [];
+    this.linksSent = 0;
     this.blocks = [];
     this.tail = [];
     this.chars = 0;
@@ -113,6 +124,11 @@ export class LiveStream {
     this.answered = false;
     this.committedCount = 0;
     this.offeredCount = 0;
+  }
+
+  /** The reply's link targets, as the body's [n] markers number them. */
+  get links(): LinkRef[] {
+    return this.linkRefs;
   }
 
   /** True while there is something to write. */
@@ -245,8 +261,9 @@ export class LiveStream {
       // already in the terminal's scrollback and would show twice.
       writes.push({
         path: "live",
-        value: liveWith(this.visibleBlocks(), this.tail),
+        value: liveWith(this.visibleBlocks(), this.tail, this.linkRefs),
       });
+      this.linksSent = this.linkRefs.length;
       this.inStore.thinking = false;
       this.inStore.thinkChars = 0;
       writes.push({ path: "thinking", value: IDLE_THINKING });
@@ -330,14 +347,20 @@ export class LiveStream {
       this.inStore.tail = this.tail.length;
       writes.push({
         path: "live",
-        value: liveWith(this.visibleBlocks(), this.tail),
+        value: liveWith(this.visibleBlocks(), this.tail, this.linkRefs),
       });
+      this.linksSent = this.linkRefs.length;
       return;
     }
     for (const block of this.blocks.slice(before))
       writes.push({ path: "live.blocks", value: block, op: "append" });
     writes.push({ path: "live.tail", value: this.tail });
     this.inStore.tail = this.tail.length;
+    if (this.linksSent !== this.linkRefs.length) {
+      // The sources row lives on the live message until the reply commits.
+      writes.push({ path: "live.links", value: this.linkRefs });
+      this.linksSent = this.linkRefs.length;
+    }
   }
 
   /**
@@ -354,6 +377,7 @@ export class LiveStream {
         complete,
         PREFIX,
         this.blocks.length,
+        this.linkRefs,
       );
       const last = blocks.length - 1;
       if (last >= 0) {
@@ -392,7 +416,8 @@ export class LiveStream {
       return;
     }
     this.tail = this.pending.trim()
-      ? parseBlocksAt(this.pending, PREFIX, this.blocks.length).blocks
+      ? parseBlocksAt(this.pending, PREFIX, this.blocks.length, this.linkRefs)
+          .blocks
       : [];
     this.fence = startsOpenFence(this.pending);
   }

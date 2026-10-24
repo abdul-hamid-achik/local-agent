@@ -1,6 +1,7 @@
 import { expect, test } from "vitest";
 import {
   type Block,
+  type LinkRef,
   MAX_MESSAGE_BLOCKS,
   parseBlocks,
   runsText,
@@ -19,6 +20,7 @@ interface Live {
   active: boolean;
   blocks: Block[];
   tail: Block[];
+  links: LinkRef[];
 }
 
 /** A stream with a clock the test moves, and a store the writes are applied to. */
@@ -106,9 +108,12 @@ test("a stream split anywhere ends with the blocks parseBlocks makes of the whol
     r.drain();
     const live = r.live();
     expect(live.active).toBe(true);
+    const links: LinkRef[] = [];
     expect(shape([...live.blocks, ...live.tail])).toEqual(
-      shape(parseBlocks(MARKDOWN, "l")),
+      shape(parseBlocks(MARKDOWN, "l", links)),
     );
+    // The body's markers and the live view's sources row are one list.
+    expect(live.links).toEqual(links);
     expect(r.stream.dirty).toBe(false);
   }
 });
@@ -353,7 +358,9 @@ test("inline: finishTail offers the whole remainder, parsed as parseBlocks parse
       }
     }
     printed.push(...r.stream.finishTail());
-    expect(shape(printed)).toEqual(shape(parseBlocks(MARKDOWN, "l")));
+    const links: LinkRef[] = [];
+    expect(shape(printed)).toEqual(shape(parseBlocks(MARKDOWN, "l", links)));
+    expect(r.stream.links).toEqual(links);
     expect(r.stream.finishTail()).toEqual([]);
     expect(r.stream.dirty).toBe(false);
   }

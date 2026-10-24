@@ -48,7 +48,8 @@ test("chat intent gets its own conversational preamble, not the coding framing",
   const chat = hostInstructions("chat", ["bun"]);
   expect(chat).toContain("conversational assistant");
   expect(chat).toContain("web_search and fetch");
-  expect(chat).toContain("summarize and cite links");
+  expect(chat).toContain("cite sources as markdown links");
+  expect(chat).toContain("offer to show a map or screenshot");
   expect(chat).not.toContain("coding agent");
   expect(chat).not.toContain("Programs found");
   expect(chat).not.toBe(hostInstructions("plan", ["bun"]));

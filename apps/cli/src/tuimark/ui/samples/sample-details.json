@@ -46,7 +46,10 @@
         "warn": false,
         "running": false,
         "out": []
-      }
+      },
+      "links": [],
+      "images": [],
+      "images_more": 0
     },
     {
       "id": "m1",
@@ -70,7 +73,10 @@
             "class": "note"
           }
         ]
-      }
+      },
+      "links": [],
+      "images": [],
+      "images_more": 0
     },
     {
       "id": "m2",
@@ -103,7 +109,10 @@
         "warn": false,
         "running": false,
         "out": []
-      }
+      },
+      "links": [],
+      "images": [],
+      "images_more": 0
     }
   ],
   "earlier": {
@@ -126,6 +135,9 @@
       "running": false,
       "out": []
     },
+    "links": [],
+    "images": [],
+    "images_more": 0,
     "active": false,
     "tail": []
   },
@@ -503,7 +515,10 @@
       "warn": false,
       "running": false,
       "out": []
-    }
+    },
+    "links": [],
+    "images": [],
+    "images_more": 0
   },
   "commit_blocks": []
 }

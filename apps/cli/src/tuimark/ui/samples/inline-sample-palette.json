@@ -35,6 +35,9 @@
       "running": false,
       "out": []
     },
+    "links": [],
+    "images": [],
+    "images_more": 0,
     "active": false,
     "tail": []
   },
@@ -186,7 +189,10 @@
       "warn": false,
       "running": false,
       "out": []
-    }
+    },
+    "links": [],
+    "images": [],
+    "images_more": 0
   },
   "commit_blocks": []
 }

@@ -75,11 +75,12 @@ there is no approval dialog to answer. See [Safety](/safety).
 
 | Command | Purpose |
 |---|---|
-| `/mode plan\|build` | Switch intent. `plan` reads only; `build` can edit |
+| `/mode plan\|build\|chat` | Switch intent. `plan` reads only; `build` can edit; `chat` is the conversational research profile |
 | `/theme dark\|light\|auto` | Set the session theme |
 | `/mouse on\|off` | Toggle mouse reporting; fullscreen only |
-| `/permissions` | Show session approval grants |
+| `/permissions` | Show session grants and the workspace file rules, each with its origin |
 | `/permissions clear` | Clear session approval grants |
+| `/permissions clear rules` | Empty the rules in `.local-agent/permissions.json` |
 | `/details` | Show the last tool output in full |
 | `/status` | Show the effective config panel (model, workspace, session) |
 | `/sessions` | Open the session picker; needs `--session-db` |

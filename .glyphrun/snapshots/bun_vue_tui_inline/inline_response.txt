@@ -3,7 +3,7 @@ You: hello
 Assistant: fixture reply to hello
 
 Local Agent · Ollama / loopback · experimental
-Enter send · Esc cancel · /mode plan|build · Ctrl+C exit
+Enter send · Esc cancel · /mode plan|build|chat · Ctrl+C exit
 ┌──────────────────────────────────────────────────────────────────────────────────────────────────┐
 │Message the model                                                                                 │
 └──────────────────────────────────────────────────────────────────────────────────────────────────┘

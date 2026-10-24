@@ -126,6 +126,50 @@ const MARKDOWN_MESSAGES: Message[] = [
   },
 ];
 
+/** A reply that cites three markdown links, one of them twice. */
+const LINK_REPLY =
+  "Tuimark's [guide](https://tuimark.dev/guide) covers runs and images; " +
+  "the [GitHub mirror](https://github.com/abdul-hamid-achik/tuimark) has the source, " +
+  "and the [guide](https://tuimark.dev/guide) is the same page linked again. " +
+  "A [fourth link](https://example.com/notes) is only text.";
+
+const LINKS_MESSAGES: Message[] = [
+  { role: "user", content: "Where are the Tuimark docs?" },
+  { role: "assistant", content: LINK_REPLY },
+];
+
+/** A 1x1 PNG: the sample image whose data URI the markup paints. */
+export const TINY_PNG_B64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+
+const IMAGE_MESSAGES: Message[] = [
+  { role: "user", content: "Show me the screenshot." },
+  {
+    role: "assistant",
+    content: "",
+    tool_calls: [
+      {
+        id: "call-img",
+        function: {
+          name: "read_image",
+          arguments: { path: "shots/dot.png" },
+        },
+      },
+    ],
+  },
+  {
+    role: "tool",
+    tool_name: "read_image",
+    tool_call_id: "call-img",
+    content: JSON.stringify({
+      status: "succeeded",
+      output: "image 1x1 png from shots/dot.png (attached)",
+    }),
+    images: [TINY_PNG_B64],
+  },
+  { role: "assistant", content: "That is the one-pixel screenshot." },
+];
+
 const DIFF = [
   "--- a/src/fetch.ts",
   "+++ b/src/fetch.ts",
@@ -202,6 +246,16 @@ export function errorSample(): Store {
 /** Markdown beyond code: heading, nested bullets, numbered items, quote, table, inline marks, a failed command. */
 export function markdownSample(): Store {
   return base(MARKDOWN_MESSAGES).store;
+}
+
+/** A cited reply: numbered [n] markers in the body and a sources row of links. */
+export function linksSample(): Store {
+  return base(LINKS_MESSAGES).store;
+}
+
+/** A tool result that carried an image: the view paints it under the card. */
+export function imageSample(): Store {
+  return base(IMAGE_MESSAGES).store;
 }
 
 /** A tool call waiting for approval, with the edit dialog open. */
@@ -519,6 +573,8 @@ export const SAMPLES = {
   "sample-empty": emptySample,
   "sample-error": errorSample,
   "sample-markdown": markdownSample,
+  "sample-links": linksSample,
+  "sample-image": imageSample,
   "sample-approval": approvalSample,
   "sample-approval-long": longApprovalSample,
   "sample-approval-mcp": mcpApprovalSample,

@@ -39,13 +39,13 @@ import { resolveTheme, themedDocument } from "#cli/tuimark/themes";
  * The oldest tuimark this client's document runs on: <textarea>, `runs`, and the
  * append write of the stream (0.4.6; props and <slot/> came with 0.4.5).
  */
-export const MIN_TUIMARK = "0.4.6";
+export const MIN_TUIMARK = "0.5.1";
 
 /**
  * The tuimark release the client downloads when TUIMARK_BINARY is not set,
  * named here so the binary matches the SDK this client was checked against.
  */
-export const PINNED_TUIMARK = "0.4.6";
+export const PINNED_TUIMARK = "0.5.1";
 
 /** The SDK's resolution (TUIMARK_BINARY, the cache, a checked download) for PINNED_TUIMARK. */
 export function resolvePinned(): Promise<string> {

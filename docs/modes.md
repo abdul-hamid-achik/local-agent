@@ -6,12 +6,12 @@ outline: deep
 
 # Modes: plan and build
 
-Every session runs with one intent: **plan** or **build**. The default is
-build. The intent decides which tools the agent may offer and how mutations
-are gated.
+Every session runs with one intent: **plan**, **build**, or **chat**. The
+default is build. The intent decides which tools the agent may offer and how
+mutations are gated.
 
-Switch intent with `shift+tab` at any time, or run `/mode plan` or
-`/mode build`.
+Switch intent with `shift+tab` at any time (build → plan → chat → build),
+or run `/mode plan`, `/mode build`, or `/mode chat`.
 
 ## Plan
 
@@ -30,6 +30,14 @@ Plan hard-denies the following regardless of any approver:
 
 These denials are not approval prompts you can accept; the tool call is
 refused outright.
+
+## Chat
+
+Chat is a conversational research profile: no coding preamble, no todo
+list, no subagents. It offers the same read-only research set (`read`,
+`list`, `search`, `fetch`, `web_search`, `read_image`) and hard-denies
+every effect exactly like plan. Use it for questions, documentation
+lookups, and gaming guides; switch back to build for edits.
 
 ## Build
 

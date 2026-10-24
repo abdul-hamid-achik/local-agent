@@ -7,12 +7,19 @@ import {
   DETAILS_MAX_CHARS,
   DETAILS_TRUNCATED_TAIL,
   IDLE_LIVE,
+  imageMime,
   inlineRuns,
+  type LinkRef,
   liveToolView,
   MAX_CODE_COLS,
   MAX_CODE_LINES,
+  MAX_IMAGE_B64,
+  MAX_IMAGES,
+  MAX_LINK_TEXT,
+  MAX_LINKS,
   MAX_MESSAGE_BLOCKS,
   MAX_MESSAGE_CHARS,
+  messageImages,
   outputRuns,
   parseBlocks,
   parseStreaming,
@@ -575,7 +582,7 @@ test("a marker that does not close stays literal, however a stream ends", () => 
   // Every prefix of a message reads as text: nothing is dropped or doubled.
   const message = "Use **bold**, `code`, *em* and [a link](https://x.dev/a_b).";
   const whole = runsText(inlineRuns(message));
-  expect(whole).toBe("Use bold, code, em and a link (https://x.dev/a_b).");
+  expect(whole).toBe("Use bold, code, em and a link.");
   for (let n = 0; n <= message.length; n++) {
     const head = message.slice(0, n);
     const text = runsText(inlineRuns(head));
@@ -614,30 +621,82 @@ test("a backslash escapes a marker", () => {
   expect(inlineRuns("C:\\dir")).toEqual(["C:\\dir"]);
 });
 
-test("a link is its text in class link, then the address dim", () => {
+test("a link is its text in class link, then its [n] source marker", () => {
+  const links: LinkRef[] = [];
+  expect(inlineRuns("see [the docs](https://x.dev/a) now", links)).toEqual([
+    "see ",
+    { text: "the docs", class: "link" },
+    { text: "[1]", class: "url" },
+    " now",
+  ]);
+  expect(links).toEqual([{ n: 1, text: "the docs", url: "https://x.dev/a" }]);
+  const bold: LinkRef[] = [];
+  expect(inlineRuns("[**bold** link](u)", bold)).toEqual([
+    { text: "bold", class: "b link" },
+    { text: " link", class: "link" },
+    { text: "[1]", class: "url" },
+  ]);
+  expect(bold).toEqual([{ n: 1, text: "bold link", url: "u" }]);
+  // Without a collector (the live stream) the link is just its text: no
+  // source number can exist before the sources row is rendered.
   expect(inlineRuns("see [the docs](https://x.dev/a) now")).toEqual([
     "see ",
     { text: "the docs", class: "link" },
-    { text: " (https://x.dev/a)", class: "url" },
     " now",
-  ]);
-  expect(inlineRuns("[**bold** link](u)")).toEqual([
-    { text: "bold", class: "b link" },
-    { text: " link", class: "link" },
-    { text: " (u)", class: "url" },
   ]);
 });
 
+test("one url gets one number, whatever the message cites it", () => {
+  const links: LinkRef[] = [];
+  const runs = inlineRuns(
+    "[a](https://x.dev/1) then [b](https://x.dev/2) then [a again](https://x.dev/1)",
+    links,
+  );
+  expect(runs).toEqual([
+    { text: "a", class: "link" },
+    { text: "[1]", class: "url" },
+    " then ",
+    { text: "b", class: "link" },
+    { text: "[2]", class: "url" },
+    " then ",
+    { text: "a again", class: "link" },
+    { text: "[1]", class: "url" },
+  ]);
+  expect(links).toEqual([
+    { n: 1, text: "a", url: "https://x.dev/1" },
+    { n: 2, text: "b", url: "https://x.dev/2" },
+  ]);
+});
+
+test("sources stop at MAX_LINKS, and a long link text is clipped", () => {
+  const links: LinkRef[] = [];
+  const source = Array.from(
+    { length: MAX_LINKS + 2 },
+    (_, i) => `[link ${i}](https://x.dev/${i})`,
+  ).join(" ");
+  const runs = inlineRuns(source, links);
+  expect(links).toHaveLength(MAX_LINKS);
+  expect(links.at(-1)?.n).toBe(MAX_LINKS);
+  expect(runsText(runs)).not.toContain(`[${MAX_LINKS + 1}]`);
+  const long: LinkRef[] = [];
+  inlineRuns(`[${"word ".repeat(30)}](https://x.dev/long)`, long);
+  expect(long[0]?.text).toHaveLength(MAX_LINK_TEXT);
+  expect(long[0]?.text.endsWith("…")).toBe(true);
+});
+
 test("a link address may hold parentheses, and bad links stay text", () => {
-  expect(inlineRuns("[w](https://en.wikipedia.org/wiki/A_(b)) end")).toEqual([
+  const links: LinkRef[] = [];
+  expect(
+    inlineRuns("[w](https://en.wikipedia.org/wiki/A_(b)) end", links),
+  ).toEqual([
     { text: "w", class: "link" },
-    { text: " (https://en.wikipedia.org/wiki/A_(b))", class: "url" },
+    { text: "[1]", class: "url" },
     " end",
   ]);
+  expect(links[0]?.url).toBe("https://en.wikipedia.org/wiki/A_(b)");
   expect(inlineRuns("(see [x](y))")).toEqual([
     "(see ",
     { text: "x", class: "link" },
-    { text: " (y)", class: "url" },
     ")",
   ]);
   expect(inlineRuns("[a](b c)")).toEqual(["[a](b c)"]);
@@ -645,10 +704,12 @@ test("a link address may hold parentheses, and bad links stay text", () => {
   expect(inlineRuns("[a](b")).toEqual(["[a](b"]);
   expect(inlineRuns("[[nested]](u)")).toEqual([
     { text: "[nested]", class: "link" },
-    { text: " (u)", class: "url" },
   ]);
+  // An empty destination is no source: it stays link text with no marker.
   expect(inlineRuns("[a]()")).toEqual([{ text: "a", class: "link" }]);
-  expect(inlineRuns("[x](y)".repeat(2))).toHaveLength(4);
+  const twice: LinkRef[] = [];
+  expect(inlineRuns("[x](y)".repeat(2), twice)).toHaveLength(4);
+  expect(twice).toHaveLength(1);
 });
 
 test("CJK and emoji text is never split, and markers flank around it", () => {
@@ -669,7 +730,6 @@ test("CJK and emoji text is never split, and markers flank around it", () => {
     code("😀"),
     " and ",
     { text: "👨‍👩‍👧", class: "link" },
-    { text: " (u)", class: "url" },
   ]);
   for (const text of ["**😀😀**", "*👨‍👩‍👧*x", "[🇲🇽](u)", "a`🎉`b", "_日本_"]) {
     const out = runsText(inlineRuns(text));
@@ -680,7 +740,7 @@ test("CJK and emoji text is never split, and markers flank around it", () => {
 
 test("the visible text is the source minus its markers, whatever the input", () => {
   const source = "a **b** `c` [d](e) ~~f~~ _g_ 日本 😀 \\* *h";
-  expect(runsText(inlineRuns(source))).toBe("a b c d (e) f g 日本 😀 * *h");
+  expect(runsText(inlineRuns(source))).toBe("a b c d f g 日本 😀 * *h");
 });
 
 test("pathological input stays linear", () => {
@@ -702,4 +762,101 @@ test("pathological input stays linear", () => {
     expect(runsText(runs).length).toBeGreaterThan(0);
   }
   expect(performance.now() - start).toBeLessThan(2000);
+});
+
+// ---------------------------------------------------------- links and images
+
+const TINY_PNG =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+
+test("a message's bodies share one numbered source list", () => {
+  const links: LinkRef[] = [];
+  const blocks = parseBlocks(
+    [
+      "See [the docs](https://x.dev/a).",
+      "",
+      "- and [the mirror](https://x.dev/b)",
+      "",
+      "The [docs](https://x.dev/a) again, plus [one more](https://x.dev/c).",
+    ].join("\n"),
+    "b",
+    links,
+  );
+  expect(links).toEqual([
+    { n: 1, text: "the docs", url: "https://x.dev/a" },
+    { n: 2, text: "the mirror", url: "https://x.dev/b" },
+    { n: 3, text: "one more", url: "https://x.dev/c" },
+  ]);
+  const all = runsText(blocks.flatMap((block) => block.runs));
+  expect(all.match(/\[1\]/g)).toHaveLength(2);
+  expect(all).toContain("[2]");
+  expect(all).toContain("[3]");
+  expect(all).not.toContain("https://x.dev");
+});
+
+test("images are named from their magic bytes and capped", () => {
+  expect(imageMime(TINY_PNG)).toBe("image/png");
+  expect(
+    imageMime(Buffer.from([0xff, 0xd8, 0xff, 0xe0]).toString("base64")),
+  ).toBe("image/jpeg");
+  expect(imageMime(Buffer.from("GIF89a……").toString("base64"))).toBe(
+    "image/gif",
+  );
+  expect(imageMime(Buffer.from("RIFF0000WEBPVP8 ").toString("base64"))).toBe(
+    "image/webp",
+  );
+  expect(
+    imageMime(Buffer.from("not an image").toString("base64")),
+  ).toBeUndefined();
+
+  const two = messageImages([TINY_PNG, TINY_PNG]);
+  expect(two.images).toEqual([
+    {
+      mime: "image/png",
+      b64: TINY_PNG,
+      src: `data:image/png;base64,${TINY_PNG}`,
+      alt: "image 1 (png)",
+    },
+    {
+      mime: "image/png",
+      b64: TINY_PNG,
+      src: `data:image/png;base64,${TINY_PNG}`,
+      alt: "image 2 (png)",
+    },
+  ]);
+  expect(two.more).toBe(0);
+
+  const capped = messageImages([TINY_PNG, TINY_PNG, TINY_PNG]);
+  expect(capped.images).toHaveLength(MAX_IMAGES);
+  expect(capped.more).toBe(1);
+
+  const huge = messageImages(["A".repeat(MAX_IMAGE_B64 + 1), TINY_PNG]);
+  expect(huge.images).toHaveLength(1);
+  expect(huge.more).toBe(1);
+
+  expect(messageImages(undefined)).toEqual({ images: [], more: 0 });
+});
+
+test("a tool message's images reach its view, and every view carries the flags", () => {
+  const builder = new ViewBuilder();
+  const view = builder.fromMessage({
+    role: "tool",
+    tool_name: "read_image",
+    content: JSON.stringify({ status: "succeeded", output: "attached" }),
+    images: [TINY_PNG, TINY_PNG, TINY_PNG],
+  });
+  expect(view?.images).toHaveLength(MAX_IMAGES);
+  expect(view?.images_more).toBe(1);
+  expect(view?.images[0]?.src.startsWith("data:image/png;base64,")).toBe(true);
+  expect(view?.links).toEqual([]);
+
+  const assistant = builder.fromMessage({
+    role: "assistant",
+    content: "See [the docs](https://x.dev/a).",
+  });
+  expect(assistant?.links).toEqual([
+    { n: 1, text: "the docs", url: "https://x.dev/a" },
+  ]);
+  expect(assistant?.images).toEqual([]);
+  expect(assistant?.images_more).toBe(0);
 });

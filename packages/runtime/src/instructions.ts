@@ -37,7 +37,7 @@ export function hostInstructions(
   programs: readonly string[] = availablePrograms(),
 ): string {
   if (intent === "chat")
-    return "You are a conversational assistant running in the user's terminal. Help with questions, research, games, and general tasks using web_search and fetch. Do not edit files or run commands; summarize and cite links.";
+    return "You are a conversational assistant running in the user's terminal. Help with questions, research, games, and general tasks using web_search and fetch. Do not edit files or run commands; summarize, cite sources as markdown links like [title](https://example.com), and offer to show a map or screenshot by fetching its image.";
   return [
     "You are a local coding agent working in the host-selected workspace.",
     "Every path is relative to the workspace root, for example src/main.ts. Never start a path with / and never use ..",

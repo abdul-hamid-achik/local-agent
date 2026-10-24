@@ -60,8 +60,30 @@ argument — `bun test …`, not every `bun` invocation), or one exact
 `SERVER__TOOL` MCP name. A grant is never taken from a preview too long to
 read whole.
 
-Grants live in memory only. They die with the process and are never
-persisted. `/permissions` lists them; `/permissions clear` revokes every one.
+Session grants live in memory only. They die with the process. `/permissions`
+lists them beside the file rules; `/permissions clear` revokes the session
+grants, and `/permissions clear rules` empties the file.
+
+### Persistent rules
+
+`!` on an approval card saves the rule exactly as the dialog shows it
+("Always allow `bun test *`") to `.local-agent/permissions.json` in the
+workspace, creating the file (and a gitignore entry for its directory) on
+first use. Rules are `{effect, tool, pattern}`, evaluated before any card:
+
+- `edit` — a gitignore-style path glob relative to the workspace (`*` one
+  segment, `**` recursive);
+- `run_command` — an argv prefix with a trailing `*`; `npm test *` also
+  matches bare `npm test`;
+- `fetch` — `domain:host`, with `*.example.com` for subdomains;
+- `mcp` — `server__tool` with `*` wildcards;
+- `web_search` — `*`.
+
+Evaluation is deny → ask → allow, first match wins; deny always beats a
+session grant or a saved allow. Headless runs consult the file first in both
+directions: a file allow approves with the flag off, a file deny refuses with
+the flag on. Rules are the user's durable intent; the flags remain the
+per-run switch.
 
 ### Headless approval
 

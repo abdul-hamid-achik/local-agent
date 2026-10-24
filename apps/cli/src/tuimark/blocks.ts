@@ -81,6 +81,125 @@ const SPAN_BITS = [B, I, STRIKE, LINK] as const;
 /** A link destination longer than this is not one: it bounds the work per `](`. */
 const MAX_URL = 2048;
 
+/**
+ * One link of a message, as the sources row shows it: the number of its `[n]`
+ * marker in the body, the link's text, and where it goes. Links are deduped by
+ * url, so one target has one number however often it is cited.
+ */
+export interface LinkRef {
+  n: number;
+  text: string;
+  url: string;
+}
+
+/** A message view keeps this many link targets; the rest stay plain link text. */
+export const MAX_LINKS = 8;
+/** A source's text keeps this many characters (the row is one line). */
+export const MAX_LINK_TEXT = 60;
+
+/**
+ * One image of a message, ready for `<img>`: the mime type sniffed from the
+ * bytes, the base64 the runtime attached, and the data URI the markup reads.
+ */
+export interface ImageRef {
+  mime: string;
+  b64: string;
+  /** `data:<mime>;base64,<b64>`, the value `<img src>` paints. */
+  src: string;
+  /** What the image is, for terminals that cannot paint one. */
+  alt: string;
+}
+
+/** A message view keeps this many images; the rest are only counted. */
+export const MAX_IMAGES = 2;
+/** An image over this many base64 characters is not kept in the view. */
+export const MAX_IMAGE_B64 = 2 * 1024 * 1024;
+
+/**
+ * The mime type an image's base64 starts with, from its magic bytes (the
+ * runtime validated them; the transcript still has to name the type for the
+ * data URI). Undefined for bytes that are not a PNG, JPEG, GIF or WebP.
+ */
+export function imageMime(b64: string): string | undefined {
+  const bytes = Buffer.from(b64.slice(0, 24), "base64");
+  if (
+    bytes[0] === 0x89 &&
+    bytes[1] === 0x50 &&
+    bytes[2] === 0x4e &&
+    bytes[3] === 0x47 &&
+    bytes[4] === 0x0d &&
+    bytes[5] === 0x0a &&
+    bytes[6] === 0x1a &&
+    bytes[7] === 0x0a
+  )
+    return "image/png";
+  if (bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff)
+    return "image/jpeg";
+  // GIF87a / GIF89a: "GIF8" is enough to name the type.
+  const gif = "GIF8";
+  if ([...gif].every((c, i) => bytes[i] === c.charCodeAt(0)))
+    return "image/gif";
+  const riff = "RIFF";
+  const webp = "WEBP";
+  if (
+    [...riff].every((c, i) => bytes[i] === c.charCodeAt(0)) &&
+    [...webp].every((c, i) => bytes[8 + i] === c.charCodeAt(0))
+  )
+    return "image/webp";
+  return undefined;
+}
+
+/** The images a message carries, capped, plus the count that did not fit. */
+export interface MessageImages {
+  images: ImageRef[];
+  /** Images over MAX_IMAGES or MAX_IMAGE_B64: the view says "+N more". */
+  more: number;
+}
+
+/** Caps and labels the base64 images a runtime message attached. */
+export function messageImages(
+  b64s: readonly string[] | undefined,
+): MessageImages {
+  const images: ImageRef[] = [];
+  let more = 0;
+  for (const b64 of b64s ?? []) {
+    if (images.length >= MAX_IMAGES || b64.length > MAX_IMAGE_B64) {
+      more++;
+      continue;
+    }
+    const mime = imageMime(b64);
+    if (!mime) {
+      more++;
+      continue;
+    }
+    images.push({
+      mime,
+      b64,
+      src: `data:${mime};base64,${b64}`,
+      alt: `image ${images.length + 1} (${mime.slice("image/".length)})`,
+    });
+  }
+  return { images, more };
+}
+
+/**
+ * The number a link's source gets, registering it on first sight: 1-based,
+ * deduped by url, at most MAX_LINKS. Undefined past the cap, where the link
+ * stays link text without a marker.
+ */
+function addLink(
+  links: LinkRef[],
+  text: string,
+  url: string,
+): number | undefined {
+  const known = links.find((link) => link.url === url);
+  if (known) return known.n;
+  if (links.length >= MAX_LINKS) return undefined;
+  const n = links.length + 1;
+  links.push({ n, text: clip(text, MAX_LINK_TEXT), url });
+  return n;
+}
+
 const ESCAPABLE = "\\`*_~[]()#>-+.!|";
 const SPECIAL = /[\\`*_~[\]]/g;
 const PUNCT = /^[\p{P}\p{S}]$/u;
@@ -116,10 +235,14 @@ function charAt(text: string, i: number): string {
 /**
  * Inline markdown to runs: `**bold**`/`__bold__` (class b), `*em*`/`_em_` (i),
  * `` `code` `` (code), `~~strike~~` (strike) and `[text](url)` (the text in
- * class link, then ` (url)` in class url). A marker that does not close, or
- * that CommonMark would not let open (`2 * 3 * 4`, `snake_case_name`), stays
- * literal text, so a message that is still streaming and ends mid-marker reads
- * fine. No HTML, no images, no reference links.
+ * class link, then its `[n]` source marker in class url). A marker that does
+ * not close, or that CommonMark would not let open (`2 * 3 * 4`,
+ * `snake_case_name`), stays literal text, so a message that is still streaming
+ * and ends mid-marker reads fine. No HTML, no images, no reference links.
+ *
+ * When `links` is given, each link target is registered in it (see addLink) and
+ * the marker is the target's number; without it (the live stream, where no
+ * sources row exists yet) a link is just its text in class link.
  *
  * One pass with a stack of open markers: each marker is pushed and popped at
  * most once, a closer looks only for kinds that are open (O(1) when none is),
@@ -127,7 +250,7 @@ function charAt(text: string, i: number): string {
  * destination is read for at most MAX_URL characters. The work is linear in
  * the text (times that constant per `](`).
  */
-export function inlineRuns(text: string): Run[] {
+export function inlineRuns(text: string, links?: LinkRef[]): Run[] {
   const nodes: Node[] = [];
   const stack: Frame[] = [];
   const open: Record<string, number> = {};
@@ -276,7 +399,16 @@ export function inlineRuns(text: string): Run[] {
       if (f && end >= 0) {
         close(f, LINK);
         const url = text.slice(i + 1, end);
-        if (url !== "") add(` (${url})`, URL);
+        // The sources row numbers each target once: the marker [n] goes right
+        // after the link text, and the same url always gets the same n. With
+        // no collector (the live stream) the link is plain text in class link.
+        if (url !== "" && links) {
+          let label = "";
+          for (let k = f.node + 1; k < nodes.length; k++)
+            label += nodes[k]?.s ?? "";
+          const n = addLink(links, label, url);
+          if (n !== undefined) add(`[${n}]`, URL);
+        }
         i = end + 1;
       } else add("]");
     } else {
@@ -462,8 +594,13 @@ function textBlock(
   id: string,
   kind: "para" | "head" | "quote",
   t: string,
+  links?: LinkRef[],
 ): Block {
-  return block(id, { [kind]: true }, inlineRuns(clip(t, MAX_PARA_CHARS)));
+  return block(
+    id,
+    { [kind]: true },
+    inlineRuns(clip(t, MAX_PARA_CHARS), links),
+  );
 }
 
 // ------------------------------------------------------------------------ tables
@@ -554,8 +691,12 @@ export function startsOpenFence(text: string): boolean {
  * The view is bounded: past MAX_MESSAGE_CHARS of source or MAX_MESSAGE_BLOCKS
  * blocks the rest is one row that says so. The model's history is not cut.
  */
-export function parseBlocks(markdown: string, prefix = "b"): Block[] {
-  return parseBlocksAt(markdown, prefix).blocks;
+export function parseBlocks(
+  markdown: string,
+  prefix = "b",
+  links?: LinkRef[],
+): Block[] {
+  return parseBlocksAt(markdown, prefix, 0, links).blocks;
 }
 
 /** The blocks of a text, and the line each block starts at (for the streaming split). */
@@ -575,6 +716,7 @@ export function parseBlocksAt(
   markdown: string,
   prefix = "b",
   first = 0,
+  links?: LinkRef[],
 ): Parsed {
   const blocks: Block[] = [];
   const starts: number[] = [];
@@ -593,12 +735,12 @@ export function parseBlocksAt(
   const flush = () => {
     if (para.length > 0) {
       starts.push(paraAt);
-      blocks.push(textBlock(next(), "para", para.join("\n")));
+      blocks.push(textBlock(next(), "para", para.join("\n"), links));
       para = [];
     }
     if (quote.length > 0) {
       starts.push(quoteAt);
-      blocks.push(textBlock(next(), "quote", quote.join("\n")));
+      blocks.push(textBlock(next(), "quote", quote.join("\n"), links));
       quote = [];
     }
     if (item) {
@@ -607,7 +749,7 @@ export function parseBlocksAt(
         block(
           next(),
           { item: true, nest: item.nest, marker: item.marker },
-          inlineRuns(clip(item.lines.join("\n"), MAX_PARA_CHARS)),
+          inlineRuns(clip(item.lines.join("\n"), MAX_PARA_CHARS), links),
         ),
       );
       item = undefined;
@@ -648,6 +790,7 @@ export function parseBlocksAt(
           next(),
           "head",
           line.replace(/^#+\s*/, "").replace(/\s+#+\s*$/, ""),
+          links,
         ),
       );
     } else if (/^\s*>\s?/.test(line)) {
@@ -901,6 +1044,12 @@ export interface MessageView {
   is_notice: boolean;
   blocks: Block[];
   card: Card;
+  /** The message's link targets, numbered as the body's `[n]` markers ([] for none). */
+  links: LinkRef[];
+  /** Images the message attached, capped by messageImages ([] for none). */
+  images: ImageRef[];
+  /** Images past the view's caps: the message says "+N more". */
+  images_more: number;
 }
 
 /**
@@ -915,6 +1064,8 @@ function view(
   role: "user" | "asst" | "tool" | "notice",
   blocks: Block[],
   card: Card = NO_CARD,
+  links: LinkRef[] = [],
+  images: MessageImages = { images: [], more: 0 },
 ): MessageView {
   return {
     id,
@@ -924,6 +1075,9 @@ function view(
     is_notice: role === "notice",
     blocks,
     card,
+    links,
+    images: images.images,
+    images_more: images.more,
   };
 }
 
@@ -1012,10 +1166,9 @@ export class ViewBuilder {
       for (const call of this.pending)
         if (call.id) this.calls.set(call.id, call);
       if (!message.content.trim()) return undefined;
-      return view(this.id(), "asst", parseBlocks(message.content));
+      return this.text("asst", message.content);
     }
-    if (message.role === "user")
-      return view(this.id(), "user", parseBlocks(message.content));
+    if (message.role === "user") return this.text("user", message.content);
     const name = message.tool_name ?? "result";
     const call = message.tool_call_id
       ? this.calls.get(message.tool_call_id)
@@ -1026,6 +1179,23 @@ export class ViewBuilder {
       "tool",
       [],
       toolCard(name, callSummary(call), asToolState(status), output),
+      [],
+      messageImages(message.images),
+    );
+  }
+
+  /**
+   * A text message's view, its links collected across every block so the body's
+   * [n] markers and the sources row number the same targets.
+   */
+  private text(role: "user" | "asst", markdown: string): MessageView {
+    const links: LinkRef[] = [];
+    return view(
+      this.id(),
+      role,
+      parseBlocks(markdown, "b", links),
+      NO_CARD,
+      links,
     );
   }
 
@@ -1051,7 +1221,7 @@ export class ViewBuilder {
 
   /** A view for text the client itself wrote (never sent to the model). */
   user(text: string): MessageView {
-    return view(this.id(), "user", parseBlocks(text));
+    return this.text("user", text);
   }
 
   /**
