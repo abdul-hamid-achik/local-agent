@@ -393,6 +393,7 @@ async function* openAILocalChat(
     }
   };
   let usage: OpenAIStreamPart["usage"];
+  let lastIndex: number | undefined;
   for await (const part of parseOpenAISSE(response.body)) {
     signal.throwIfAborted();
     outputSize += JSON.stringify(part).length;
@@ -414,10 +415,25 @@ async function* openAILocalChat(
     if (delta?.content)
       yield RunEventSchema.parse({ type: "text", text: delta.content });
     for (const fragment of delta?.tool_calls ?? []) {
-      const index = fragment.index ?? 0;
+      let index = fragment.index;
+      if (index === undefined) {
+        // Without an index, a new id starts a call; anything else continues the last.
+        const last =
+          lastIndex === undefined ? undefined : pendingCalls.get(lastIndex);
+        index =
+          lastIndex !== undefined &&
+          last &&
+          (!fragment.id || last.id === undefined || fragment.id === last.id)
+            ? lastIndex
+            : Math.max(-1, ...pendingCalls.keys()) + 1;
+      }
+      lastIndex = index;
       const entry = pendingCalls.get(index) ?? { name: "", args: "" };
-      if (fragment.id !== undefined) entry.id = fragment.id;
-      if (fragment.function?.name) entry.name += fragment.function.name;
+      // Some servers repeat the id (or send "") and the name in every
+      // fragment: the first id stands, a name that repeats is not doubled.
+      if (fragment.id && entry.id === undefined) entry.id = fragment.id;
+      if (fragment.function?.name && fragment.function.name !== entry.name)
+        entry.name += fragment.function.name;
       if (fragment.function?.arguments)
         entry.args += fragment.function.arguments;
       pendingCalls.set(index, entry);

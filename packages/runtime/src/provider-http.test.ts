@@ -244,3 +244,86 @@ describe("stream ends", () => {
     }
   });
 });
+
+describe("tool_call fragments", () => {
+  type Fragment = {
+    index?: number;
+    id?: string;
+    function?: { name?: string; arguments?: string };
+  };
+  const run = async (fragments: Fragment[]) => {
+    const server = serve(() =>
+      sseResponse(
+        sse(
+          ...fragments.map((fragment) => delta({ tool_calls: [fragment] })),
+          "[DONE]",
+        ),
+      ),
+    );
+    try {
+      return (await events(localProvider(`${server.url.origin}/v1`))).filter(
+        (event) => event.type === "tool_call",
+      );
+    } finally {
+      server.stop(true);
+    }
+  };
+
+  test("a later fragment of the same index neither clobbers the id nor doubles the name", async () => {
+    expect(
+      await run([
+        { index: 0, id: "call-1", function: { name: "read", arguments: "{" } },
+        // Servers that repeat the name and send an empty or new id per chunk.
+        { index: 0, id: "", function: { name: "read", arguments: '"path"' } },
+        {
+          index: 0,
+          id: "other",
+          function: { name: "read", arguments: ':"a"}' },
+        },
+      ]),
+    ).toEqual([
+      {
+        type: "tool_call",
+        call: {
+          id: "call-1",
+          function: { name: "read", arguments: { path: "a" } },
+        },
+      },
+    ]);
+  });
+
+  test("a name streamed in pieces is still joined", async () => {
+    expect(
+      await run([
+        { index: 0, id: "c", function: { name: "re", arguments: "{" } },
+        { index: 0, function: { name: "ad", arguments: "}" } },
+      ]),
+    ).toMatchObject([{ call: { id: "c", function: { name: "read" } } }]);
+  });
+
+  test("an id that arrives after the first fragment is kept", async () => {
+    expect(
+      await run([
+        { index: 0, function: { name: "read", arguments: "{}" } },
+        { index: 0, id: "late" },
+      ]),
+    ).toMatchObject([{ call: { id: "late", function: { name: "read" } } }]);
+  });
+
+  test("parallel calls without an index are told apart by their id", async () => {
+    expect(
+      await run([
+        { id: "a", function: { name: "read", arguments: '{"path":' } },
+        { function: { arguments: '"x"}' } },
+        { id: "b", function: { name: "list", arguments: '{"path":"y"}' } },
+      ]),
+    ).toMatchObject([
+      {
+        call: { id: "a", function: { name: "read", arguments: { path: "x" } } },
+      },
+      {
+        call: { id: "b", function: { name: "list", arguments: { path: "y" } } },
+      },
+    ]);
+  });
+});
