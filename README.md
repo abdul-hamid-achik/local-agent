@@ -198,7 +198,7 @@ of the workspace stay forbidden.
 | `task` | none | Delegate a bounded read-only investigation to a fresh subagent (read, list, search, fetch, web_search, read_image only) and get its final answer |
 | `edit` | `--approve-edits` | Replace one exact occurrence in an existing file |
 | `write` | `--approve-edits` | Create a file (creating directories) or replace one; the approval shows the content as added lines, or the diff for a replacement |
-| `run_command` | `--approve-commands` | Run one program from an `argv` array, with no shell |
+| `run_command` | `--approve-commands` or `--sandbox-commands` | Run one program from an `argv` array, with no shell |
 
 `run_command` takes `{"argv": ["bun", "test", "tests/a.test.ts"]}`. If a model sends
 a string instead it is split with a quote-aware splitter; a string that needs a shell
@@ -279,7 +279,12 @@ truncated. The header names active grants (`auto: files · bun test`);
 `/permissions` lists them and `/permissions clear` revokes them all.
 Headless edits and writes are denied unless `--approve-edits` is explicit.
 This flag permits file changes only; it grants no command execution. Headless commands require the separate `--approve-commands` flag.
-Commands run with user permissions, without an OS sandbox or implicit shell.
+Commands run with user permissions and no implicit shell, with a minimal environment (`PATH`, `HOME`, `TERM`, locale).
+On macOS, `--sandbox-commands` (headless or Tuimark) or `/sandbox on` (Tuimark) runs them in a Seatbelt sandbox instead, without asking: no network, not even
+this machine; writes only in the workspace, never a `.git` folder's hooks or config, a `.gitattributes` or `.local-agent`; no reads in the home folder beyond
+the workspace and toolchains. Deny rules still refuse and ask rules still ask (headless, they refuse); allow rules and session grants run
+confined too. What a sandboxed command writes in the workspace still runs as you when something outside runs it (`package.json`
+scripts, hooks managed by husky or lefthook, a `Makefile`).
 A successful edit does not imply that verification passed.
 
 Use `--session-db PATH` to opt into a separate experimental database. Do not
