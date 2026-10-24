@@ -127,6 +127,7 @@ Context-sensitive keys:
 |---|---|
 | Slash popup | `up`/`down` choose, `tab` completes, `esc` closes |
 | Approval dialog | `a` grants for the session (not for commands while the sandbox is on); arrows, `pgup`, `home`, `end` scroll the diff |
+| Question (Tuimark) | `up`/`down` choose, `enter` answers; or type the row's number, its label, or `y`/`n`; `esc` skips |
 | Panels and details | `q` or `esc` closes; arrows scroll |
 | Sessions picker | `up`/`down` choose, `enter` loads |
 

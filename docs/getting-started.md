@@ -80,6 +80,12 @@ shows its lines, and `/details` opens the last tool output in full. While a
 turn runs, the status bar shows the elapsed time and a small chart of the
 stream's pace, one bar per second.
 
+The model can also stop and ask you a question. It opens above the
+composer: a list of choices, yes/no, or a free-text answer. Choose with the
+arrow keys and `enter`, or type the answer; `esc` skips it. What you were
+typing comes back when the question closes, and an answer never approves
+an edit or a command: those still show their card.
+
 ## Switch intent
 
 Press `shift+tab` to move through **build**, **plan**, and **chat**. Plan

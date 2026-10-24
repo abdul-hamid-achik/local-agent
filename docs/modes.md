@@ -31,6 +31,11 @@ Plan hard-denies the following regardless of any approver:
 These denials are not approval prompts you can accept; the tool call is
 refused outright.
 
+In the Tuimark client every intent also offers `ask_user`, so the model can
+ask you a question and wait for the answer. An answer is text for the
+model, not a permission: plan and chat still refuse every effect after a
+"yes".
+
 ## Chat
 
 Chat is a conversational research profile: no coding preamble, no todo

@@ -129,6 +129,14 @@ Session grants live in memory only. They die with the process. `/permissions`
 lists them beside the file rules; `/permissions clear` revokes the session
 grants, and `/permissions clear rules` empties the file.
 
+### Questions are not approvals
+
+In the Tuimark client the model can ask you a question with `ask_user`. Your
+answer goes back to the model as text and grants nothing: an edit, write,
+command or MCP call it proposes after you answer "yes" still shows its
+card, follows your rules and grants, and is still refused in plan and chat.
+A subagent cannot ask you anything.
+
 ### Post-edit diagnostics
 
 With `LOCAL_AGENT_DIAGNOSTICS=1`, an approved edit or write of a file Biome
