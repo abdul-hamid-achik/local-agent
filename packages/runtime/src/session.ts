@@ -397,6 +397,7 @@ export class SessionStore {
   ): Session {
     if (!isTerminal(event.type))
       throw new Error("commitOutcome requires a terminal event");
+    answers([event], messages);
     const encoded = encodeMessages(messages);
     return this.db
       .transaction(() => {
@@ -431,7 +432,12 @@ export class SessionStore {
     return readSessionRow(row);
   }
 
+  /** A non-terminal event; an execution ends only with its result (commitOutcome, recover). */
   appendEvent(event: ExecutionEvent): void {
+    if (isTerminal(event.type))
+      throw new Error(
+        "a terminal event is written with its result: commitOutcome or recover",
+      );
     this.db.transaction(() => this.appendEventUnsafe(event)).immediate();
   }
 
@@ -583,6 +589,7 @@ export class SessionStore {
     for (const event of change.events)
       if (!isTerminal(event.type))
         throw new Error("recovery appends only terminal events");
+    if (change.events.length) answers(change.events, change.messages ?? []);
     const encoded =
       change.messages === undefined
         ? undefined
@@ -880,6 +887,28 @@ function legalTransition(
       next,
     );
   return false;
+}
+
+/**
+ * Recovery relies on it (ADR-0006): an execution's terminal event is saved
+ * only with a history that answers its call, so an unanswered call with no
+ * open record never ran.
+ */
+function answers(
+  events: readonly ExecutionEvent[],
+  messages: readonly SessionMessage[],
+): void {
+  for (const event of events)
+    if (
+      !messages.some(
+        (message) =>
+          message.role === "tool" &&
+          message.tool_call_id === event.canonicalCallId,
+      )
+    )
+      throw new Error(
+        `a terminal event needs its call's result in the history (${event.canonicalCallId})`,
+      );
 }
 
 function isTerminal(type: EventType): boolean {

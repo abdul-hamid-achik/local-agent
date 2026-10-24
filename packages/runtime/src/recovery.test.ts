@@ -87,12 +87,49 @@ async function interrupted(
   ]);
 }
 
+const TERMINAL = new Set([
+  "denied",
+  "completed",
+  "failed",
+  "cancelled",
+  "outcome_unknown",
+]);
+
+/**
+ * Writes a ledger as runs left it. The store writes a terminal event only
+ * with its result (commitOutcome, recover); here the history is fabricated
+ * beside it, so terminal rows go straight to the table.
+ */
 const record = (
   store: SessionStore,
   base: Omit<ExecutionEvent, "type">,
   ...types: ExecutionEvent["type"][]
 ) => {
-  for (const type of types) store.appendEvent({ ...base, type });
+  const raw = (store as unknown as { db: Database }).db;
+  for (const type of types)
+    if (!TERMINAL.has(type)) store.appendEvent({ ...base, type });
+    else
+      raw
+        .query(
+          "INSERT INTO execution_events(session_id, workspace_id, run_id, turn_id, execution_id, idempotency_key, provider_call_id, canonical_call_id, iteration, ordinal, kind, tool_name, effect_class, event_type, arguments_sha256) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .run(
+          base.sessionId,
+          base.workspaceId,
+          base.runId,
+          base.turnId,
+          base.executionId,
+          base.idempotencyKey,
+          base.providerCallId ?? null,
+          base.canonicalCallId,
+          base.iteration ?? null,
+          base.ordinal ?? null,
+          base.kind ?? null,
+          base.toolName,
+          base.effectClass,
+          type,
+          base.argumentsSha256,
+        );
 };
 
 const output = (message: Message | undefined) =>
@@ -402,6 +439,10 @@ test("recovery refuses an event or a conclusion of another session", async () =>
         workspaceId: mine.workspaceId,
         expectedRevision: mine.revision,
         events: [{ ...theirs, type: "cancelled" }],
+        messages: [
+          ...mine.messages,
+          { role: "tool", tool_name: "read", tool_call_id: "c2", content: "" },
+        ],
       }),
     ).toThrow("event belongs to another session");
     expect(() =>

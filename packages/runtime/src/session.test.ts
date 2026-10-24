@@ -17,6 +17,14 @@ async function fixture() {
   return { db, workspace };
 }
 
+/** The result of `event`'s call, as a history holds it. */
+const answer = {
+  role: "tool" as const,
+  content: "done",
+  tool_name: "read",
+  tool_call_id: "call-1",
+};
+
 function event(
   sessionId: number,
   workspaceId: string,
@@ -215,10 +223,18 @@ test("enforces append-only lifecycle and projects effect hazards", async () => {
   store.appendEvent(requested);
   store.appendEvent(event(session.id, session.workspaceId, "started"));
   expect(store.listHazards(session.id, session.workspaceId)).toHaveLength(1);
-  store.appendEvent(event(session.id, session.workspaceId, "outcome_unknown"));
+  store.commitOutcome(
+    event(session.id, session.workspaceId, "outcome_unknown"),
+    0,
+    [answer],
+  );
   expect(store.listHazards(session.id, session.workspaceId)).toHaveLength(1);
   expect(() =>
-    store.appendEvent(event(session.id, session.workspaceId, "completed")),
+    store.commitOutcome(
+      event(session.id, session.workspaceId, "completed"),
+      1,
+      [answer],
+    ),
   ).toThrow("illegal");
   expect(() =>
     store.appendEvent({ ...requested, argumentsSha256: sha256("different") }),
@@ -259,10 +275,14 @@ test("rejects independent idempotency collisions and changed v2 ordinal identity
   ).toThrow("logical slot conflict");
   store.appendEvent({ ...requested, type: "started" });
   expect(() =>
-    store.appendEvent({ ...requested, type: "completed", ordinal: 2 }),
+    store.commitOutcome({ ...requested, type: "completed", ordinal: 2 }, 0, [
+      answer,
+    ]),
   ).toThrow("identity conflict");
   expect(() =>
-    store.appendEvent({ ...requested, type: "failed", kind: undefined }),
+    store.commitOutcome({ ...requested, type: "failed", kind: undefined }, 0, [
+      answer,
+    ]),
   ).toThrow("metadata");
   expect(() =>
     store.appendEvent({
@@ -298,7 +318,7 @@ test("commitOutcome rolls back its event when the state revision is stale", asyn
   store.appendEvent(event(session.id, session.workspaceId, "requested"));
   store.appendEvent(event(session.id, session.workspaceId, "started"));
   const completed = event(session.id, session.workspaceId, "completed");
-  expect(() => store.commitOutcome(completed, 1, [])).toThrow(
+  expect(() => store.commitOutcome(completed, 1, [answer])).toThrow(
     "revision conflict",
   );
   expect(store.listHazards(session.id, session.workspaceId)).toHaveLength(1);
@@ -309,10 +329,41 @@ test("commitOutcome rolls back its event when the state revision is stale", asyn
       [],
     ),
   ).toThrow("terminal");
-  const saved = store.commitOutcome(completed, 0, [
-    { role: "tool", content: "done", tool_name: "read" },
-  ]);
+  const saved = store.commitOutcome(completed, 0, [answer]);
   expect(saved.revision).toBe(1);
+  expect(store.listHazards(session.id, session.workspaceId)).toHaveLength(0);
+  store.close();
+});
+
+test("a terminal event is written only with a history that answers its call", async () => {
+  const { db, workspace } = await fixture();
+  const store = await SessionStore.open(db);
+  const session = await store.createSession(workspace);
+  store.appendEvent(event(session.id, session.workspaceId, "requested"));
+  store.appendEvent(event(session.id, session.workspaceId, "started"));
+  const completed = event(session.id, session.workspaceId, "completed");
+  expect(() => store.appendEvent(completed)).toThrow("written with its result");
+  for (const messages of [
+    [],
+    [{ role: "tool" as const, content: "done", tool_name: "read" }],
+    [{ ...answer, tool_call_id: "another-call" }],
+  ])
+    expect(() => store.commitOutcome(completed, 0, messages)).toThrow(
+      "needs its call's result",
+    );
+  const change = {
+    sessionId: session.id,
+    workspaceId: session.workspaceId,
+    expectedRevision: 0,
+    events: [{ ...completed, type: "cancelled" as const }],
+  };
+  expect(() => store.recover(change)).toThrow("needs its call's result");
+  expect(() => store.recover({ ...change, messages: [] })).toThrow(
+    "needs its call's result",
+  );
+  // Nothing was written: the call is still a hazard at revision 0.
+  expect(store.listHazards(session.id, session.workspaceId)).toHaveLength(1);
+  expect(store.recover({ ...change, messages: [answer] }).revision).toBe(1);
   expect(store.listHazards(session.id, session.workspaceId)).toHaveLength(0);
   store.close();
 });
