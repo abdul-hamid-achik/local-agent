@@ -256,7 +256,7 @@ a package manager's `run`/`exec`/`add`-style subcommand keeps its third word
 again, and a bare program, `bash -c …`-style options, wrappers
 like `env` or `xargs` and git subcommands that run code (`git config`,
 `git rebase`, …) are granted only as the exact command), an MCP call by its exact
-`SERVER__TOOL` name. Grants live only in memory,
+`SERVER__TOOL` name (through a gateway such as mcphub, the downstream tool it runs). Grants live only in memory,
 never apply in plan mode, and are not offered when the approval preview is
 truncated. The header names active grants (`auto: files · bun test`);
 `/permissions` lists them and `/permissions clear` revokes them all.
@@ -277,15 +277,23 @@ databases migrate to v2 with existing history preserved; new calls retain their
 canonical ID, provider ID when supplied, iteration and position within the response.
 Legacy records retain absent metadata rather than receiving invented identities.
 
-`--mcp-status --mcp-config PATH` checks the explicitly configured servers and
-prints connection status and tool names without contacting a model. It starts
-configured STDIO commands for discovery and closes the connections afterward.
+`--mcp-status` checks the configured servers and prints connection status and
+tool names without contacting a model. It starts configured STDIO commands for
+discovery and closes the connections afterward.
 
-`--mcp-config PATH` loads a trusted JSON array of servers, for example
+Every run loads the user's own `$XDG_CONFIG_HOME/local-agent/mcp.json`
+(`~/.config/local-agent/mcp.json`) when it exists; `--no-mcp` skips it and
+`--mcp-config PATH` loads another file instead. A workspace never adds a
+server. Either file is a trusted JSON array of servers, for example
 `[{"name":"local","transport":{"kind":"http","url":"http://127.0.0.1:3000/mcp"}}]`.
 STDIO entries use `transport.kind: "stdio"`, `command`, and optional `args`,
 `cwd`, and `env`; loading the configuration starts those commands. Remote HTTP
-requires `allowRemote: true`. Tool names become `SERVER__TOOL`. Interactive
+requires `allowRemote: true`. `timeoutMs` (1 s to 10 min, default 60 s) bounds
+each call. Servers connect together and one that fails is a warning, except
+that an explicit `--mcp-config` fails a headless run; the Tuimark client opens
+first and shows them connecting. Tool names become `SERVER__TOOL`. A gateway
+(a server whose `call_tool` takes a tool and its arguments, like mcphub) has
+its calls approved, ruled and granted as `GATEWAY__SERVER__TOOL`. Interactive
 calls request approval; headless calls require `--approve-mcp`, independently
 of edit and command permissions. Plan mode denies MCP calls, including those
 advertised as read-only. Responses project bounded text and retain unknown
