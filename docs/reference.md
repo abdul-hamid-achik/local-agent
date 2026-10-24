@@ -35,6 +35,7 @@ are no subcommands. Run `local-agent --help` for the authoritative short list.
 | `--session-info ID` | Inspect saved state and recovery hazards; runs no tools |
 | `--recovery-info ID` | Inspect recovery review tokens; shows no transcript or raw receipts |
 | `--mcp-status` | Requires `--mcp-config`. Connects and lists tools per server as JSON; exits 1 if any server is unavailable |
+| `--trust-rules` | Lists the workspace's untrusted allow rules and trusts them after you type `yes` at a terminal; exits 1 without a terminal or a `yes` |
 
 ## Cross-flag rules
 
@@ -78,9 +79,11 @@ there is no approval dialog to answer. See [Safety](/safety).
 | `/mode plan\|build\|chat` | Switch intent. `plan` reads only; `build` can edit; `chat` is the conversational research profile |
 | `/theme dark\|light\|auto` | Set the session theme |
 | `/mouse on\|off` | Toggle mouse reporting; fullscreen only. OSC 8 links: ⌘/Ctrl+click may require `/mouse off` (the terminal app owns the mouse while reporting is on) |
-| `/permissions` | Show session grants and the workspace file rules, each with its origin |
+| `/permissions` | Show session grants and the workspace file rules, each with its origin; allow rules you have not trusted are marked `(untrusted)` |
 | `/permissions clear` | Clear session approval grants |
-| `/permissions clear rules` | Empty the rules in `.local-agent/permissions.json` |
+| `/permissions clear rules` | Empty the rules in `.local-agent/permissions.json` and forget their trust |
+| `/permissions trust` | List the allow rules in the workspace's `.local-agent/permissions.json` that you have not trusted on this machine |
+| `/permissions trust confirm` | Trust exactly the rules the last `/permissions trust` listed, if the file still holds them |
 | `/details` | Show the last tool output in full |
 | `/status` | Show the effective config panel (model, workspace, session) |
 | `/sessions` | Open the session picker; needs `--session-db` |
