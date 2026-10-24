@@ -161,7 +161,16 @@ Flags and variables (a flag wins over its variable):
 | --- | --- | --- |
 | `--model MODEL` | `LOCAL_AGENT_MODEL` | Ollama model; Chalupa rejects a different one |
 | `--think on\|off` | `LOCAL_AGENT_THINK=1\|0` | Sent to Ollama as `think`, only when set; unset keeps the model's default. Applies to Chalupa too |
-| `--context N` | `LOCAL_AGENT_CONTEXT` | Context tokens for local Ollama (`32768` or `32k`; default 16384). It cannot exceed the model's native context. Chalupa negotiates its own, so `--context` is refused there and the variable ignored |
+| `--context N` | `LOCAL_AGENT_CONTEXT` | Context tokens for local Ollama (`32768` or `32k`). Unset, the size is planned from the model's cache cost and the machine's memory, at most 32768. It cannot exceed the model's native context. Chalupa negotiates its own, so `--context` is refused there and the variable ignored |
+
+A tool result holds at most about a quarter of the context window, and the
+results of one reply share about 40% of it. In the Tuimark client and headless
+runs, a turn whose prompt would pass 70% of the window first shortens the oldest
+material the model has already acted on (images, then tool results down to their
+first lines, then the reasoning of earlier steps) until it is near 45%; the
+latest request, calls and unread results stay whole, the session keeps the
+shortened history, and the transcript says "Context compacted". The Vue client
+and the desktop app do not compact.
 
 Thinking streams as its own `thinking` event, apart from the answer. The Tuimark
 client shows a dim "Thinking…" block with the last three lines while it streams
@@ -180,7 +189,7 @@ of the workspace stay forbidden.
 
 | Tool | Approval | What it does |
 | --- | --- | --- |
-| `read` | none | Read a UTF-8 file |
+| `read` | none | Read a UTF-8 file, or a line range of it (`offset`, `limit`); a file too long for one result comes back in part, naming the offset to read next |
 | `read_image` | none | Read one image file (PNG, JPEG, WebP, GIF; 5 MiB cap, magic bytes checked) and attach it to the tool result for vision models |
 | `list` | none | List a directory (directories end with `/`; `.git` and `node_modules` skipped; 500 entries) |
 | `search` | none | Literal or regular-expression search over workspace text files as `path:line: text` (100 matches; binaries, `.git`, `node_modules` and secrets skipped) |
