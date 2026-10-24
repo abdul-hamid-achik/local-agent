@@ -2,7 +2,11 @@
 // the controller, the samples the goldens are made from, and the tests cannot
 // drift from the markup.
 
-import type { ApprovalRequest, Provider } from "@local-agent/runtime";
+import {
+  type ApprovalRequest,
+  COMMAND_WRAPPERS,
+  type Provider,
+} from "@local-agent/runtime";
 import { approvalPreview } from "#cli/preview";
 import {
   type Block,
@@ -494,42 +498,58 @@ export const TRUNCATED_BODY =
 // matching rules are deliberately coarse and spelled out in the dialog:
 // edits and writes share one "file changes" grant, a command grants its
 // program plus its first argument (`bun test`, `git status` cover any
-// further arguments), and an MCP call grants its exact SERVER__TOOL name. A
-// bare program, a command whose second word is an option (`git -c …`,
-// `bash -c …`, `node -e …`) or whose program runs another program (`env`,
-// `xargs`, `timeout`, `ssh`, …) grants only that exact argv: their prefix
-// would cover arbitrary code.
+// further arguments), and an MCP call grants its exact SERVER__TOOL name.
+//
+// Two narrower shapes keep a grant from covering code nobody saw:
+// - a runner subcommand (`bun run`, `npm exec`, `docker run`, `go run`,
+//   `bun add`, …) grants three words, so `bun run test …` never covers
+//   `bun run evil.ts`;
+// - a bare program, a command whose second word is an option (`git -c …`,
+//   `bash -c …`, `node -e …`), a program that runs another program (`env`,
+//   `xargs`, `timeout`, `ssh`, …) and the git subcommands that run code
+//   from their arguments or write config that later runs (`git config`,
+//   `git rebase`, `git bisect`, …) grant only that exact argv.
 
-/** Programs whose arguments name another program or a remote command. */
-const COMMAND_WRAPPERS = new Set([
-  "env",
-  "xargs",
-  "sudo",
-  "doas",
-  "su",
-  "nice",
-  "nohup",
-  "time",
-  "timeout",
-  "command",
+/** Second words that run code (or install packages) named by the third. */
+const RUNNER_SUBCOMMANDS = new Set([
+  "run",
   "exec",
-  "watch",
-  "caffeinate",
-  "chroot",
-  "ssh",
-  "find",
-  "parallel",
-  "script",
+  "x",
+  "dlx",
+  "add",
+  "install",
+  "i",
 ]);
 
-/** Whether a command grant must be its exact argv (see above). */
-function exactCommand(argv: readonly string[]): boolean {
-  const program = (argv[0] ?? "").split("/").at(-1) ?? "";
-  return (
+/** git subcommands that execute their arguments or set config that executes. */
+const GIT_EXACT = new Set([
+  "config",
+  "submodule",
+  "bisect",
+  "rebase",
+  "filter-branch",
+  "filter-repo",
+  "difftool",
+  "mergetool",
+  "daemon",
+]);
+
+/** A command grant's shape (see above): its prefix, and whether it is exact. */
+function commandGrant(argv: readonly string[]): {
+  prefix: string[];
+  exact: boolean;
+} {
+  const program = (argv[0] ?? "").split("/").at(-1)?.toLowerCase() ?? "";
+  const second = argv[1] ?? "";
+  const runner = RUNNER_SUBCOMMANDS.has(second.toLowerCase());
+  const exact =
     argv.length <= 1 ||
     COMMAND_WRAPPERS.has(program) ||
-    (argv[1] ?? "").startsWith("-")
-  );
+    second.startsWith("-") ||
+    (program === "git" && GIT_EXACT.has(second.toLowerCase())) ||
+    (runner && argv.length <= 2);
+  if (exact) return { prefix: [...argv], exact };
+  return { prefix: argv.slice(0, runner ? 3 : 2), exact };
 }
 
 /** The server and tool of an MCP `SERVER__TOOL` name, or undefined without the separator. */
@@ -546,10 +566,10 @@ export function grantFor(proposal: ApprovalRequest): {
   key: string;
   label: string;
   /**
-   * A command grant's argv prefix (program + first argument, or just the
-   * program). It matches as a prefix — the dialog's "`bun test …`" — so a
-   * bare `ls` grant also covers `ls -la`, and nothing wider ever matches.
-   * An exact grant's prefix is the whole argv, and it matches only itself.
+   * A command grant's argv prefix (program + first argument, or three
+   * words after a runner subcommand). It matches as a prefix — the
+   * dialog's "`bun test …`" — and nothing wider ever matches. An exact
+   * grant's prefix is the whole argv, and it matches only itself.
    */
   prefix?: readonly string[];
   exact?: boolean;
@@ -561,8 +581,7 @@ export function grantFor(proposal: ApprovalRequest): {
     case "command": {
       // Identity is the raw argv and cwd the runtime would execute;
       // cleaned text is only ever the label the user reads.
-      const exact = exactCommand(proposal.argv);
-      const prefix = exact ? [...proposal.argv] : proposal.argv.slice(0, 2);
+      const { prefix, exact } = commandGrant(proposal.argv);
       const label = prefix.map(cleanText).join(" ");
       return {
         key: `${exact ? "cmd=" : "cmd:"}${JSON.stringify(prefix)}@${proposal.cwd}`,

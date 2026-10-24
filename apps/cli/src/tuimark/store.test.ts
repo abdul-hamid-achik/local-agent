@@ -477,6 +477,12 @@ test("grant matching: files shared, commands by argv prefix, MCP exact", () => {
     ["xargs", "echo"],
     ["ssh", "host", "uptime"],
     ["find", ".", "-name", "x"],
+    ["SUDO", "make"],
+    ["git", "config", "core.pager", "sh"],
+    ["git", "rebase", "--exec", "make", "main"],
+    ["git", "bisect", "run", "make"],
+    ["bun", "run"],
+    ["npm", "install"],
   ] as [string, ...string[]][]) {
     const exact = grantFor(cmd(argv));
     expect(exact.exact, argv.join(" ")).toBe(true);
@@ -486,6 +492,29 @@ test("grant matching: files shared, commands by argv prefix, MCP exact", () => {
       false,
     );
   }
+  // A runner subcommand names the code it runs in its third word, so the
+  // grant keeps three: `bun run test` never covers `bun run evil.ts`.
+  const runTest = grantFor(cmd(["bun", "run", "test", "--watch"]));
+  expect(runTest.exact).toBeUndefined();
+  expect(grantCovers(runTest, cmd(["bun", "run", "test"]))).toBe(true);
+  expect(grantCovers(runTest, cmd(["bun", "run", "evil.ts"]))).toBe(false);
+  expect(grantCovers(runTest, cmd(["bun", "run"]))).toBe(false);
+  for (const [program, sub] of [
+    ["npx", "x"],
+    ["pnpm", "dlx"],
+    ["docker", "exec"],
+    ["go", "run"],
+    ["bun", "add"],
+    ["npm", "i"],
+  ] as const) {
+    const grant = grantFor(cmd([program, sub, "a", "b"]));
+    expect(grantCovers(grant, cmd([program, sub, "a"])), program).toBe(true);
+    expect(grantCovers(grant, cmd([program, sub, "c"])), program).toBe(false);
+  }
+  // Other git subcommands keep the two-word prefix.
+  const gitLog = grantFor(cmd(["git", "log", "-1"]));
+  expect(grantCovers(gitLog, cmd(["git", "log", "--oneline"]))).toBe(true);
+
   // An exact grant and a prefix grant never share a key.
   expect(grantFor(cmd(["git", "status"])).key).not.toBe(
     grantFor(cmd(["git", "-c"])).key,

@@ -1859,12 +1859,12 @@ test("grants: a command grant matches program + first argument as a prefix, noth
   await client.idle();
   expect(store(ui).header.grants).toBe("auto: bun test");
 
-  // `bun test …` runs; `bun run` still asks.
+  // `bun test …` runs; `bun run` still asks, and its grant keeps the script.
   await ui.fire("send", "two");
   await untilApproval(ui);
   expect(decisions).toEqual([true, true]);
   expect(store(ui).approval.grant_hint).toBe(
-    "a allow `bun run …` this session",
+    "a allow `bun run x …` this session",
   );
   await ui.fire("dialog_cancel");
   await client.idle();
