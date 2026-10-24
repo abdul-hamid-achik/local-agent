@@ -634,7 +634,10 @@ async function searxngSearch(
     const payload = (await response.json()) as {
       results?: { title?: string; url?: string; content?: string }[];
     };
-    return (payload.results ?? []).map((result) => ({
+    // SearXNG answers 200 with no results when its engines are suspended or
+    // rate limited; that is "unavailable", not "nothing on the web".
+    if (!payload.results?.length) return null;
+    return payload.results.map((result) => ({
       title: result.title ?? result.url ?? "(untitled)",
       url: result.url ?? "",
       snippet: result.content ?? "",

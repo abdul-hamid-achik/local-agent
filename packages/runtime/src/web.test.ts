@@ -1239,3 +1239,34 @@ test("only the page's own challenge markers count as a bot challenge", async () 
     await run.cleanup();
   }
 });
+test("web_search falls back to DuckDuckGo when SearXNG answers with zero results", async () => {
+  const searxng = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch: () =>
+      Response.json({
+        results: [],
+        unresponsive_engines: [["google", "rate limited"]],
+      }),
+  });
+  process.env.LOCAL_AGENT_SEARXNG_URL = searxng.url.origin;
+  stubFetch((url) =>
+    url.startsWith("https://lite.duckduckgo.com/lite/")
+      ? ddgResponse()
+      : undefined,
+  );
+  const run = await session([
+    { name: "web_search", arguments: { query: "bun test" } },
+  ]);
+  try {
+    expect(run.results.map((result) => result.status)).toEqual(["succeeded"]);
+    const output = run.output(0);
+    expect(output).toContain("1. Bun docs");
+    expect(output.trimEnd().endsWith("via duckduckgo")).toBe(true);
+  } finally {
+    restoreFetch();
+    delete process.env.LOCAL_AGENT_SEARXNG_URL;
+    await searxng.stop(true);
+    await run.cleanup();
+  }
+});
