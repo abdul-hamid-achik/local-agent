@@ -729,7 +729,12 @@ async function parseDuckDuckGo(
         if (el.getAttribute("class")?.includes("result__snippet")) return;
         const href = el.getAttribute("href");
         if (!href?.includes("uddg=")) return;
-        const target = new URL(href, origin).searchParams.get("uddg");
+        let target: string | null;
+        try {
+          target = new URL(href, origin).searchParams.get("uddg");
+        } catch {
+          return; // an unparseable link is skipped, not fatal
+        }
         if (!target) return;
         pending = { title: "", url: target };
         el.onEndTag(() => {
@@ -781,6 +786,7 @@ async function duckduckgoSearch(
       AbortSignal.timeout(SEARXNG_TIMEOUT_MS),
     ]);
     let response: Response | null = null;
+    let body: string | undefined;
     try {
       response = await fetch(`${endpoint.url}?q=${encodeURIComponent(query)}`, {
         headers: {
@@ -789,12 +795,14 @@ async function duckduckgoSearch(
         },
         signal: deadline,
       });
+      // Read under the same deadline: a body that stalls or resets is a failed
+      // attempt like a failed request, not an error for the whole search.
+      if (response.status === 200) body = await response.text();
     } catch {
       signal.throwIfAborted();
       response = null;
     }
-    if (response?.status === 200)
-      return parseDuckDuckGo(await response.text(), endpoint.origin);
+    if (body !== undefined) return parseDuckDuckGo(body, endpoint.origin);
     if (response && response.status < 500) return null;
     if (attempt < DDG_ATTEMPTS)
       await pause(DDG_RETRY_PAUSE_MS, undefined, { signal });

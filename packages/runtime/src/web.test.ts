@@ -1526,3 +1526,54 @@ test("web_search reports no results, not a dead backend, when SearXNG answered e
     await run.cleanup();
   }
 });
+
+test("web_search tries the next endpoint when a DuckDuckGo body fails mid-read", async () => {
+  delete process.env.LOCAL_AGENT_SEARXNG_URL;
+  stubFetch((url) => {
+    if (url.startsWith("https://lite.duckduckgo.com/lite/"))
+      return new Response(
+        new ReadableStream({
+          pull(controller) {
+            controller.error(new Error("connection reset"));
+          },
+        }),
+        { headers: { "content-type": "text/html" } },
+      );
+    if (url.startsWith("https://html.duckduckgo.com/html/"))
+      return ddgHtmlResponse();
+    return undefined;
+  });
+  const run = await session([
+    { name: "web_search", arguments: { query: "bun test" } },
+  ]);
+  try {
+    expect(run.results.map((result) => result.status)).toEqual(["succeeded"]);
+    expect(run.output(0).trimEnd().endsWith("via duckduckgo html")).toBe(true);
+  } finally {
+    restoreFetch();
+    await run.cleanup();
+  }
+});
+
+test("a DuckDuckGo result link that is not a valid URL is skipped, not fatal", async () => {
+  delete process.env.LOCAL_AGENT_SEARXNG_URL;
+  stubFetch((url) =>
+    url.startsWith("https://lite.duckduckgo.com/lite/")
+      ? htmlPage(
+          `<html><body><table><tr><td><a href="http://a b/?uddg=x">Broken</a></td></tr>
+<tr><td><a href="/l/?uddg=https%3A%2F%2Fbun.sh%2Fdocs%2Ftest">Bun docs</a></td></tr></table></body></html>`,
+        )
+      : undefined,
+  );
+  const run = await session([
+    { name: "web_search", arguments: { query: "bun test" } },
+  ]);
+  try {
+    expect(run.results.map((result) => result.status)).toEqual(["succeeded"]);
+    expect(run.output(0)).toContain("1. Bun docs");
+    expect(run.output(0)).not.toContain("Broken");
+  } finally {
+    restoreFetch();
+    await run.cleanup();
+  }
+});
