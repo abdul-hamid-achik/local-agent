@@ -899,6 +899,37 @@ test("a backslash escapes a marker", () => {
   expect(inlineRuns("C:\\dir")).toEqual(["C:\\dir"]);
 });
 
+test("an opening fence is classified in linear time, whatever its whitespace", () => {
+  // "```" + spaces + "`" is no fence (a backtick in the info string); a
+  // backtracking match took seconds on it.
+  for (const tail of ["`", "x`"]) {
+    const line = `\`\`\`${" ".repeat(200_000)}${tail}`;
+    const start = performance.now();
+    expect(startsOpenFence(line)).toBe(false);
+    expect(parseBlocks(line)[0]?.code).toBe(false);
+    expect(performance.now() - start).toBeLessThan(100);
+  }
+  const tildes = `${"~".repeat(200_000)}\``;
+  const start = performance.now();
+  expect(startsOpenFence(tildes)).toBe(false);
+  expect(performance.now() - start).toBeLessThan(100);
+  expect(startsOpenFence("```\nx")).toBe(true);
+  expect(startsOpenFence("```   ts\nx")).toBe(true);
+  expect(startsOpenFence("```a`b\nx")).toBe(false);
+  expect(parseBlocks("```   ts  x\ny\n```")[0]?.lang).toBe("ts");
+});
+
+test("a backslash is literal inside a code span", () => {
+  expect(inlineRuns("path `C:\\` ok")).toEqual(["path ", code("C:\\"), " ok"]);
+  expect(inlineRuns("use `\\` to")).toEqual(["use ", code("\\"), " to"]);
+  // Outside a span the escaped backtick still cannot open one.
+  expect(inlineRuns("\\`not code\\`")).toEqual(["`not code`"]);
+  // An escaped tick leaves the rest of its run free to open a span.
+  expect(inlineRuns("\\``x`")).toEqual(["`", code("x")]);
+  // An escaped backslash does not escape the tick after it.
+  expect(inlineRuns("\\\\`x`")).toEqual(["\\", code("x")]);
+});
+
 test("a link is its text in class link, then its [n] source marker", () => {
   const links: LinkRef[] = [];
   expect(inlineRuns("see [the docs](https://x.dev/a) now", links)).toEqual([

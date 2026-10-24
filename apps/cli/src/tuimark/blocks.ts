@@ -258,23 +258,40 @@ export function inlineRuns(text: string, links?: LinkRef[]): Run[] {
   const spans: { from: number; to: number; bit: number }[] = [];
 
   // Backtick runs, each with the next run of the same length (a code span's closer).
-  const ticks: { pos: number; len: number; next: number }[] = [];
+  // Escapes do not work inside a code span, so a backslash never hides a run as a
+  // closer. An escaped run (an odd number of backslashes before it) is never an
+  // opener because the scan below reads its first tick as an escape; the rest of
+  // the run after that tick can open one (`opener`: never a closer).
+  const ticks: {
+    pos: number;
+    len: number;
+    next: number;
+    opener?: boolean;
+  }[] = [];
   if (text.includes("`")) {
-    for (let i = 0; i < text.length; ) {
-      if (text[i] === "\\" && ESCAPABLE.includes(text[i + 1] ?? "\n")) i += 2;
-      else if (text[i] === "`") {
+    for (let i = 0, slashes = 0; i < text.length; ) {
+      if (text[i] === "\\") {
+        slashes++;
+        i++;
+      } else if (text[i] === "`") {
         let j = i;
         while (text[j] === "`") j++;
         ticks.push({ pos: i, len: j - i, next: -1 });
+        if (slashes % 2 === 1 && j - i > 1)
+          ticks.push({ pos: i + 1, len: j - i - 1, next: -1, opener: true });
+        slashes = 0;
         i = j;
-      } else i++;
+      } else {
+        slashes = 0;
+        i++;
+      }
     }
     const last = new Map<number, number>();
     for (let k = ticks.length - 1; k >= 0; k--) {
       const t = ticks[k];
       if (!t) continue;
       t.next = last.get(t.len) ?? -1;
-      last.set(t.len, k);
+      if (!t.opener) last.set(t.len, k);
     }
   }
   let tp = 0;
@@ -662,8 +679,11 @@ export function tableRuns(rows: string[]): Run[] {
  * An opening fence: three or more backticks or tildes, then an info string.
  * Indented four or more, it opens one only under a list item (`fenceOpens`),
  * where it sits under the item's text and models indent it that far.
+ * The info string starts at a non-space and the mark run cannot give back
+ * characters, so no two parts overlap and a long whitespace line cannot
+ * backtrack (it is group 3, absent when empty).
  */
-const FENCE_OPEN = /^(\s*)(`{3,}|~{3,})\s*([^`]*)$/;
+const FENCE_OPEN = /^(\s*)(`{3,}(?!`)|~{3,}(?!~))\s*([^`\s][^`]*)?$/;
 /** A bullet (`-`, `*`, `+`) or a numbered (`1.`, `1)`) list item. */
 const LIST_ITEM = /^(\s*)([-*+]|\d{1,9}[.)])\s+(.*)$/;
 

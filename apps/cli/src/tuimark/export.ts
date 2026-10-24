@@ -10,10 +10,24 @@ import type { Message } from "@local-agent/runtime";
 
 import { type Block, type MessageView, runsText } from "#cli/tuimark/blocks";
 
+/**
+ * A code fence for `text`: one backtick longer than its longest backtick run
+ * (at least four), so the content cannot close it and forge what follows.
+ */
+function fenceFor(text: string): string {
+  let longest = 3;
+  for (const run of text.match(/`+/g) ?? [])
+    longest = Math.max(longest, run.length);
+  return "`".repeat(longest + 1);
+}
+
 /** One rendered block back as markdown text (marks were consumed by the parser). */
 function blockText(block: Block): string {
   const text = runsText(block.runs);
-  if (block.code) return `\`\`\`\`${block.lang}\n${text}\n\`\`\`\``;
+  if (block.code) {
+    const fence = fenceFor(text);
+    return `${fence}${block.lang}\n${text}\n${fence}`;
+  }
   if (block.head) return `## ${text}`;
   if (block.quote) return `> ${text}`;
   if (block.item) return `${block.nest ? "  " : ""}- ${text}`;
@@ -48,7 +62,10 @@ export function transcriptMarkdown(views: readonly MessageView[]): string {
       parts.push(`## Tool · ${card.name} · ${card.status}`, "");
       if (card.args) parts.push(card.args, "");
       const output = runsText(card.out);
-      if (output) parts.push("````", output, "````", "");
+      if (output) {
+        const fence = fenceFor(output);
+        parts.push(fence, output, fence, "");
+      }
     }
     if (note) parts.push(note);
   }
