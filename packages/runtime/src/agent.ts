@@ -2339,9 +2339,14 @@ async function* agentTurn(
           ? "Cancelled; tool did not report successful completion"
           : mcpConnection && effectAttempted
             ? "MCP call did not produce a usable result; its effects are unknown"
-            : error instanceof Error
-              ? error.message
-              : "Tool failed";
+            : error instanceof z.ZodError
+              ? // One line per problem, with where it is: a small model
+                // fixes "at todos[0].content" more often than it reads
+                // zod's issue JSON.
+                `Invalid arguments for ${name}:\n${z.prettifyError(error)}`
+              : error instanceof Error
+                ? error.message
+                : "Tool failed";
       }
       if (uncertain) status = "outcome_unknown";
       if (status === "denied") refused.add(signature);

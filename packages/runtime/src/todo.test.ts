@@ -158,8 +158,11 @@ test("todo_write rejects empty content and over 50 items", async () => {
       "failed",
       "failed",
     ]);
-    expect(run.output(0)).toContain("too_small");
-    expect(run.output(1)).toContain("too_big");
+    // Read as a list of problems, each with where it is, not as zod JSON.
+    expect(run.output(0)).toContain("Invalid arguments for todo_write:");
+    expect(run.output(0)).toContain("→ at todos[0].content");
+    expect(run.output(1)).toContain("expected array to have <=50 items");
+    expect(run.output(0)).not.toContain('"code"');
   } finally {
     await run.cleanup();
   }
