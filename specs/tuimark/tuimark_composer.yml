@@ -48,6 +48,12 @@ steps:
         screen:
             contains: "The message had 3 lines: count pasted"
         timeoutMs: 15000
+    # The turn has ended (the idle placeholder is back), so ctrl+c quits
+    # instead of cancelling it.
+    - wait:
+        screen:
+            contains: "Message the model"
+        timeoutMs: 15000
     - press: ctrl+c
     - wait:
         process:

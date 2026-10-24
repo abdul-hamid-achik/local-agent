@@ -36,6 +36,12 @@ steps:
             contains: "The message had 1 lines: count this line"
         timeoutMs: 15000
     - snapshot: recovered
+    # The turn has ended (the idle placeholder is back), so ctrl+c quits
+    # instead of cancelling it.
+    - wait:
+        screen:
+            contains: "Message the model"
+        timeoutMs: 15000
     - press: ctrl+c
     - wait:
         process:

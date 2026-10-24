@@ -51,6 +51,12 @@ steps:
         screen:
             notContains: "Edit notes.txt?"
         timeoutMs: 10000
+    # The turn has ended (the idle placeholder is back), so /permissions runs
+    # instead of reporting busy, and ctrl+c then quits.
+    - wait:
+        screen:
+            contains: "Message the model"
+        timeoutMs: 15000
     # The trailing space closes the slash popup, so enter sends at once.
     - type: "/permissions "
     - press: enter
