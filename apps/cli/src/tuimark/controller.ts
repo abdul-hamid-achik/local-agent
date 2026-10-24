@@ -524,9 +524,12 @@ export class TuimarkClient {
   private mcpFailed: readonly { name: string; error: string }[] = [];
   /** The header ctx meter (see CtxMeter for the exact accumulation rule). */
   private readonly ctx = new CtxMeter();
-  /** One message sent while busy, run when the turn ends. A new send replaces it. */
+  /**
+   * One message sent while busy, run when the turn ends. A further send is
+   * added to it.
+   */
   private queued?: string;
-  /** Esc dropped the queue with the cancel: the final status says both. */
+  /** The cancel gave the queue back: the final status says both. */
   private cancelReturnedQueue = false;
   /** The running goal (see goal.ts); it ends with the process. */
   private goal?: GoalRun;
@@ -2183,6 +2186,16 @@ export class TuimarkClient {
       ]);
       return undefined;
     }
+    // A turn winding down (cancelled already) can have a send queued
+    // behind it: it goes back to the composer before a press can quit.
+    if (this.queued !== undefined) {
+      const queued = this.takeQueued();
+      await this.write([
+        ...(queued ? [queued] : []),
+        { path: "status", value: "Queued message back in the composer" },
+      ]);
+      return undefined;
+    }
     const quit = (async (): Promise<"quit"> => {
       this.quitting = true;
       this.queued = undefined;
@@ -2370,12 +2383,13 @@ export class TuimarkClient {
         return;
       }
       if (!raw.trim()) return;
-      // A queue of one: this send runs when the turn ends (after an error
-      // too — it is the user's latest intent), and a further send replaces
-      // it. It joins the draft history now; its view is only shown (inline:
+      // A queue of one message: this send runs when the turn ends (after an
+      // error too — it is the user's latest intent), and a further send is
+      // added to it, never in its place (esc gives it all back to edit). It
+      // joins the draft history now; its view is only shown (inline:
       // committed) when it actually starts.
-      const replaced = this.queued !== undefined;
-      this.queued = raw;
+      const added = this.queued !== undefined;
+      this.queued = added ? `${this.queued}\n\n${raw}` : raw;
       this.remember(raw);
       const firstLine = clip(
         terminalText(raw).split("\n")[0]?.trim() ?? "",
@@ -2385,8 +2399,8 @@ export class TuimarkClient {
         { path: "draft", value: "" },
         {
           path: "status",
-          value: replaced
-            ? `Queued message replaced: ${firstLine}`
+          value: added
+            ? `Added to the queued message: ${firstLine}`
             : `Queued: ${firstLine}`,
         },
       ]);
@@ -3628,8 +3642,14 @@ export class TuimarkClient {
           ?.get("draft")
           .then((result) => result.value)
           .catch(() => "gone");
-        // A goal's own message was never the user's draft.
-        if (!draft && this.queued === undefined && !hostWritten)
+        // A goal's own message was never the user's draft. draftNow sees a
+        // queued send given back even before the host has it.
+        if (
+          !draft &&
+          !this.draftNow &&
+          this.queued === undefined &&
+          !hostWritten
+        )
           await this.write([{ path: "draft", value: prompt }]);
       }
       // Fullscreen, what arrived of the reply stays where it was read, under

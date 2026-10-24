@@ -323,7 +323,7 @@ test("while busy, a slash command says Busy and a prompt is queued and runs next
   expect(store(ui).status).toBe(`build · ${IDLE_STATUS}`);
 });
 
-test("a second send while one is queued replaces it and says so", async () => {
+test("a second send while one is queued is added to it, never in its place", async () => {
   let release: () => void = () => {};
   const gate = new Promise<void>((r) => {
     release = r;
@@ -341,13 +341,61 @@ test("a second send while one is queued replaces it and says so", async () => {
   await ui.fire("send", "first queued");
   expect(store(ui).status).toBe("Queued: first queued");
   await ui.fire("send", "replacement\nsecond line");
-  expect(store(ui).status).toBe("Queued message replaced: replacement");
+  expect(store(ui).status).toBe("Added to the queued message: replacement");
   release();
   await client.idle();
   expect(seen).toHaveLength(2);
-  expect(seen[1]?.messages.at(-1)).toBe("user:replacement\nsecond line");
-  // The replaced text never became a turn or a view.
-  expect(JSON.stringify(store(ui).messages)).not.toContain("first queued");
+  expect(seen[1]?.messages.at(-1)).toBe(
+    "user:first queued\n\nreplacement\nsecond line",
+  );
+});
+
+test("a queued send given back as a turn ends is never overwritten by its prompt", async () => {
+  const { ui, client, seen } = setup(async function* ({ options }) {
+    await new Promise((_, reject) =>
+      options.signal.addEventListener("abort", () =>
+        reject(new Error("aborted")),
+      ),
+    );
+    yield* [] as AgentEvent[];
+  });
+  await ui.fire("send", "go");
+  await ui.fire("send", "queued behind it");
+  // The give-back is still in flight when the turn end reads the draft.
+  ui.ackMs = 30;
+  await ui.fire("quit_request");
+  await client.idle();
+  expect(store(ui).draft).toBe("queued behind it");
+  expect(seen).toHaveLength(1);
+});
+
+test("ctrl+c while a cancelled turn winds down gives a send queued behind it back", async () => {
+  let finish: () => void = () => {};
+  const wound = new Promise<void>((resolve) => {
+    finish = resolve;
+  });
+  const { ui, client, seen } = setup(
+    quiet(async ({ options }) => {
+      // The turn ignores the abort for a while, as a slow tool can.
+      await new Promise<void>((resolve) =>
+        options.signal.addEventListener("abort", () => resolve()),
+      );
+      await wound;
+    }),
+    { session: fakeSession("abc123", []) },
+  );
+  await ui.fire("send", "go");
+  expect(await ui.fire("quit_request")).toBeUndefined();
+  // Typed and sent while the cancelled turn has not ended yet.
+  await ui.fire("send", "after the cancel");
+  expect(store(ui).status).toBe("Queued: after the cancel");
+  expect(await ui.fire("quit_request")).toBeUndefined();
+  expect(store(ui).draft).toBe("after the cancel");
+  expect(store(ui).status).toBe("Queued message back in the composer");
+  finish();
+  await client.idle();
+  expect(seen).toHaveLength(1);
+  expect(store(ui).draft).toBe("after the cancel");
 });
 
 test("esc cancels the turn and gives the queued message back to the composer", async () => {
