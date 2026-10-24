@@ -1080,7 +1080,13 @@ export function sessionRows(
 export interface StatusFacts {
   provider: Pick<
     Provider,
-    "type" | "model" | "context_size" | "context_plan" | "base_url" | "think"
+    | "type"
+    | "model"
+    | "context_size"
+    | "context_plan"
+    | "context_warning"
+    | "base_url"
+    | "think"
   >;
   /** The workspace root, shown whole. */
   workspace: string;
@@ -1104,6 +1110,19 @@ export interface StatusFacts {
   mcpTools: number;
 }
 
+/**
+ * The context warning as a line, unless the plan already says it (a size
+ * the user set that does not fit carries its warning in its reason).
+ */
+function contextWarning(
+  provider: Pick<Provider, "context_plan" | "context_warning">,
+): string[] {
+  const warning = provider.context_warning;
+  return warning && !provider.context_plan?.includes(warning)
+    ? [`Warning: ${cleanText(warning)}`]
+    : [];
+}
+
 /** The `/status` lines: `Key: value`, one fact per line, nothing invented. */
 export function statusLines(facts: StatusFacts): string[] {
   const lines = [
@@ -1118,6 +1137,7 @@ export function statusLines(facts: StatusFacts): string[] {
   ];
   if (facts.provider.context_plan)
     lines.push(`Context size: ${cleanText(facts.provider.context_plan)}`);
+  lines.push(...contextWarning(facts.provider));
   lines.push(
     `Workspace: ${cleanText(facts.workspace)}`,
     `Mode: ${facts.intent}`,
@@ -1143,7 +1163,12 @@ export const PROVIDER_NO_ANSWER_STATUS = "Provider: no answer";
 export interface ProviderFacts {
   provider: Pick<
     Provider,
-    "type" | "model" | "base_url" | "context_size" | "context_plan"
+    | "type"
+    | "model"
+    | "base_url"
+    | "context_size"
+    | "context_plan"
+    | "context_warning"
   >;
   /** Chalupa's environment name (CHALUPA_ENVIRONMENT), when Chalupa launched this process. */
   environment?: string;
@@ -1168,6 +1193,7 @@ export function providerLines(facts: ProviderFacts): string[] {
     lines.push(`Chalupa environment: ${cleanText(facts.environment)}`);
   lines.push(
     `Context asked: ${provider.context_size} tokens${provider.context_plan ? ` (${cleanText(provider.context_plan)})` : ""}`,
+    ...contextWarning(provider),
   );
   if (probe.error) {
     lines.push(

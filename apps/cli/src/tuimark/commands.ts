@@ -103,6 +103,8 @@ export const MOUSE_INLINE_STATUS = "Mouse is not available in inline mode";
 /** The text a prompt that starts with "/" resolves to. Never calls the model. */
 export function runSlash(text: string, state: CommandState): CommandOutcome {
   const command = text.trim();
+  // Names match in any case, as the commands with arguments do (`/HELP`).
+  const name = command.toLowerCase();
   const mode = command.match(/^\/mode(?:\s+(\S+))?\s*$/i);
   if (mode) {
     const requested = mode[1]?.toLowerCase();
@@ -218,12 +220,12 @@ export function runSlash(text: string, state: CommandState): CommandOutcome {
       unknown: true,
     };
   }
-  if (command === "/details")
+  if (name === "/details")
     return { status: "Latest tool output", details: true };
-  if (command === "/status") return { status: "Status", statusPanel: true };
-  if (command === "/provider")
+  if (name === "/status") return { status: "Status", statusPanel: true };
+  if (name === "/provider")
     return { status: "Checking the provider…", providerPanel: true };
-  if (command === "/sessions") return { status: "Sessions", sessions: true };
+  if (name === "/sessions") return { status: "Sessions", sessions: true };
   const sessionsMatch = command.match(/^\/sessions\s+(\S+)\s*$/i);
   if (sessionsMatch)
     return sessionsMatch[1]?.toLowerCase() === "new"
@@ -267,8 +269,8 @@ export function runSlash(text: string, state: CommandState): CommandOutcome {
           goal: parsed,
         };
   }
-  if (command === "/help") return { status: HELP_STATUS, help: true };
-  if (command === "/mcp")
+  if (name === "/help") return { status: HELP_STATUS, help: true };
+  if (name === "/mcp")
     return {
       // The count line heads the panel and rests on the status line, as
       // the flash alone did before the panel existed.

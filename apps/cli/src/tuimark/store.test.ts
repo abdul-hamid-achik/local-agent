@@ -978,3 +978,51 @@ test("a typed choice is its number, id or label; y/n only for yes/no", () => {
   expect(questionPick(yesNo, 0, "n")).toBe("no");
   expect(questionPick(yesNo, 0, "1")).toBe("yes");
 });
+
+test("statusLines and providerLines say a context warning once", () => {
+  const base = {
+    type: "ollama" as const,
+    model: "qwen3.5:4b",
+    context_size: 32_768,
+    base_url: "http://127.0.0.1:11434",
+  };
+  const facts = (provider: Parameters<typeof statusLines>[0]["provider"]) => ({
+    provider,
+    workspace: "/w",
+    intent: "build" as const,
+    theme: "auto",
+    mouse: "on",
+    grants: [],
+    sandbox: "on",
+    usedTokens: 0,
+    mcpServers: 0,
+    mcpTools: 0,
+  });
+  const warned = {
+    ...base,
+    context_plan: "planned: its KV cache fits",
+    context_warning: "the runner ignores the size",
+  };
+  const status = statusLines(facts(warned));
+  expect(status).toContain("Warning: the runner ignores the size");
+  expect(status.indexOf("Warning: the runner ignores the size")).toBe(
+    status.indexOf("Context size: planned: its KV cache fits") + 1,
+  );
+  const provider = providerLines({ provider: warned, probe: { latencyMs: 3 } });
+  expect(provider.indexOf("Warning: the runner ignores the size")).toBe(
+    provider.indexOf(
+      "Context asked: 32768 tokens (planned: its KV cache fits)",
+    ) + 1,
+  );
+  // A plan whose reason carries the warning already says it.
+  const said = {
+    ...base,
+    context_plan: "set by --context; the size is too big",
+    context_warning: "the size is too big",
+  };
+  expect(statusLines(facts(said)).join("\n")).not.toContain("Warning:");
+  expect(
+    providerLines({ provider: said, probe: { latencyMs: 3 } }).join("\n"),
+  ).not.toContain("Warning:");
+  expect(statusLines(facts(base)).join("\n")).not.toContain("Warning:");
+});

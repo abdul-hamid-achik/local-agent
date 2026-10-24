@@ -1006,13 +1006,15 @@ test("esc while an approval is pending denies it", async () => {
   expect(decisions).toEqual([false]);
 });
 
-test("ctrl+c (quit) with the dialog open resolves the approval to deny", async () => {
+test("ctrl+c (quit) with the dialog open denies it and cancels the turn; the next press quits", async () => {
   const { ui, client } = setup(withApproval);
   await ui.fire("send", "edit");
   await untilApproval(ui);
-  expect(await ui.fire("quit_request")).toBe("quit");
+  expect(await ui.fire("quit_request")).toBeUndefined();
   await client.idle();
   expect(decisions).toEqual([false]);
+  expect(ui.statusLog()).toContain("Turn cancelled · ctrl+c again to quit");
+  expect(await ui.fire("quit_request")).toBe("quit");
 });
 
 test("the process signal with the dialog open resolves the approval to deny", async () => {
@@ -1535,18 +1537,27 @@ test("quit aborts the running turn and answers quit", async () => {
   let aborted = false;
   const { ui, client } = setup(
     quiet(async ({ options }) => {
-      await new Promise((resolve) =>
+      // As runAgent does: a cancelled turn rejects.
+      await new Promise((_, reject) =>
         options.signal.addEventListener("abort", () => {
           aborted = true;
-          resolve(undefined);
+          reject(new Error("aborted"));
         }),
       );
     }),
   );
   await ui.fire("send", "go");
-  expect(await ui.fire("quit_request")).toBe("quit");
+  expect(await ui.fire("quit_request")).toBeUndefined();
   await client.idle();
   expect(aborted).toBe(true);
+  expect(ui.statusLog()).toContain("Turn cancelled · ctrl+c again to quit");
+  expect(store(ui).busy).toBe(false);
+  // The prompt came back to the composer (no session): it is cleared first.
+  expect(store(ui).status).toBe("Cancelled");
+  expect(store(ui).draft).toBe("go");
+  expect(await ui.fire("quit_request")).toBeUndefined();
+  expect(store(ui).status).toBe("Draft cleared · ctrl+c again to quit");
+  expect(await ui.fire("quit_request")).toBe("quit");
 });
 
 test("the process signal aborts the turn too", async () => {
@@ -2103,6 +2114,8 @@ test("inline: quit commits the partial reply before answering quit", async () =>
   }, inline);
   await ui.fire("send", "go");
   await new Promise((r) => setTimeout(r, 15));
+  // The first press cancels; the second, while the turn winds down, quits.
+  expect(await ui.fire("quit_request")).toBeUndefined();
   expect(await ui.fire("quit_request")).toBe("quit");
   // Already printed at the moment "quit" was answered.
   expect(printed(ui)).toEqual(["You: go", "Assistant: still writing"]);
@@ -3064,7 +3077,7 @@ test("/status opens the panel with the config the client actually holds", async 
   expect(lines).toContain("Session: abc123");
   expect(lines).toContain("Session db: /w/sessions.db");
   expect(lines).toContain("Theme: auto");
-  expect(lines).toContain("Mouse: off");
+  expect(lines).toContain("Mouse: on");
   expect(lines).toContain("Context: 0/8.0k");
   await ui.fire("panel_close");
   expect(store(ui).panel.open).toBe(false);
@@ -4069,6 +4082,8 @@ test("F5: concurrent quit requests resolve only after the partial reply prints o
   ui.ackMs = 30;
   await ui.fire("send", "go");
   await new Promise((r) => setTimeout(r, 60));
+  // The first press only cancels the turn.
+  expect(await ui.fire("quit_request")).toBeUndefined();
   const atResolve: string[][] = [];
   const q1 = ui.fire("quit_request").then((v) => {
     atResolve.push(printed(ui));
@@ -5192,4 +5207,229 @@ test("the goal adds up the turns' output tokens and stops at its budget", async 
   expect(store(ui).status).toBe(
     "Goal stopped: its 200k output tokens are spent",
   );
+});
+
+// ------------------------------------------------- 0.46: client fixes
+
+test("a context warning is the first status, and /status says it again", async () => {
+  const { ui } = setup(reply("x"), {
+    provider: { ...provider, context_warning: MLX_WARNING },
+  });
+  expect(store(ui).status).toBe(
+    `Warning: ${MLX_WARNING} · /status shows it again`,
+  );
+  await ui.fire("send", "/status");
+  // The panel wraps a long line, its continuations marked "↪ ".
+  expect(
+    store(ui)
+      .panel.lines.map((line) => line.t.replace(/^↪ /, ""))
+      .join(""),
+  ).toContain(`Warning: ${MLX_WARNING}`);
+  // Without one the first status is the idle line.
+  expect(store(setup(reply("x")).ui).status).not.toMatch(/^Warning/);
+});
+
+test("fullscreen mouse starts on, as the store does; inline has none", async () => {
+  const { ui } = setup(reply("x"));
+  expect(store(ui).mouse_on).toBe(true);
+  await ui.fire("send", "/mouse");
+  expect(store(ui).status).toBe("Mouse is on. Use /mouse on or /mouse off");
+  const flat = setup(reply("x"), inline);
+  expect(store(flat.ui).mouse_on).toBe(false);
+  await flat.ui.fire("send", "/status");
+  expect(store(flat.ui).panel.lines.map((line) => line.t)).toContain(
+    "Mouse: n/a (inline)",
+  );
+});
+
+test("a line that starts with a path is a message; a command name is a command in any case", async () => {
+  const { ui, client, seen } = setup(reply("ok"));
+  await ui.fire("send", "/tmp/x.log is empty, why?");
+  await client.idle();
+  expect(seen.at(-1)?.messages.at(-1)).toBe("user:/tmp/x.log is empty, why?");
+  const runs = seen.length;
+  await ui.fire("send", "/HELP");
+  expect(store(ui).help.open).toBe(true);
+  await ui.fire("help_close");
+  await ui.fire("send", "/Status");
+  expect(store(ui).panel.title).toBe("Status");
+  await ui.fire("panel_close");
+  // A lone slash, and an unknown name, are still commands: never sent.
+  await ui.fire("send", "/");
+  await ui.fire("send", "/nope now");
+  expect(store(ui).status).toBe("Unknown command: /nope now. Use /help");
+  // A typo is refused, never sent; so is one slash then a word.
+  await ui.fire("send", "/model:foo");
+  expect(store(ui).status).toBe("Unknown command: /model:foo. Use /help");
+  await ui.fire("send", "/etc is wrong");
+  expect(store(ui).status).toBe("Unknown command: /etc is wrong. Use /help");
+  expect(seen.length).toBe(runs);
+});
+
+test("ctrl+c mid-turn cancels it and drops the queue; with a session the next press quits", async () => {
+  let aborted = 0;
+  const { ui, client, seen } = setup(
+    quiet(async ({ options }) => {
+      await new Promise((_, reject) =>
+        options.signal.addEventListener("abort", () => {
+          aborted++;
+          reject(new Error("aborted"));
+        }),
+      );
+    }),
+    // A saved session keeps the prompt: nothing comes back to the draft.
+    { session: fakeSession("abc123", []) },
+  );
+  await ui.fire("send", "go");
+  await ui.fire("send", "queued");
+  expect(await ui.fire("quit_request")).toBeUndefined();
+  await client.idle();
+  expect(aborted).toBe(1);
+  // The queued message was dropped with the turn, never sent.
+  expect(seen).toHaveLength(1);
+  expect(ui.statusLog()).toContain("Turn cancelled · ctrl+c again to quit");
+  expect(store(ui).status).toBe(
+    "Cancelled · queued message dropped · ctrl+c again to quit",
+  );
+  expect(await ui.fire("quit_request")).toBe("quit");
+});
+
+test("a dialog closed while `!` loads the rules saves no rule and keeps its deny", async () => {
+  const root = await mkdtemp(join(tmpdir(), "la-always-race-"));
+  const { ui, client } = setup(
+    turnsAsking([[commandProposal(["bun", "test", "a.test.ts"])]]),
+    { workspace: { root } as Workspace },
+  );
+  await ui.fire("send", "one");
+  await until(() => store(ui).status === APPROVAL_STATUS);
+  const always = ui.fire("dialog_always");
+  await ui.fire("dialog_cancel");
+  // Without the guard this rejected (the dialog's decide was gone), which
+  // the host turns into the end of the session.
+  await expect(always).resolves.toBeUndefined();
+  await client.idle();
+  expect(decisions).toEqual([false]);
+  expect((await loadPermissionFile(root)).rules).toEqual([]);
+});
+
+test("an approval cancelled while the rules load is denied without a card", async () => {
+  const { ui, client } = setup(async function* ({ options }) {
+    const cancelled = new AbortController();
+    // approve awaits the rules first; the abort lands in that wait, before
+    // the dialog's listener exists.
+    const asked = options.approve(editProposal(), cancelled.signal);
+    cancelled.abort();
+    decisions.push(await asked);
+    yield* [] as AgentEvent[];
+  });
+  await ui.fire("send", "edit");
+  await client.idle();
+  expect(decisions).toEqual([false]);
+  expect(store(ui).approval.open).toBe(false);
+});
+
+test("a handler failure is a status line, not the end of the session", async () => {
+  const { ui, client } = setup(reply("x"));
+  await client.handlerFailed(
+    "dialog_always",
+    new Error("EACCES: permission denied"),
+  );
+  expect(store(ui).status).toBe(
+    "Action dialog_always failed: EACCES: permission denied",
+  );
+  await client.handlerFailed("send", "plain\nstring");
+  expect(store(ui).status).toBe("Action send failed: plain string");
+});
+
+test("/model with an explicit size to an MLX model keeps the size and warns; Chalupa's never does", async () => {
+  const GIB = 1024 ** 3;
+  const admitModel = async (candidate: Provider) =>
+    ({
+      ...validated(candidate.model),
+      sizeBytes: 3.3 * GIB,
+      nativeContext: 262_144,
+      kvBytesPerToken: 32_768,
+      mlx: true,
+    }) as OllamaAdmission;
+  const providers: Provider[] = [];
+  const run: ConstructorParameters<typeof TuimarkClient>[0]["run"] = (
+    provider,
+    messages,
+    options,
+  ) => {
+    providers.push(provider);
+    return reply("ok")({ options, messages });
+  };
+  const local = setup(reply("ok"), {
+    admitModel,
+    run,
+    provider: { ...provider, context_size: 16_384, context_explicit: true },
+    totalMemory: () => 16 * GIB,
+  });
+  await local.ui.fire("send", "/model qwen3.5:4b");
+  expect(store(local.ui).status).toBe(
+    `Model changed to qwen3.5:4b · ${MLX_WARNING}`,
+  );
+  await local.ui.fire("send", "hi");
+  await local.client.idle();
+  expect(providers.at(-1)).toMatchObject({
+    context_size: 16_384,
+    context_plan: expect.stringMatching(
+      /^set by --context or LOCAL_AGENT_CONTEXT; .*MLX runner ignores num_ctx/,
+    ),
+    context_warning: MLX_WARNING,
+  });
+
+  const remote = setup(reply("ok"), {
+    admitModel,
+    run,
+    provider: {
+      ...provider,
+      type: "ollama_remote",
+      context_warning: "Chalupa set a context of 8192 tokens",
+    } as Provider,
+  });
+  await remote.ui.fire("send", "/model qwen3.5:4b");
+  expect(store(remote.ui).status).toBe("Model changed to qwen3.5:4b");
+  await remote.ui.fire("send", "hi");
+  await remote.client.idle();
+  expect(providers.at(-1)?.context_warning).toBe(
+    "Chalupa set a context of 8192 tokens",
+  );
+});
+
+test("a ctrl+c while the turn winds down quits, after esc too, and even if the turn ignores the abort", async () => {
+  // The turn never ends: it ignores its signal.
+  const { ui } = setup(quiet(() => new Promise(() => {})));
+  await ui.fire("send", "go");
+  await ui.fire("cancel");
+  expect(await ui.fire("quit_request")).toBe("quit");
+
+  const second = setup(quiet(() => new Promise(() => {})));
+  await second.ui.fire("send", "go");
+  expect(await second.ui.fire("quit_request")).toBeUndefined();
+  expect(await second.ui.fire("quit_request")).toBe("quit");
+});
+
+test("a draft typed while a ctrl+c cancel winds down: no quit hint, the next press clears it", async () => {
+  const { ui, client } = setup(
+    quiet(
+      ({ options }) =>
+        new Promise((_, reject) =>
+          options.signal.addEventListener("abort", () =>
+            setTimeout(() => reject(new Error("aborted")), 20),
+          ),
+        ),
+    ),
+    { session: fakeSession("abc123", []) },
+  );
+  await ui.fire("send", "go");
+  expect(await ui.fire("quit_request")).toBeUndefined();
+  store(ui).draft = "x";
+  await ui.fire("typed", "x");
+  await client.idle();
+  expect(store(ui).status).toBe("Cancelled");
+  expect(await ui.fire("quit_request")).toBeUndefined();
+  expect(store(ui).status).toBe("Draft cleared · ctrl+c again to quit");
+  expect(await ui.fire("quit_request")).toBe("quit");
 });

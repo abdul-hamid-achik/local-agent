@@ -96,8 +96,8 @@ a child and draws the whole screen from `apps/cli/src/tuimark/ui/app.tui`.
   pasted block stays one message. The box grows to eight rows, then scrolls.
   Sending while a reply is generating queues one message (a further send
   replaces it; `esc` cancels the turn and drops the queue), and it runs when
-  the turn ends. `ctrl+c` first clears a non-empty draft; with an empty
-  composer it quits. `up` on the first line and `down` on the last recall what
+  the turn ends. `ctrl+c` first clears a non-empty draft, then cancels a
+  running turn as `esc` does; with neither it quits. `up` on the first line and `down` on the last recall what
   you sent in this session (a resumed session's earlier messages included).
   Typing `/` opens a popup of the slash commands with one-line descriptions,
   filtered as you type: `up`/`down` choose, `tab` completes into the draft,
@@ -107,8 +107,9 @@ a child and draws the whole screen from `apps/cli/src/tuimark/ui/app.tui`.
   command palette, `/help` lists the commands and every key. `ctrl+l` jumps the transcript back
   to the newest message. `/theme dark|light|auto` switches the session theme
   (no argument reports the current one; nothing is persisted). `/mouse on|off`
-  toggles mouse reporting in fullscreen — wheel scrolling and clicks, off by
-  default so the terminal keeps its native selection; inline has no mouse.
+  toggles mouse reporting in fullscreen — wheel scrolling and clicks, on by
+  default; `/mouse off` gives the terminal its native selection back. Inline
+  has no mouse.
   Each tool card is titled by its tool (Read, Edit, Command, `MCP · server ·
   tool`), marks how the call ended (`✓` succeeded, `✗` denied or failed, `!`
   outcome unknown or unverified) and says how long it ran; a successful edit

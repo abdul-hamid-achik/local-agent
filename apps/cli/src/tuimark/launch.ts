@@ -36,8 +36,9 @@ import {
 import { resolveTheme, themedDocument } from "#cli/tuimark/themes";
 
 /**
- * The oldest tuimark this client's document runs on: <textarea>, `runs`, and the
- * append write of the stream (0.4.6; props and <slot/> came with 0.4.5).
+ * The oldest tuimark this client's document runs on: links and images whose
+ * `href` and `src` are data-bound (0.5.1), on top of <textarea>, `runs` and
+ * the stream's append write (0.4.6) and props and <slot/> (0.4.5).
  */
 export const MIN_TUIMARK = "0.5.1";
 
@@ -57,6 +58,11 @@ export function resolvePinned(): Promise<string> {
  * autowrap on. A host that dies leaves the terminal as it was drawing it.
  */
 export const TERMINAL_RESET = "\x1b[?1049l\x1b[?25h\x1b[?2004l\x1b[?7h\x1b[0m";
+/**
+ * Inline never entered the alternate screen, and leaving it restores the
+ * cursor saved on entry: the printed transcript would be written over.
+ */
+export const INLINE_TERMINAL_RESET = "\x1b[?25h\x1b[?2004l\x1b[?7h\x1b[0m";
 
 /**
  * The folder with app.tui, next to this file. The bundle (`bun run build`)
@@ -280,7 +286,10 @@ export async function runTuimark(
   const hostTheme = resolved.kind === "named" ? "dark" : resolved.theme;
   const stdout = deps.stdout ?? process.stdout;
   const resetTerminal = () => {
-    if (stdout.isTTY) stdout.write(TERMINAL_RESET);
+    if (stdout.isTTY)
+      stdout.write(
+        presentation === "inline" ? INLINE_TERMINAL_RESET : TERMINAL_RESET,
+      );
   };
   let readyColumns = 80;
   const client = new TuimarkClient({
@@ -306,6 +315,9 @@ export async function runTuimark(
     columns: () => stdout.columns ?? readyColumns,
   });
   const bin = await (deps.resolve ?? resolvePinned)();
+  // A download can take a while: ctrl+c during it stops here, not after a
+  // screen has opened.
+  signal.throwIfAborted();
   // A named palette is a generated copy of the document with the palette's
   // .tcss loaded after the last sheet the document itself lists; a builtin
   // theme is the host's own --theme flag.
@@ -326,7 +338,14 @@ export async function runTuimark(
       bin,
       inline: presentation === "inline",
       theme: hostTheme === "auto" ? undefined : hostTheme,
+      // A handler that throws would end the session (the SDK replies
+      // `error`): the client says what failed and the session goes on.
+      onError: (event, error) => client.handlerFailed(event.action, error),
     });
+  } catch (error) {
+    // A child that died before `ready` may have drawn already.
+    resetTerminal();
+    throw error;
   } finally {
     // The host has loaded the document (or failed) once spawn resolves.
     if (docPath !== join(ui, doc)) await rm(docPath, { force: true });

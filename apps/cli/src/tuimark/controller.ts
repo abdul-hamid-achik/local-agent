@@ -317,6 +317,13 @@ function isGoalCommand(raw: string): boolean {
 }
 
 const NO_GOAL_STATUS = "No goal is running. /goal OBJECTIVE starts one";
+
+/**
+ * A slash command's first word: one slash, then no other (`/model`, a typo
+ * such as `/model:x` too, which is refused, never sent). A second slash
+ * makes it a path, and the line a message.
+ */
+const COMMAND_WORD = /^\/[^\s/]+$/;
 /**
  * How long a finished turn waits for its placement read before it clears
  * busy; a read slower than this is shown after a later turn instead.
@@ -370,7 +377,7 @@ export class TuimarkClient {
   private theme: Theme;
   /** The provider the next turn runs on (`/model NAME` swaps it mid-session). */
   private provider: Provider;
-  /** Fullscreen mouse reporting (`/mouse`); default off. Inline never writes it. */
+  /** Fullscreen mouse reporting (`/mouse`): on, as the store starts. Inline never writes it. */
   private mouse = false;
   // the writer
   private tail: Promise<void> = Promise.resolve();
@@ -400,6 +407,8 @@ export class TuimarkClient {
   // the turn
   private busy = false;
   private turn?: AbortController;
+  /** The turn a ctrl+c cancelled: its end says the next press quits. */
+  private quitCancelled?: AbortController;
   private turnDone: Promise<void> = Promise.resolve();
   private decide?: (
     allowed: boolean,
@@ -530,6 +539,7 @@ export class TuimarkClient {
     this.run = options.run ?? runAgent;
     this.intent = options.intent;
     this.inline = options.presentation === "inline";
+    this.mouse = !this.inline;
     this.stream = new LiveStream(undefined, { inline: this.inline });
     this.transcript = new Transcript(options.windowStep, options.windowSize);
     this.session = options.session;
@@ -580,7 +590,25 @@ export class TuimarkClient {
       store.status = oneLine(
         `Sandbox unavailable: ${this.sandboxWhy} · commands ask`,
       );
+    // The startup warning on stderr is under the screen: the first status
+    // says it too (the sandbox's, a safety matter, goes first).
+    else if (this.provider.context_warning)
+      store.status = oneLine(
+        `Warning: ${this.provider.context_warning} · /status shows it again`,
+      );
     return store;
+  }
+
+  /**
+   * An action handler threw (a rules file that cannot be written, a dead
+   * read): its error on the status line, where a reply of `error` would
+   * have ended the session.
+   */
+  async handlerFailed(action: string, error: unknown): Promise<void> {
+    const message = error instanceof Error ? error.message : String(error);
+    await this.write([
+      { path: "status", value: oneLine(`Action ${action} failed: ${message}`) },
+    ]);
   }
 
   /** Registers the action handlers on a spawned host. */
@@ -648,7 +676,8 @@ export class TuimarkClient {
       return this.decide(true, true);
     });
     ui.on("dialog_always", async () => {
-      if (!this.decide || !this.proposal) return undefined;
+      const decide = this.decide;
+      if (!decide || !this.proposal) return undefined;
       // `!` follows `y` and `a`: same arm delay, same said-so feedback.
       if (!this.armed) {
         await this.write([
@@ -672,6 +701,9 @@ export class TuimarkClient {
         // A deny rule that already covers this request is stronger intent
         // than the keypress: say so and keep the dialog open.
         const shadow = evaluate((await this.fileRules()).rules, request);
+        // Esc or a cancel while the rules loaded closed the dialog: no
+        // rule is saved for a request that is no longer asked.
+        if (this.decide !== decide) return undefined;
         if (shadow.effect === "deny") {
           await this.write([
             {
@@ -696,7 +728,10 @@ export class TuimarkClient {
           return undefined;
         }
       }
-      return this.decide(
+      // The rule is saved, as `!` asked; a dialog closed while it was
+      // written keeps its own verdict (a deny stays a deny).
+      if (this.decide !== decide) return undefined;
+      return decide(
         true,
         false,
         root
@@ -2034,9 +2069,10 @@ export class TuimarkClient {
   }
 
   /**
-   * The two-stage quit, shared by ctrl+c and the palette's Quit row: a
-   * non-empty draft is cleared first; only an empty composer quits
-   * (mid-turn included, as before). Answering "quit" ends the session.
+   * The staged quit, shared by ctrl+c and the palette's Quit row: a
+   * non-empty draft is cleared first; then a running turn is cancelled,
+   * as esc does, so one press never ends the session mid-turn; only the
+   * next press quits. Answering "quit" ends the session.
    */
   private quitRequest(): Promise<"quit" | undefined> {
     // Concurrent presses serialize: each decides its stage from the
@@ -2066,6 +2102,21 @@ export class TuimarkClient {
         { path: "draft", value: "" },
         ...this.closeSlash(),
         { path: "status", value: "Draft cleared · ctrl+c again to quit" },
+      ]);
+      return undefined;
+    }
+    // A running turn is cancelled as esc does, once: a press while it
+    // winds down (cancelled by esc or by ctrl+c) quits.
+    if (this.turn && !this.turn.signal.aborted) {
+      this.quitCancelled = this.turn;
+      if (this.queued !== undefined) {
+        this.queued = undefined;
+        this.cancelDroppedQueue = true;
+      }
+      if (this.goal) this.goalStop ??= "stopped: you cancelled its turn";
+      this.turn.abort();
+      await this.write([
+        { path: "status", value: "Turn cancelled · ctrl+c again to quit" },
       ]);
       return undefined;
     }
@@ -2238,10 +2289,13 @@ export class TuimarkClient {
     this.slashDismissed = false;
     const closed = this.closeSlash();
     if (closed.length > 0) await this.write(closed);
-    // A command is one line: a pasted block that starts with a slash (a path, a
-    // regex) is a message.
+    // A command is one line whose first word is a name (`/model x`): a pasted
+    // block, or a line that starts with a path (`/tmp/a.log is empty`), is a
+    // message.
     const command = raw.trim();
-    const isCommand = command.startsWith("/") && !command.includes("\n");
+    const isCommand =
+      !command.includes("\n") &&
+      (command === "/" || COMMAND_WORD.test(command.split(/\s/, 1)[0] ?? ""));
     if (this.busy) {
       // A goal is seen and stopped while its turns run.
       if (isGoalCommand(raw)) {
@@ -2718,6 +2772,12 @@ export class TuimarkClient {
       return true;
     }
     return new Promise<boolean>((resolve) => {
+      // Cancelled while the rules loaded: `abort` fired before the listener
+      // below, so it would never deny, and a card would open for nothing.
+      if (signal.aborted) {
+        resolve(false);
+        return;
+      }
       const finish = async (
         allowed: boolean,
         session = false,
@@ -3332,6 +3392,11 @@ export class TuimarkClient {
         status = this.cancelDroppedQueue
           ? "Cancelled · queued message dropped"
           : "Cancelled";
+        // Cancelled by ctrl+c: the next press quits, as its status said,
+        // unless it has a draft to clear first (the prompt given back, or
+        // what was typed while the turn wound down).
+        if (this.quitCancelled === request && this.draftNow === "")
+          status += " · ctrl+c again to quit";
       } else {
         const message =
           error instanceof ConversationFullError

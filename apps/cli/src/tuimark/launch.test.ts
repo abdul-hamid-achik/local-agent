@@ -28,6 +28,7 @@ import type { AgentEvent, Provider, Workspace } from "@local-agent/runtime";
 import type { Host, HostExit, Ready } from "@thelacanians/tuimark";
 import {
   findBinary,
+  INLINE_TERMINAL_RESET,
   MIN_TUIMARK,
   PINNED_TUIMARK,
   readyProblem,
@@ -49,6 +50,7 @@ function fakeSpawn(
   const spawnedOnce = Promise.withResolvers<void>();
   const calls = {
     closed: 0,
+    batches: [] as unknown[][],
     handlers: new Map<string, (ev: unknown) => unknown>(),
     spawned: [] as { file: string; options?: unknown }[],
   };
@@ -77,7 +79,8 @@ function fakeSpawn(
         calls.handlers.set(action, handler);
         return host;
       },
-      async batch() {
+      async batch(writes: unknown[]) {
+        calls.batches.push(writes);
         return { type: "ack", id: "x", ok: true };
       },
       async commit() {
@@ -550,4 +553,89 @@ test("themedDocument loads the palette after the document's last sheet", async (
   } finally {
     await rm(ui, { recursive: true, force: true });
   }
+});
+
+test("inline resets the terminal without leaving an alternate screen it never entered", async () => {
+  const control: { exit?: (reason: HostExit | Error) => void } = {};
+  const host = fakeSpawn(
+    { messages: ["set", "batch", "get", "commit"] },
+    control,
+  );
+  const stdout = fakeStdout(true);
+  const done = launch(
+    { spawn: host.spawn, resolve: async () => "/b", stdout },
+    new AbortController().signal,
+    "inline",
+  );
+  await new Promise((r) => setTimeout(r, 10));
+  control.exit?.({ reason: "error", error: "boom", code: 1 });
+  await expect(done).rejects.toThrow("boom");
+  expect(stdout.written).toEqual([INLINE_TERMINAL_RESET]);
+  expect(INLINE_TERMINAL_RESET).not.toContain("\x1b[?1049l");
+  expect(TERMINAL_RESET).toBe(`\x1b[?1049l${INLINE_TERMINAL_RESET}`);
+});
+
+test("a spawn that fails resets the terminal and is reported", async () => {
+  for (const [presentation, reset] of [
+    ["fullscreen", TERMINAL_RESET],
+    ["inline", INLINE_TERMINAL_RESET],
+  ] as const) {
+    const stdout = fakeStdout(true);
+    const spawn = (async () => {
+      throw new Error("tuimark host exited before ready (code 2)");
+    }) as unknown as typeof import("@thelacanians/tuimark").spawnHost;
+    await expect(
+      launch(
+        { spawn, resolve: async () => "/b", stdout },
+        new AbortController().signal,
+        presentation,
+      ),
+    ).rejects.toThrow(/before ready/);
+    expect(stdout.written).toEqual([reset]);
+  }
+});
+
+test("ctrl+c while the binary resolves stops before a host is spawned", async () => {
+  const host = fakeSpawn();
+  const abort = new AbortController();
+  const done = launch(
+    {
+      spawn: host.spawn,
+      resolve: async () => {
+        abort.abort();
+        return "/b";
+      },
+      stdout: fakeStdout(true),
+    },
+    abort.signal,
+  );
+  await expect(done).rejects.toThrow();
+  expect(host.calls.spawned).toHaveLength(0);
+});
+
+test("a handler that throws goes to onError: a status line, and the session goes on", async () => {
+  const control: { exit?: (reason: HostExit | Error) => void } = {};
+  const host = fakeSpawn({}, control);
+  const done = launch({
+    spawn: host.spawn,
+    resolve: async () => "/b",
+    stdout: fakeStdout(true),
+  });
+  await host.spawned;
+  await new Promise((r) => setTimeout(r, 10));
+  const options = host.calls.spawned[0]?.options as {
+    onError?: (event: { action: string }, error: unknown) => unknown;
+  };
+  // Returning (not throwing) is what keeps the SDK's reply plain.
+  await expect(
+    Promise.resolve(
+      options.onError?.({ action: "dialog_always" }, new Error("EACCES")),
+    ),
+  ).resolves.toBeUndefined();
+  expect(host.calls.batches.flat()).toContainEqual({
+    path: "status",
+    value: "Action dialog_always failed: EACCES",
+  });
+  control.exit?.({ reason: "quit", code: 0 });
+  await done;
 });
