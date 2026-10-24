@@ -80,6 +80,7 @@ import {
   type Intent,
   MOUSE_INLINE_STATUS,
   paletteCommand,
+  QUEUE_RETURNED,
   runSlash,
   slashMatches,
   slashRows,
@@ -526,7 +527,7 @@ export class TuimarkClient {
   /** One message sent while busy, run when the turn ends. A new send replaces it. */
   private queued?: string;
   /** Esc dropped the queue with the cancel: the final status says both. */
-  private cancelDroppedQueue = false;
+  private cancelReturnedQueue = false;
   /** The running goal (see goal.ts); it ends with the process. */
   private goal?: GoalRun;
   /** What the running turn of a goal has done, for the stop rules. */
@@ -657,15 +658,14 @@ export class TuimarkClient {
     ui.on("mode_toggle", () => this.modeToggle());
     ui.on("history_prev", (ev) => this.recallPrev(ev));
     ui.on("history_next", (ev) => this.recallNext(ev));
-    ui.on("cancel", () => {
-      // Esc cancels the turn and drops the queue with it, and a running
-      // goal with them.
-      if (this.queued !== undefined) {
-        this.queued = undefined;
-        this.cancelDroppedQueue = true;
-      }
+    ui.on("cancel", async () => {
+      // Esc cancels the turn and a running goal with it; a queued send is
+      // not sent, and goes back to the composer.
+      const queued = this.takeQueued();
+      if (queued) this.cancelReturnedQueue = true;
       if (this.goal) this.goalStop ??= "stopped: you cancelled its turn";
       this.turn?.abort();
+      if (queued) await this.write([queued]);
     });
     // The binds name this `quit_request`, not `quit`: `quit` is an engine
     // built-in that ends the session itself and never reaches the parent,
@@ -2151,23 +2151,35 @@ export class TuimarkClient {
     // winds down (cancelled by esc or by ctrl+c) quits.
     if (this.turn && !this.turn.signal.aborted) {
       this.quitCancelled = this.turn;
-      if (this.queued !== undefined) {
-        this.queued = undefined;
-        this.cancelDroppedQueue = true;
-      }
+      const queued = this.takeQueued();
+      if (queued) this.cancelReturnedQueue = true;
       if (this.goal) this.goalStop ??= "stopped: you cancelled its turn";
       this.turn.abort();
       await this.write([
-        { path: "status", value: "Turn cancelled · ctrl+c again to quit" },
+        ...(queued ? [queued] : []),
+        {
+          path: "status",
+          value: queued
+            ? `Turn cancelled · ${QUEUE_RETURNED}`
+            : "Turn cancelled · ctrl+c again to quit",
+        },
       ]);
       return undefined;
     }
     // Between a goal's turns none runs, but the goal does: the press stops
-    // it before its next turn, and only the next press quits.
+    // it before its next turn, and only the next press quits. A send queued
+    // for after the turn is not sent either.
     if (this.goal && this.goalStop === undefined) {
       this.goalStop = "stopped: you cancelled it";
+      const queued = this.takeQueued();
       await this.write([
-        { path: "status", value: "Goal stopping · ctrl+c again to quit" },
+        ...(queued ? [queued] : []),
+        {
+          path: "status",
+          value: queued
+            ? `Goal stopping · ${QUEUE_RETURNED}`
+            : "Goal stopping · ctrl+c again to quit",
+        },
       ]);
       return undefined;
     }
@@ -2398,21 +2410,35 @@ export class TuimarkClient {
 
   /**
    * The runtime refuses a turn past an unknown outcome: says so instead of
-   * sending a prompt into that refusal, the draft kept (or given back).
+   * sending a prompt into that refusal, the draft kept and a queued send
+   * given back.
    */
   private async refuseForRecovery(
     unknown: number,
-    draft?: string,
+    queued?: string,
   ): Promise<void> {
     await this.write([
-      ...(draft !== undefined && this.draftNow === ""
-        ? [{ path: "draft", value: draft }]
-        : []),
+      ...(queued !== undefined ? [this.returned(queued)] : []),
       {
         path: "status",
-        value: `${unknown} call${unknown === 1 ? " has" : "s have"} an unknown outcome · /recover to review before continuing`,
+        value: `${unknown} call${unknown === 1 ? " has" : "s have"} an unknown outcome · /recover to review before continuing${queued !== undefined ? ` · ${QUEUE_RETURNED}` : ""}`,
       },
     ]);
+  }
+
+  /** The queued send, taken off the queue and given back to the composer. */
+  private takeQueued(): Write | undefined {
+    const queued = this.queued;
+    this.queued = undefined;
+    return queued === undefined ? undefined : this.returned(queued);
+  }
+
+  /** A send that will not run, back in the composer after what is there. */
+  private returned(text: string): Write {
+    return {
+      path: "draft",
+      value: this.draftNow ? `${this.draftNow}\n${text}` : text,
+    };
   }
 
   /** How many calls of the saved session have an unknown outcome. */
@@ -3236,7 +3262,7 @@ export class TuimarkClient {
     this.pieces = 0;
     this.rate = [];
     this.rateAt = 0;
-    this.cancelDroppedQueue = false;
+    this.cancelReturnedQueue = false;
     // Every turn while a goal runs is one of its turns for the stop rules,
     // a typed one too.
     this.goalTurn = this.goal
@@ -3616,8 +3642,8 @@ export class TuimarkClient {
           this.transcript.push(this.builder.partial(blocks, this.stream.links));
       }
       if (aborted) {
-        status = this.cancelDroppedQueue
-          ? "Cancelled · queued message dropped"
+        status = this.cancelReturnedQueue
+          ? `Cancelled · ${QUEUE_RETURNED}`
           : "Cancelled";
         // Cancelled by ctrl+c: the next press quits, as its status said,
         // unless it has a draft to clear first (the prompt given back, or

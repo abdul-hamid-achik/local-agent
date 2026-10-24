@@ -317,6 +317,8 @@ export function runSlash(text: string, state: CommandState): CommandOutcome {
 }
 
 export const BUSY_STATUS = "Busy · wait for the current turn to finish";
+/** A queued send that will not run, given back to the composer instead. */
+export const QUEUE_RETURNED = "queued message back in the composer";
 
 // ------------------------------------------------------------ the slash catalog
 

@@ -350,7 +350,7 @@ test("a second send while one is queued replaces it and says so", async () => {
   expect(JSON.stringify(store(ui).messages)).not.toContain("first queued");
 });
 
-test("esc cancels the turn and drops the queued message, and the status says both", async () => {
+test("esc cancels the turn and gives the queued message back to the composer", async () => {
   const { ui, client, seen } = setup(async function* ({ options }) {
     await new Promise((_, reject) =>
       options.signal.addEventListener("abort", () =>
@@ -362,9 +362,15 @@ test("esc cancels the turn and drops the queued message, and the status says bot
   await ui.fire("send", "slow one");
   await ui.fire("send", "queued one");
   expect(store(ui).status).toBe("Queued: queued one");
+  store(ui).draft = "typed meanwhile";
+  await ui.fire("typed", "typed meanwhile");
   await ui.fire("cancel");
   await client.idle();
-  expect(store(ui).status).toBe("Cancelled · queued message dropped");
+  expect(store(ui).status).toBe(
+    "Cancelled · queued message back in the composer",
+  );
+  // After what was typed since, never in its place.
+  expect(store(ui).draft).toBe("typed meanwhile\nqueued one");
   expect(seen).toHaveLength(1);
   expect(store(ui).busy).toBe(false);
 });
@@ -3281,8 +3287,33 @@ test("a send queued behind a turn that leaves a call unknown goes back to the co
   expect(seen).toHaveLength(1);
   expect(store(ui).draft).toBe("and then report");
   expect(store(ui).status).toBe(
-    "1 call has an unknown outcome · /recover to review before continuing",
+    "1 call has an unknown outcome · /recover to review before continuing · queued message back in the composer",
   );
+});
+
+test("a queued send refused past an unknown outcome joins what was typed since", async () => {
+  const session = fakeSession("aaa111", []);
+  const items: RecoveryItem[] = [];
+  const { sessions } = recoverable(session, items);
+  let release: () => void = () => {};
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const { ui, client, seen } = setup(
+    quiet(async () => {
+      await gate;
+      items.push(unknownCall("e1", "make deploy"));
+    }),
+    { session, sessions },
+  );
+  await ui.fire("send", "deploy it");
+  await ui.fire("send", "and then report");
+  store(ui).draft = "one more thing";
+  await ui.fire("typed", "one more thing");
+  release();
+  await client.idle();
+  expect(seen).toHaveLength(1);
+  expect(store(ui).draft).toBe("one more thing\nand then report");
 });
 
 test("/status opens the panel with the config the client actually holds", async () => {
@@ -5092,6 +5123,43 @@ test("ctrl+c between a goal's turns stops the goal before its next turn, and the
   expect(await ui.fire("quit_request")).toBe("quit");
 });
 
+test("ctrl+c between a goal's turns gives a queued send back instead of running it", async () => {
+  let release: () => void = () => {};
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const { ui, client, seen } = setup(
+    turnsOf(
+      async function* (ctx) {
+        await gate;
+        yield* reporting(goes("wrote the parser"), wrote("w1"))(ctx);
+      },
+      reporting(goes("tests run"), ran("c1", ["bun", "test"])),
+    ),
+  );
+  const presses: Promise<unknown>[] = [];
+  ui.refuse = (writes) => {
+    if (
+      !presses.length &&
+      writes.some((write) => write.path === "busy" && write.value === false)
+    )
+      presses.push(ui.fire("quit_request"));
+    return undefined;
+  };
+  await ui.fire("send", "/goal make the tests pass");
+  await ui.fire("send", "also run lint");
+  expect(store(ui).status).toBe("Queued: also run lint");
+  release();
+  await client.idle();
+  expect(await presses[0]).toBeUndefined();
+  expect(seen).toHaveLength(1);
+  expect(store(ui).draft).toBe("also run lint");
+  expect(ui.statusLog()).toContain(
+    "Goal stopping · queued message back in the composer",
+  );
+  expect(store(ui).header.goal_on).toBe(false);
+});
+
 test("a goal stops before a turn the runtime would refuse past an unknown outcome", async () => {
   const session = fakeSession("aaa111", []);
   const items: RecoveryItem[] = [];
@@ -5635,7 +5703,7 @@ test("a line that starts with a path is a message; a command name is a command i
   expect(seen.length).toBe(runs);
 });
 
-test("ctrl+c mid-turn cancels it and drops the queue; with a session the next press quits", async () => {
+test("ctrl+c mid-turn cancels it and gives the queue back; the next presses clear it, then quit", async () => {
   let aborted = 0;
   const { ui, client, seen } = setup(
     quiet(async ({ options }) => {
@@ -5654,12 +5722,17 @@ test("ctrl+c mid-turn cancels it and drops the queue; with a session the next pr
   expect(await ui.fire("quit_request")).toBeUndefined();
   await client.idle();
   expect(aborted).toBe(1);
-  // The queued message was dropped with the turn, never sent.
+  // The queued message was never sent: it is back in the composer.
   expect(seen).toHaveLength(1);
-  expect(ui.statusLog()).toContain("Turn cancelled · ctrl+c again to quit");
-  expect(store(ui).status).toBe(
-    "Cancelled · queued message dropped · ctrl+c again to quit",
+  expect(ui.statusLog()).toContain(
+    "Turn cancelled · queued message back in the composer",
   );
+  expect(store(ui).status).toBe(
+    "Cancelled · queued message back in the composer",
+  );
+  expect(store(ui).draft).toBe("queued");
+  expect(await ui.fire("quit_request")).toBeUndefined();
+  expect(store(ui).draft).toBe("");
   expect(await ui.fire("quit_request")).toBe("quit");
 });
 

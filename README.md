@@ -95,9 +95,11 @@ a child and draws the whole screen from `apps/cli/src/tuimark/ui/app.tui`.
 - Composer: `enter` sends, `shift+enter` or `alt+enter` start a new line, and a
   pasted block stays one message. The box grows to eight rows, then scrolls.
   Sending while a reply is generating queues one message (a further send
-  replaces it; `esc` cancels the turn and drops the queue), and it runs when
-  the turn ends. `ctrl+c` first clears a non-empty draft, then cancels a
-  running turn as `esc` does; with neither it quits. `up` on the first line and `down` on the last recall what
+  replaces it), and it runs when the turn ends. `esc` cancels the turn and
+  gives the queued message back to the composer, after anything typed since;
+  so does a refusal at an unknown tool outcome. `ctrl+c` first clears a
+  non-empty draft, then cancels a running turn as `esc` does (between a
+  goal's turns it stops the goal); with neither it quits. `up` on the first line and `down` on the last recall what
   you sent in this session (a resumed session's earlier messages included).
   Typing `/` opens a popup of the slash commands with one-line descriptions,
   filtered as you type: `up`/`down` choose, `tab` completes into the draft,
