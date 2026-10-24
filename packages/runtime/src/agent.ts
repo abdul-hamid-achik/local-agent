@@ -384,8 +384,23 @@ function srcsetCandidates(
 ): { url: string; width?: number; height?: number }[] {
   if (!srcset) return [];
   const out: { url: string; width?: number; height?: number }[] = [];
-  for (const part of srcset.split(",")) {
-    const [url, descriptor] = part.trim().split(/\s+/);
+  // The URL is the next run of non-space characters, so a comma inside it
+  // (CDN transforms like w_400,c_fill) stays; a comma ends a candidate only
+  // after the URL's own trailing commas or after its descriptor.
+  let rest = srcset;
+  for (;;) {
+    rest = rest.replace(/^[\s,]+/, "");
+    if (!rest) break;
+    let url = rest.match(/^\S+/)?.[0] ?? "";
+    rest = rest.slice(url.length);
+    let descriptor: string | undefined;
+    if (url.endsWith(",")) url = url.replace(/,+$/, "");
+    else {
+      // Up to the next comma that is not inside parentheses.
+      const raw = rest.match(/^[^,(]*(?:\([^)]*\)[^,(]*)*/)?.[0] ?? "";
+      rest = rest.slice(raw.length);
+      descriptor = raw.trim().split(/\s+/)[0];
+    }
     if (!url) continue;
     if (!descriptor) {
       out.push({ url });

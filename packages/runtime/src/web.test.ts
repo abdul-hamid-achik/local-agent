@@ -1157,3 +1157,28 @@ test("fetch decodes the body with the charset the server declares", async () => 
     await run.cleanup();
   }
 });
+test("srcset candidates keep commas inside their URLs", async () => {
+  stubFetch((url) =>
+    url === "http://page.example/img"
+      ? htmlPage(`<html><body><h1>Photos</h1>
+<img src="data:image/gif;base64,R0lGODlhAQABAAAAACw=" alt="Hero" srcset="https://res.cloudinary.com/x/image/upload/w_400,c_fill/a.jpg 400w, https://res.cloudinary.com/x/image/upload/w_800,c_fill/a.jpg 800w">
+<img alt="Plain" srcset="/p0.svg 300w,/p2.jpg 600w">
+</body></html>`)
+      : undefined,
+  );
+  const run = await session([
+    { name: "fetch", arguments: { url: "http://page.example/img" } },
+  ]);
+  try {
+    const output = run.output(0);
+    expect(output).toContain(
+      "https://res.cloudinary.com/x/image/upload/w_400,c_fill/a.jpg 800x?",
+    );
+    expect(output).not.toContain("page.example/c_fill");
+    // A comma with no space after it still separates two candidates (the svg is skipped, so the second one is the image).
+    expect(output).toContain("http://page.example/p2.jpg 600x?");
+  } finally {
+    restoreFetch();
+    await run.cleanup();
+  }
+});
