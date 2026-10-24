@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { setTimeout as pause } from "node:timers/promises";
 import type { Tool } from "ollama";
 import { z } from "zod";
 import { admitOllamaModel, admitOpenAILocalModel } from "#runtime/admission";
@@ -645,18 +646,26 @@ const IMAGE_CONTENT_TYPES: Record<string, true> = {
 
 type SearchHit = { title: string; url: string; snippet: string };
 
-/** Query SearXNG's JSON API; null means "unavailable, try the next provider". */
+/** Query SearXNG's JSON API; null means "unavailable, try the next provider".
+ * The run's signal ends it at once and is rethrown rather than read as
+ * "unavailable": cancelling must not go on to ask DuckDuckGo. */
 async function searxngSearch(
   base: string,
   query: string,
+  signal: AbortSignal,
 ): Promise<SearchHit[] | null> {
+  const deadline = AbortSignal.any([
+    signal,
+    AbortSignal.timeout(SEARXNG_TIMEOUT_MS),
+  ]);
   let response: Response;
   try {
     response = await fetch(
       `${base}/search?q=${encodeURIComponent(query)}&format=json`,
-      { signal: AbortSignal.timeout(SEARXNG_TIMEOUT_MS) },
+      { signal: deadline },
     );
   } catch {
+    signal.throwIfAborted();
     return null;
   }
   if (response.status !== 200) return null;
@@ -673,6 +682,7 @@ async function searxngSearch(
       snippet: result.content ?? "",
     }));
   } catch {
+    signal.throwIfAborted();
     return null;
   }
 }
@@ -752,12 +762,18 @@ async function parseDuckDuckGo(
 
 /**
  * Query one DuckDuckGo endpoint; one retry on a network error or 5xx. Null
- * means "no usable answer" — the caller tries the next endpoint.
+ * means "no usable answer" — the caller tries the next endpoint. The run's
+ * signal ends the request and the retry pause, and is rethrown.
  */
 async function duckduckgoSearch(
   endpoint: (typeof DDG_ENDPOINTS)[number],
   query: string,
+  signal: AbortSignal,
 ): Promise<SearchHit[] | null> {
+  const deadline = AbortSignal.any([
+    signal,
+    AbortSignal.timeout(SEARXNG_TIMEOUT_MS),
+  ]);
   for (let attempt = 1; attempt <= DDG_ATTEMPTS; attempt++) {
     let response: Response | null = null;
     try {
@@ -766,15 +782,17 @@ async function duckduckgoSearch(
           "user-agent": BROWSER_UA,
           accept: "text/html",
         },
-        signal: AbortSignal.timeout(SEARXNG_TIMEOUT_MS),
+        signal: deadline,
       });
     } catch {
+      signal.throwIfAborted();
       response = null;
     }
     if (response?.status === 200)
       return parseDuckDuckGo(await response.text(), endpoint.origin);
     if (response && response.status < 500) return null;
-    if (attempt < DDG_ATTEMPTS) await Bun.sleep(DDG_RETRY_PAUSE_MS);
+    if (attempt < DDG_ATTEMPTS)
+      await pause(DDG_RETRY_PAUSE_MS, undefined, { signal });
   }
   return null;
 }
@@ -2325,13 +2343,13 @@ async function* agentTurn(
           const tried: string[] = [];
           if (searxngBase) {
             tried.push(`SearXNG at ${searxngBase}`);
-            hits = await searxngSearch(searxngBase, args.query);
+            hits = await searxngSearch(searxngBase, args.query, signal);
             if (hits) provider = "searxng";
           }
           if (!hits) {
             for (const endpoint of DDG_ENDPOINTS) {
               tried.push(endpoint.url);
-              hits = await duckduckgoSearch(endpoint, args.query);
+              hits = await duckduckgoSearch(endpoint, args.query, signal);
               if (hits) {
                 provider = endpoint.provider;
                 break;

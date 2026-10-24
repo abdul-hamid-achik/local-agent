@@ -1304,3 +1304,126 @@ test("fetch keeps the whitespace inside pre blocks and collapses it elsewhere", 
     await run.cleanup();
   }
 });
+/** Runs one tool call, aborting the run `afterMs` into it; resolves with how
+ * long the run took to end after the abort. A throw from the aborted run
+ * counts as ending. */
+async function abortedRun(call: Call, afterMs: number) {
+  const controller = new AbortController();
+  let abortedAt = Number.NaN;
+  setTimeout(() => {
+    abortedAt = performance.now();
+    controller.abort();
+  }, afterMs);
+  await session([call], "plan", false, undefined, controller.signal).then(
+    (run) => run.cleanup(),
+    () => undefined,
+  );
+  return performance.now() - abortedAt;
+}
+
+test("cancelling the run stops a fetch that is waiting on the server", async () => {
+  stubFetch((url) =>
+    url.startsWith("http://slow.example/")
+      ? new Promise<Response>(() => {})
+      : undefined,
+  );
+  try {
+    const sinceAbort = await abortedRun(
+      { name: "fetch", arguments: { url: "http://slow.example/page" } },
+      150,
+    );
+    expect(requestedUrls.filter((url) => url.includes("slow.example"))).toEqual(
+      ["http://slow.example/page"],
+    );
+    // The fetch timeout is 15 s: only the run's signal can end this early.
+    expect(sinceAbort).toBeLessThan(2_000);
+  } finally {
+    restoreFetch();
+  }
+}, 20_000);
+
+test("cancelling the run stops web_search instead of trying the next provider", async () => {
+  const hung = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch: () => new Promise<Response>(() => {}),
+  });
+  process.env.LOCAL_AGENT_SEARXNG_URL = hung.url.origin;
+  stubFetch((url) =>
+    url.startsWith("http://127.0.0.1") ? undefined : ddgResponse(),
+  );
+  try {
+    const sinceAbort = await abortedRun(
+      { name: "web_search", arguments: { query: "bun test" } },
+      150,
+    );
+    // Esc must not read as "SearXNG is down, ask DuckDuckGo".
+    expect(requestedUrls.filter((url) => url.includes("duckduckgo"))).toEqual(
+      [],
+    );
+    // SEARXNG_TIMEOUT_MS is 10 s: only the run's signal can end this early.
+    expect(sinceAbort).toBeLessThan(2_000);
+  } finally {
+    restoreFetch();
+    delete process.env.LOCAL_AGENT_SEARXNG_URL;
+    await hung.stop(true);
+  }
+}, 20_000);
+
+test("cancelling the run interrupts the DuckDuckGo retry pause", async () => {
+  delete process.env.LOCAL_AGENT_SEARXNG_URL;
+  const controller = new AbortController();
+  let abortedAt = Number.NaN;
+  stubFetch((url) => {
+    if (!url.startsWith("https://lite.duckduckgo.com/lite/")) return undefined;
+    // Cancel as the first attempt's 503 comes back, so the abort lands in the
+    // pause before the retry.
+    setTimeout(() => {
+      abortedAt = performance.now();
+      controller.abort();
+    }, 20);
+    return new Response("upstream error", { status: 503 });
+  });
+  try {
+    await session(
+      [{ name: "web_search", arguments: { query: "bun test" } }],
+      "plan",
+      false,
+      undefined,
+      controller.signal,
+    ).then(
+      (run) => run.cleanup(),
+      () => undefined,
+    );
+    const ended = performance.now();
+    expect(requestedUrls.filter((url) => url.includes("duckduckgo"))).toEqual([
+      expect.stringContaining("https://lite.duckduckgo.com/lite/"),
+    ]);
+    // The pause is 250 ms; the run must not sit it out.
+    expect(ended - abortedAt).toBeLessThan(150);
+  } finally {
+    restoreFetch();
+  }
+}, 20_000);
+
+test("cancelling the run stops a DuckDuckGo request that is waiting on the server", async () => {
+  delete process.env.LOCAL_AGENT_SEARXNG_URL;
+  stubFetch((url) =>
+    url.startsWith("https://lite.duckduckgo.com/lite/")
+      ? new Promise<Response>(() => {})
+      : undefined,
+  );
+  try {
+    const sinceAbort = await abortedRun(
+      { name: "web_search", arguments: { query: "bun test" } },
+      150,
+    );
+    // Esc must not move on to the html endpoint either.
+    expect(requestedUrls.filter((url) => url.includes("duckduckgo"))).toEqual([
+      expect.stringContaining("https://lite.duckduckgo.com/lite/"),
+    ]);
+    expect(sinceAbort).toBeLessThan(2_000);
+  } finally {
+    restoreFetch();
+  }
+}, 20_000);
