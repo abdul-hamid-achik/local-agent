@@ -470,8 +470,13 @@ describe("finish reasons", () => {
             choices: [
               { delta: {} },
               { delta: {}, finish_reason: 5 },
+              { delta: {}, finish_reason: "" },
               { delta: {}, finish_reason: "length" },
             ],
+          }),
+          // An empty reason in a later chunk does not erase it.
+          JSON.stringify({
+            choices: [{ delta: {}, finish_reason: "" }],
           }),
         ),
       ),

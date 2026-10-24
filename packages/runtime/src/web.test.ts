@@ -1214,6 +1214,12 @@ test("only the page's own challenge markers count as a bot challenge", async () 
         `<html><head><title>Not found</title></head><body><noscript>Enable JavaScript and cookies to continue</noscript><h1>404</h1></body></html>`,
         { status: 404, headers: { "content-type": "text/html" } },
       );
+    // The same, with the <noscript> cut open by the first 8 KiB.
+    if (url.endsWith("/missing-long"))
+      return new Response(
+        `<html><head><title>Not found</title></head><body>${"x".repeat(8_000)}<noscript>Enable JavaScript and cookies to continue${"y".repeat(500)}</noscript></body></html>`,
+        { status: 404, headers: { "content-type": "text/html" } },
+      );
     if (url.endsWith("/markers"))
       return new Response(
         `<html><head><title>Checking</title></head><body><div class="cf-browser-verification"></div></body></html>`,
@@ -1229,6 +1235,7 @@ test("only the page's own challenge markers count as a bot challenge", async () 
       "forbidden",
       "markers",
       "missing",
+      "missing-long",
     ].map((name) => ({
       name: "fetch",
       arguments: { url: `http://cf.example/${name}` },
@@ -1242,6 +1249,7 @@ test("only the page's own challenge markers count as a bot challenge", async () 
       "failed",
       "failed",
       "failed",
+      "failed",
     ]);
     expect(run.output(0)).toContain("behind a bot challenge");
     expect(run.output(1)).toContain("behind a bot challenge");
@@ -1252,6 +1260,8 @@ test("only the page's own challenge markers count as a bot challenge", async () 
     expect(run.output(4)).toContain("behind a bot challenge");
     expect(run.output(5)).toContain("HTTP 404");
     expect(run.output(5)).not.toContain("bot challenge");
+    expect(run.output(6)).toContain("HTTP 404");
+    expect(run.output(6)).not.toContain("bot challenge");
   } finally {
     restoreFetch();
     await run.cleanup();

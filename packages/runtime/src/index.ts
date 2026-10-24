@@ -496,9 +496,11 @@ async function* openAILocalChat(
     }
     // The same choices the parser's finished check looks at, not only the
     // first. One reply is asked for; a server that sends several choices has
-    // its first string reason count, and a reason of another type is skipped.
+    // its first non-empty string reason count, and anything else is skipped.
+    // A later chunk's reason replaces an earlier one.
     const reason = part.choices?.find(
-      (choice) => typeof choice.finish_reason === "string",
+      (choice) =>
+        typeof choice.finish_reason === "string" && choice.finish_reason !== "",
     )?.finish_reason;
     if (typeof reason === "string") finishReason = reason;
     if (part.usage) usage = part.usage;
