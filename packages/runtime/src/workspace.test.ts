@@ -9,7 +9,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, expect, test, vi } from "vitest";
 import { changeLines, secretPathIn, Workspace } from "#runtime/workspace";
 
@@ -204,11 +204,21 @@ test("well-known credential files are excluded by name, not ordinary source that
     "cert.pfx",
     "AuthKey_ABC.p8",
     "vault.kdbx",
+    "login.keychain-db",
+    "old.keychain",
+    // Fullwidth letters fold to `.npmrc` (NFKC), as the file system may see it.
+    ".ｎｐｍｒｃ",
   ];
   for (const name of secrets) {
     await writeFile(join(root, name), "secret");
     await expect(workspace.read(name), name).rejects.toThrow("excluded");
   }
+  await mkdir(join(root, "terraform.tfstate.d"));
+  await writeFile(join(root, "terraform.tfstate.d", "prod"), "secret");
+  await expect(workspace.read("terraform.tfstate.d/prod")).rejects.toThrow(
+    "excluded",
+  );
+  expect(await workspace.list(".")).not.toContain("terraform.tfstate.d");
   await mkdir(join(root, "infra"));
   await writeFile(join(root, "infra", "credentials.json"), "secret");
   await expect(workspace.read("infra/credentials.json")).rejects.toThrow(
@@ -227,6 +237,36 @@ test("well-known credential files are excluded by name, not ordinary source that
     await writeFile(join(root, name), "fine");
     expect(await workspace.read(name), name).toBe("fine");
   }
+});
+
+test("credential files at a fixed place are excluded by their folder too, without hiding the folder's ordinary files", async () => {
+  const { root, workspace } = await fixture();
+  const files: [string, boolean][] = [
+    [".docker/config.json", true],
+    [".DOCKER/Config.json", true],
+    [".config/gh/hosts.yml", true],
+    [".config/gcloud/credentials.db", true],
+    [".m2/settings.xml", true],
+    [".docker/Dockerfile", false],
+    [".config/other.json", false],
+    [".config/gh/config.yml", false],
+    [".m2/pom.xml", false],
+    [".yarnrc.yml", false],
+    ["sub/.docker/config.json", true],
+  ];
+  for (const [path, secret] of files) {
+    await mkdir(join(root, dirname(path)), { recursive: true });
+    await writeFile(join(root, path), "contents");
+    if (secret)
+      await expect(workspace.read(path), path).rejects.toThrow("excluded");
+    else expect(await workspace.read(path), path).toBe("contents");
+  }
+  await expect(workspace.list(".config/gcloud")).rejects.toThrow("excluded");
+  expect(await workspace.list(".docker")).not.toContain("config.json");
+  expect(await workspace.list(".docker")).toContain("Dockerfile");
+  expect(await workspace.list(".config")).not.toContain("gcloud");
+  expect(await workspace.list(".config")).toContain("other.json");
+  expect(await workspace.list(".m2")).not.toContain("settings.xml");
 });
 
 test("secretPathIn names the arguments the file tools would refuse, by the same rule", () => {

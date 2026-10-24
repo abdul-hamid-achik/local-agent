@@ -572,14 +572,19 @@ export class Workspace implements Disposable {
     const entries = readdirSync(absolute, { withFileTypes: true });
     if (!same()) throw new Error("Workspace directory changed during listing");
     const parent = relative.split("/").at(-1);
+    const above = relative.split("/").filter(Boolean);
     return entries
-      .filter((entry) =>
-        entry.isDirectory()
-          ? !SKIPPED_DIRECTORIES.has(entry.name) &&
-            !isExcludedName(entry.name, false) &&
-            !isUserConfig(parent, entry.name) &&
-            !this.isConfig(relative ? `${relative}/${entry.name}` : entry.name)
-          : !isExcludedName(entry.name, true),
+      .filter(
+        (entry) =>
+          !endsScopedSecret([...above, entry.name], above.length) &&
+          (entry.isDirectory()
+            ? !SKIPPED_DIRECTORIES.has(entry.name) &&
+              !isExcludedName(entry.name, false) &&
+              !isUserConfig(parent, entry.name) &&
+              !this.isConfig(
+                relative ? `${relative}/${entry.name}` : entry.name,
+              )
+            : !isExcludedName(entry.name, true)),
       )
       .sort(
         (a, b) =>
@@ -965,9 +970,34 @@ const ENV_TEMPLATES = new Set([
   ".env.dist",
 ]);
 
+/**
+ * Credential files at a fixed place under a folder that is otherwise
+ * ordinary (a project may commit `.docker/` or `.config/`): excluded by the
+ * sequence of names, like the user config below.
+ */
+const SCOPED_SECRETS: readonly (readonly string[])[] = [
+  [".docker", "config.json"],
+  [".config", "gh", "hosts.yml"],
+  [".config", "gcloud"],
+  [".m2", "settings.xml"],
+];
+
+/** A name as the file system may spell it: `ＮＰＭＲＣ` and `.NPMRC` are `.npmrc`. */
+const fold = (part: string) => part.normalize("NFKC").toLowerCase();
+
+/** Whether `parts[index]` ends one of the scoped sequences. */
+function endsScopedSecret(parts: readonly string[], index: number): boolean {
+  return SCOPED_SECRETS.some((sequence) =>
+    sequence.every(
+      (name, offset) =>
+        fold(parts[index - sequence.length + 1 + offset] ?? "") === name,
+    ),
+  );
+}
+
 /** Host secret exclusions; a template such as `.env.example` is allowed only as a leaf. */
 function isExcludedName(part: string, leaf: boolean): boolean {
-  const lower = part.toLowerCase();
+  const lower = fold(part);
   return (
     EXCLUDED_NAMES.has(lower) ||
     (lower.startsWith(".env.") && !(leaf && ENV_TEMPLATES.has(part))) ||
@@ -982,6 +1012,8 @@ function isExcludedName(part: string, leaf: boolean): boolean {
     lower.endsWith(".p8") ||
     lower.endsWith(".ppk") ||
     lower.endsWith(".kdbx") ||
+    lower.endsWith(".keychain") ||
+    lower.endsWith(".keychain-db") ||
     lower.endsWith(".tfstate") ||
     lower.endsWith(".tfstate.backup")
   );
@@ -1004,7 +1036,8 @@ export function secretPathIn(argument: string): string | undefined {
   const hidden = parts.some(
     (part, index) =>
       isExcludedName(part, index === parts.length - 1) ||
-      isUserConfig(parts[index - 1], part),
+      isUserConfig(parts[index - 1], part) ||
+      endsScopedSecret(parts, index),
   );
   return hidden ? value : undefined;
 }
@@ -1050,7 +1083,8 @@ function rejectExcluded(relative: string): void {
     parts.some(
       (part, index) =>
         isExcludedName(part, index === parts.length - 1) ||
-        isUserConfig(parts[index - 1], part),
+        isUserConfig(parts[index - 1], part) ||
+        endsScopedSecret(parts, index),
     )
   )
     throw new Error("Workspace path is excluded");
