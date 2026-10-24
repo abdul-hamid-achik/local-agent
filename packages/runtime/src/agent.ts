@@ -258,7 +258,7 @@ async function htmlToText(html: string): Promise<string> {
     .trim();
 }
 
-type ExtractedLink = { url: string; text: string };
+type ExtractedLink = { url: string; text: string; score: number };
 type ExtractedImage = {
   url: string;
   width?: number;
@@ -316,15 +316,52 @@ function srcsetCandidates(
   return out;
 }
 
+/** Paths that are navigation chrome on most sites: never worth a source. */
+const NAV_PATHS = new Set([
+  "/",
+  "/shorts",
+  "/login",
+  "/signup",
+  "/register",
+  "/account",
+  "/settings",
+  "/search",
+]);
+
+/** Pages that answer with a bot challenge instead of content. */
+const BOT_CHALLENGE =
+  /Just a moment\.\.\.|cf-browser-verification|challenge-platform|Enable JavaScript and cookies to continue/i;
+
+/** URL or alt words that mark decorative image chrome. */
+const IMAGE_CHROME = /(logo|icon|sprite|avatar|favicon|emoji|badge)/i;
+
+/** Below this score a link is chrome: short text, one path segment. */
+const LINK_MIN_SCORE = 4;
+
+/** Links are ranked, not first-seen: chrome pages lose to content. */
+function linkScore(url: string, text: string, base: URL): number {
+  const parsed = new URL(url);
+  if (parsed.origin === base.origin && NAV_PATHS.has(parsed.pathname)) return 0;
+  const segments = parsed.pathname.split("/").filter(Boolean);
+  let score = 1 + Math.min(text.trim().length, 40) / 4;
+  if (segments.length >= 2) score += 10;
+  if (/\/(wiki|wikis|guide|guides|walkthrough)\b/.test(parsed.pathname))
+    score += 20;
+  if (segments.length === 1 && segments[0] === "") score = 0;
+  return score;
+}
+
 /**
  * One extra HTMLRewriter pass over the same HTML htmlToText converts: the top
- * links (first-seen order) and top images (scored by area, map-ish alt text
- * boosted), absolute URLs only, deduped, nav chrome skipped.
+ * links (ranked by anchor text and path specificity, chrome skipped) and top
+ * images (scored by area, map-ish alt text boosted), absolute URLs only,
+ * deduped.
  */
 async function extractHtmlAssets(
   html: string,
   baseUrl: string,
 ): Promise<{ links: ExtractedLink[]; images: ExtractedImage[] }> {
+  const base = new URL(baseUrl);
   const links: ExtractedLink[] = [];
   const seenLinks = new Set<string>();
   let pendingLink: { url: string; text: string } | undefined;
@@ -338,7 +375,8 @@ async function extractHtmlAssets(
         pendingLink = { url, text: "" };
         el.onEndTag(() => {
           if (pendingLink) {
-            links.push(pendingLink);
+            const score = linkScore(pendingLink.url, pendingLink.text, base);
+            if (score >= LINK_MIN_SCORE) links.push({ ...pendingLink, score });
             seenLinks.add(pendingLink.url);
           }
           pendingLink = undefined;
@@ -386,6 +424,11 @@ async function extractHtmlAssets(
         ]
           .join(" ")
           .trim();
+        // Chrome art never helps a reader: logos, icons, sprites, avatars,
+        // and images declared smaller than 200px on their longest side.
+        if (IMAGE_CHROME.test(url) || IMAGE_CHROME.test(alt)) return;
+        const declared = Math.max(width ?? 0, height ?? 0);
+        if (declared > 0 && declared < 200) return;
         const area = (width ?? 0) * (height ?? width ?? 0);
         images.push({
           url,
@@ -399,6 +442,7 @@ async function extractHtmlAssets(
     })
     .transform(new Response(html))
     .text();
+  links.sort((a, b) => b.score - a.score);
   return { links, images };
 }
 
@@ -411,7 +455,9 @@ function extractedFooter(assets: {
   const links = assets.links.slice(0, EXTRACT_LINK_LIMIT);
   lines.push(`links: ${links.length}`);
   for (const [index, link] of links.entries()) {
-    const text = link.text.replace(/\s+/g, " ").trim().slice(0, 60);
+    const text = decodeEntities(link.text.replace(/\s+/g, " "))
+      .trim()
+      .slice(0, 60);
     lines.push(`${index + 1}. ${link.url}${text ? `  ${text}` : ""}`);
   }
   const images = [...assets.images]
@@ -479,40 +525,45 @@ async function searxngSearch(
   }
 }
 
+/** The DuckDuckGo endpoints tried in order after SearXNG. Lite is small and
+ * stable but blocks quickly; the classic html page usually answers next. */
+const DDG_ENDPOINTS = [
+  {
+    provider: "duckduckgo",
+    url: "https://lite.duckduckgo.com/lite/",
+    origin: "https://lite.duckduckgo.com",
+  },
+  {
+    provider: "duckduckgo html",
+    url: "https://html.duckduckgo.com/html/",
+    origin: "https://html.duckduckgo.com",
+  },
+] as const;
+type SearchProvider = "searxng" | (typeof DDG_ENDPOINTS)[number]["provider"];
+/** One retry per endpoint after a network error or 5xx, with a short pause. */
+const DDG_ATTEMPTS = 2;
+const DDG_RETRY_PAUSE_MS = 250;
+
 /**
- * Query DuckDuckGo Lite and parse its results table. Result links point at
- * /l/?uddg=<urlencoded target>; the snippet sits in the next result-snippet
- * cell. Null means "no usable answer" (block, captcha, zero results).
+ * Parse one DuckDuckGo result page. Result links point at
+ * /l/?uddg=<urlencoded target>; the snippet follows in a td.result-snippet
+ * cell (Lite) or an a.result__snippet anchor (html). Null means "no usable
+ * answer" (block, captcha, zero results).
  */
-async function duckduckgoSearch(query: string): Promise<SearchHit[] | null> {
-  let response: Response;
-  try {
-    response = await fetch(
-      `https://lite.duckduckgo.com/lite/?q=${encodeURIComponent(query)}`,
-      {
-        headers: {
-          "user-agent": BROWSER_UA,
-          accept: "text/html",
-        },
-        signal: AbortSignal.timeout(SEARXNG_TIMEOUT_MS),
-      },
-    );
-  } catch {
-    return null;
-  }
-  if (response.status !== 200) return null;
-  const html = await response.text();
+async function parseDuckDuckGo(
+  html: string,
+  origin: string,
+): Promise<SearchHit[] | null> {
   const hits: SearchHit[] = [];
   let pending: { title: string; url: string } | undefined;
   await new HTMLRewriter()
     .on("a", {
       element: (el) => {
+        // The html page's snippet anchor is not a result link.
+        if (el.getAttribute("class")?.includes("result__snippet")) return;
         const href = el.getAttribute("href");
         if (!href?.includes("uddg=")) return;
-        const target = new URL(
-          href,
-          "https://lite.duckduckgo.com",
-        ).searchParams.get("uddg");
+        const target = new URL(href, origin).searchParams.get("uddg");
         if (!target) return;
         pending = { title: "", url: target };
         el.onEndTag(() => {
@@ -530,6 +581,12 @@ async function duckduckgoSearch(query: string): Promise<SearchHit[] | null> {
         if (hit) hit.snippet += chunk.text;
       },
     })
+    .on("a.result__snippet", {
+      text: (chunk) => {
+        const hit = hits[hits.length - 1];
+        if (hit) hit.snippet += chunk.text;
+      },
+    })
     .transform(new Response(html))
     .text();
   return hits.length
@@ -539,6 +596,35 @@ async function duckduckgoSearch(query: string): Promise<SearchHit[] | null> {
         snippet: decodeEntities(hit.snippet),
       }))
     : null;
+}
+
+/**
+ * Query one DuckDuckGo endpoint; one retry on a network error or 5xx. Null
+ * means "no usable answer" — the caller tries the next endpoint.
+ */
+async function duckduckgoSearch(
+  endpoint: (typeof DDG_ENDPOINTS)[number],
+  query: string,
+): Promise<SearchHit[] | null> {
+  for (let attempt = 1; attempt <= DDG_ATTEMPTS; attempt++) {
+    let response: Response | null = null;
+    try {
+      response = await fetch(`${endpoint.url}?q=${encodeURIComponent(query)}`, {
+        headers: {
+          "user-agent": BROWSER_UA,
+          accept: "text/html",
+        },
+        signal: AbortSignal.timeout(SEARXNG_TIMEOUT_MS),
+      });
+    } catch {
+      response = null;
+    }
+    if (response?.status === 200)
+      return parseDuckDuckGo(await response.text(), endpoint.origin);
+    if (response && response.status < 500) return null;
+    if (attempt < DDG_ATTEMPTS) await Bun.sleep(DDG_RETRY_PAUSE_MS);
+  }
+  return null;
 }
 
 /** Decode the handful of HTML entities DuckDuckGo titles/snippets contain. */
@@ -1133,7 +1219,11 @@ async function* agentTurn(
     : options.intent === "plan"
       ? tools.filter((tool) => READ_ONLY_TOOLS.has(tool.function.name ?? ""))
       : options.intent === "chat"
-        ? tools.filter((tool) => CHAT_TOOLS.has(tool.function.name ?? ""))
+        ? availableTools.filter(
+            (tool) =>
+              CHAT_TOOLS.has(tool.function.name ?? "") ||
+              mcpTools.has(tool.function.name ?? ""),
+          )
         : availableTools;
   for (let step = 0; step < stepLimit; step++) {
     signal.throwIfAborted();
@@ -1261,6 +1351,10 @@ async function* agentTurn(
       const effectsDenied =
         options.intent !== undefined && options.intent !== "build";
       const modeName = options.intent === "chat" ? "Chat" : "Plan";
+      // Chat keeps MCP on: a configured browser is exactly what reading a
+      // guarded page needs, and every MCP call still crosses the approval
+      // boundary. Plan is strictly read-only, so it keeps the denial.
+      const mcpDenied = options.intent === "plan";
       try {
         signal.throwIfAborted();
         if (name === "read") {
@@ -1312,8 +1406,22 @@ async function* agentTurn(
             FETCH_TIMEOUT_MS,
             FETCH_HEADERS,
           );
-          if (response.status >= 400)
+          if (response.status >= 400) {
+            // A Cloudflare-style challenge often arrives as 403/503 with an
+            // HTML body; name it instead of a bare status.
+            const type = textContentType(response);
+            if (
+              (response.status === 403 || response.status === 503) &&
+              (type === "text/html" || type.endsWith("+html"))
+            ) {
+              const peek = (await readCapped(response, 64 * 1024)).text;
+              if (BOT_CHALLENGE.test(peek))
+                throw new Error(
+                  `fetch: ${finalUrl} is behind a bot challenge (Cloudflare-style, HTTP ${response.status}). Plain HTTP cannot pass it; if a browser MCP is configured, use its navigation tool instead (e.g. browser__browser_navigate), or open the URL in your own browser.`,
+                );
+            }
             throw new Error(`fetch: HTTP ${response.status} for ${finalUrl}`);
+          }
           const contentType = textContentType(response);
           if (IMAGE_CONTENT_TYPES[contentType]) {
             // Image branch: reuse read_image's checks (magic bytes, not the
@@ -1356,6 +1464,10 @@ async function* agentTurn(
             );
             const isHtml =
               contentType === "text/html" || contentType.endsWith("+html");
+            if (isHtml && BOT_CHALLENGE.test(text))
+              throw new Error(
+                `fetch: ${finalUrl} is behind a bot challenge (Cloudflare-style). Plain HTTP cannot pass it; if a browser MCP is configured, use its navigation tool instead (e.g. browser__browser_navigate), or open the URL in your own browser.`,
+              );
             const body = isHtml
               ? `${await htmlToText(text)}\n\n${extractedFooter(
                   await extractHtmlAssets(text, finalUrl),
@@ -1385,17 +1497,26 @@ async function* agentTurn(
             "",
           );
           let hits: SearchHit[] | null = null;
-          let provider: "searxng" | "duckduckgo" = "duckduckgo";
+          let provider: SearchProvider = "duckduckgo";
+          const tried: string[] = [];
           if (searxngBase) {
+            tried.push(`SearXNG at ${searxngBase}`);
             hits = await searxngSearch(searxngBase, args.query);
             if (hits) provider = "searxng";
           }
-          if (!hits) hits = await duckduckgoSearch(args.query);
+          if (!hits) {
+            for (const endpoint of DDG_ENDPOINTS) {
+              tried.push(endpoint.url);
+              hits = await duckduckgoSearch(endpoint, args.query);
+              if (hits) {
+                provider = endpoint.provider;
+                break;
+              }
+            }
+          }
           if (!hits)
             throw new Error(
-              `web_search: no search provider answered${
-                searxngBase ? ` (SearXNG at ${searxngBase} failed too)` : ""
-              }. For a stable backend, run a SearXNG instance and set LOCAL_AGENT_SEARXNG_URL to its address.`,
+              `web_search: no search provider answered (tried ${tried.join(", ")}). For a stable backend, run a SearXNG instance and set LOCAL_AGENT_SEARXNG_URL to its address.`,
             );
           const top = hits.slice(0, 8);
           const list = top.length
@@ -1573,7 +1694,7 @@ async function* agentTurn(
             }
           }
         } else if (mcpConnection) {
-          if (effectsDenied) {
+          if (mcpDenied) {
             status = "denied";
             output = `${modeName} mode does not authorize MCP calls from server annotations`;
           } else {

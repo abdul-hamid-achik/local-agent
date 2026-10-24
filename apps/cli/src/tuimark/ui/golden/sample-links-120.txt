@@ -11,7 +11,7 @@
 │ [1] guide                                                                                                            │
 │ [2] GitHub mirror                                                                                                    │
 │ [3] fourth link                                                                                                      │
-│                                                                                                                      │
+│ ⌘+click needs /mouse off                                                                                             │
 │                                                                                                                      │
 │                                                                                                                      │
 │                                                                                                                      │

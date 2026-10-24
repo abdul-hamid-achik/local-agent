@@ -8,6 +8,7 @@ import {
   runAgent,
 } from "#runtime/agent";
 import { resolveProvider } from "#runtime/config";
+import type { McpConnection } from "#runtime/mcp";
 import { Workspace } from "#runtime/workspace";
 
 type Call = { name: string; arguments: Record<string, unknown> };
@@ -45,6 +46,7 @@ async function session(
   calls: Call[],
   intent: "plan" | "build" | "chat" = "plan",
   vision = false,
+  mcp?: McpConnection[],
 ) {
   const root = await mkdtemp(join(tmpdir(), "local-agent-web-"));
   const bodies: Body[] = [];
@@ -82,6 +84,7 @@ async function session(
         intent,
         signal: AbortSignal.timeout(10_000),
         approve: (async (proposal: ApprovalRequest) => true) as never,
+        mcp,
       },
     ))
       events.push(event);
@@ -103,6 +106,32 @@ async function session(
     output: (index: number) => results[index]?.output ?? "",
     cleanup: () => rm(root, { recursive: true, force: true }),
   };
+}
+
+/** One fake MCP server holding a single browser-shaped tool. */
+function fakeBrowserMcp(): McpConnection[] {
+  return [
+    {
+      tools: [
+        {
+          name: "browser__browser_navigate",
+          description: "navigate",
+          inputSchema: { type: "object" },
+          readOnly: false,
+        },
+      ],
+      async callTool() {
+        return {
+          transport: "success" as const,
+          domain: "unknown" as const,
+          evidence: "unverified" as const,
+          isError: false,
+          text: "navigated",
+        };
+      },
+      async close() {},
+    },
+  ];
 }
 
 test("fetch follows redirects and converts HTML to readable text", async () => {
@@ -221,6 +250,19 @@ const ddgResponse = () =>
     headers: { "content-type": "text/html; charset=utf-8" },
   });
 
+const DDG_HTML_HTML = `<html><body><div class="result results_links">
+<h2 class="result__title"><a rel="nofollow" class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fbun.sh%2Fdocs%2Ftest&amp;rut=abc">Bun docs</a></h2>
+<a class="result__snippet" href="https://bun.sh/docs/test">Run tests with bun test.</a>
+</div></body></html>`;
+const ddgHtmlResponse = () =>
+  new Response(DDG_HTML_HTML, {
+    headers: { "content-type": "text/html; charset=utf-8" },
+  });
+const ddgCaptcha = () =>
+  new Response('<html><body><div id="challenge">captcha</div></body></html>', {
+    headers: { "content-type": "text/html; charset=utf-8" },
+  });
+
 test("web_search falls back to DuckDuckGo Lite and decodes uddg links", async () => {
   delete process.env.LOCAL_AGENT_SEARXNG_URL;
   stubFetch((url) => {
@@ -241,6 +283,89 @@ test("web_search falls back to DuckDuckGo Lite and decodes uddg links", async ()
     expect(output).toContain("2. Second & result");
     expect(output).toContain("https://example.org/a b");
     expect(output.trimEnd().endsWith("via duckduckgo")).toBe(true);
+  } finally {
+    restoreFetch();
+    await run.cleanup();
+  }
+});
+
+test("web_search retries DuckDuckGo Lite on a 5xx then uses the html endpoint", async () => {
+  delete process.env.LOCAL_AGENT_SEARXNG_URL;
+  const liteAttempts: number[] = [];
+  stubFetch((url) => {
+    if (url.startsWith("http://127.0.0.1")) return undefined;
+    if (url.startsWith("https://lite.duckduckgo.com/lite/")) {
+      liteAttempts.push(requestInits.length);
+      return new Response("upstream error", { status: 503 });
+    }
+    if (url.startsWith("https://html.duckduckgo.com/html/"))
+      return ddgHtmlResponse();
+    throw new Error(`unexpected fetch: ${url}`);
+  });
+  const run = await session([
+    { name: "web_search", arguments: { query: "bun test" } },
+  ]);
+  try {
+    expect(run.results.map((result) => result.status)).toEqual(["succeeded"]);
+    // One retry per endpoint: Lite answered 503 twice before the fallback.
+    expect(liteAttempts).toHaveLength(2);
+    const output = run.output(0);
+    expect(output).toContain("1. Bun docs");
+    expect(output).toContain("https://bun.sh/docs/test");
+    expect(output).toContain("Run tests with bun test.");
+    expect(output.trimEnd().endsWith("via duckduckgo html")).toBe(true);
+  } finally {
+    restoreFetch();
+    await run.cleanup();
+  }
+});
+
+test("web_search falls back to the html endpoint when Lite returns a captcha page", async () => {
+  delete process.env.LOCAL_AGENT_SEARXNG_URL;
+  stubFetch((url) => {
+    if (url.startsWith("http://127.0.0.1")) return undefined;
+    if (url.startsWith("https://lite.duckduckgo.com/lite/"))
+      return ddgCaptcha();
+    if (url.startsWith("https://html.duckduckgo.com/html/"))
+      return ddgHtmlResponse();
+    throw new Error(`unexpected fetch: ${url}`);
+  });
+  const run = await session([
+    { name: "web_search", arguments: { query: "bun test" } },
+  ]);
+  try {
+    expect(run.results.map((result) => result.status)).toEqual(["succeeded"]);
+    const output = run.output(0);
+    expect(output).toContain("1. Bun docs");
+    expect(output).toContain("https://bun.sh/docs/test");
+    expect(output.trimEnd().endsWith("via duckduckgo html")).toBe(true);
+  } finally {
+    restoreFetch();
+    await run.cleanup();
+  }
+});
+
+test("web_search errors list every endpoint tried when all parse zero hits", async () => {
+  delete process.env.LOCAL_AGENT_SEARXNG_URL;
+  stubFetch((url) => {
+    if (url.startsWith("http://127.0.0.1")) return undefined;
+    if (
+      url.startsWith("https://lite.duckduckgo.com/lite/") ||
+      url.startsWith("https://html.duckduckgo.com/html/")
+    )
+      return ddgCaptcha();
+    throw new Error(`unexpected fetch: ${url}`);
+  });
+  const run = await session([
+    { name: "web_search", arguments: { query: "bun test" } },
+  ]);
+  try {
+    expect(run.results.map((result) => result.status)).toEqual(["failed"]);
+    const failure = run.output(0);
+    expect(failure).toContain("no search provider answered");
+    expect(failure).toContain("https://lite.duckduckgo.com/lite/");
+    expect(failure).toContain("https://html.duckduckgo.com/html/");
+    expect(failure).toContain("LOCAL_AGENT_SEARXNG_URL");
   } finally {
     restoreFetch();
     await run.cleanup();
@@ -315,7 +440,10 @@ test("web_search errors mentioning LOCAL_AGENT_SEARXNG_URL when both providers f
   process.env.LOCAL_AGENT_SEARXNG_URL = "http://127.0.0.1:59999";
   stubFetch((url) => {
     if (url.startsWith("http://127.0.0.1")) return undefined;
-    if (url.startsWith("https://lite.duckduckgo.com/lite/"))
+    if (
+      url.startsWith("https://lite.duckduckgo.com/lite/") ||
+      url.startsWith("https://html.duckduckgo.com/html/")
+    )
       return new Response("blocked", { status: 403 });
     return undefined;
   });
@@ -326,6 +454,9 @@ test("web_search errors mentioning LOCAL_AGENT_SEARXNG_URL when both providers f
     expect(run.results.map((result) => result.status)).toEqual(["failed"]);
     const failure = run.output(0);
     expect(failure).toContain("no search provider answered");
+    expect(failure).toContain("SearXNG at http://127.0.0.1:59999");
+    expect(failure).toContain("https://lite.duckduckgo.com/lite/");
+    expect(failure).toContain("https://html.duckduckgo.com/html/");
     expect(failure).toContain("LOCAL_AGENT_SEARXNG_URL");
   } finally {
     restoreFetch();
@@ -334,8 +465,8 @@ test("web_search errors mentioning LOCAL_AGENT_SEARXNG_URL when both providers f
   }
 });
 
-test("chat intent offers the read-only research set without todo_write, task or effects", async () => {
-  const run = await session([], "chat");
+test("chat intent offers the research set and configured MCP tools, without todo_write/task/effects", async () => {
+  const run = await session([], "chat", false, fakeBrowserMcp());
   try {
     expect(run.bodies[0]?.tools.map((tool) => tool.function.name)).toEqual([
       "read",
@@ -344,13 +475,23 @@ test("chat intent offers the read-only research set without todo_write, task or 
       "search",
       "fetch",
       "web_search",
+      "browser__browser_navigate",
     ]);
   } finally {
     await run.cleanup();
   }
+  // Plan stays strictly read-only: the same MCP server is not offered there.
+  const plan = await session([], "plan", false, fakeBrowserMcp());
+  try {
+    expect(
+      plan.bodies[0]?.tools.map((tool) => tool.function.name),
+    ).not.toContain("browser__browser_navigate");
+  } finally {
+    await plan.cleanup();
+  }
 });
 
-test("chat intent hard-denies effects exactly like plan", async () => {
+test("chat intent hard-denies edits exactly like plan, but keeps MCP approval-gated", async () => {
   const run = await session(
     [
       {
@@ -473,7 +614,7 @@ test("fetch appends a bounded extracted footer of top links and images", async (
     return new Response(
       `<html><body><h1>Guide</h1>
 <a href="/wiki/Boss">Boss name</a>
-<a href="https://else.example/page">Elsewhere</a>
+<a href="https://else.example/page">Elsewhere walkthrough notes</a>
 <a href="#top">skip anchor</a>
 <a href="mailto:x@example.com">skip mail</a>
 <a href="https://else.example/page">duplicate</a>

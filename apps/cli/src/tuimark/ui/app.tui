@@ -148,6 +148,10 @@
         <col each="lm.links as l" key="l.url">
           <text href="{l.url}" class="link" wrap="wrap">[{l.n}] {l.text}</text>
         </col>
+        <!-- Mouse reporting is on by default for wheel scrolling, and a
+             capturing app leaves ⌘+click to the app (Ghostty #11907), so the
+             link needs /mouse off to open. Inline has no mouse: no hint. -->
+        <text class="la-muted" wrap="wrap">⌘+click needs /mouse off</text>
       </col>
       <col each="lm.images as im" key="im.alt" class="la-image">
         <img src="{im.src}" alt="{im.alt}" quality="auto"/>

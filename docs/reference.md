@@ -77,7 +77,7 @@ there is no approval dialog to answer. See [Safety](/safety).
 |---|---|
 | `/mode plan\|build\|chat` | Switch intent. `plan` reads only; `build` can edit; `chat` is the conversational research profile |
 | `/theme dark\|light\|auto` | Set the session theme |
-| `/mouse on\|off` | Toggle mouse reporting; fullscreen only |
+| `/mouse on\|off` | Toggle mouse reporting; fullscreen only. OSC 8 links: ⌘/Ctrl+click may require `/mouse off` (the terminal app owns the mouse while reporting is on) |
 | `/permissions` | Show session grants and the workspace file rules, each with its origin |
 | `/permissions clear` | Clear session approval grants |
 | `/permissions clear rules` | Empty the rules in `.local-agent/permissions.json` |
