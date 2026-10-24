@@ -19,6 +19,7 @@ import type { Provider } from "#runtime/config";
 import { postEditDiagnostics } from "#runtime/diagnostics";
 import {
   chat,
+  INVALID_ARGUMENTS,
   type Message,
   MessageSchema,
   type RunEvent,
@@ -1433,6 +1434,14 @@ async function* agentTurn(
               mcpTools.has(tool.function.name ?? ""),
           )
         : availableTools;
+  // A call to a tool this turn did not offer (a model that remembers one
+  // from elsewhere) is refused, not run: a subagent's `task` would nest
+  // without limit, and chat has no run state for `todo_write`.
+  const offeredNames = new Set(
+    offeredTools.map((tool) => tool.function.name ?? ""),
+  );
+  // Calls refused this turn, by name and arguments.
+  const refused = new Set<string>();
   // The last call's reported prompt size and the characters it was made
   // of: the next prompt is estimated from the characters added since.
   let anchor: { tokens: number; chars: number } | undefined;
@@ -1575,6 +1584,7 @@ async function* agentTurn(
       preStarted: boolean,
     ): AsyncGenerator<AgentEvent, CallOutcome> {
       const { name, mcpConnection, id, record } = ctx;
+      const signature = `${name}\n${JSON.stringify(call.function.arguments)}`;
       function* emitStart(): Generator<AgentEvent> {
         if (!preStarted) {
           record("started");
@@ -1597,7 +1607,20 @@ async function* agentTurn(
       const mcpDenied = options.intent === "plan";
       try {
         signal.throwIfAborted();
-        if (name === "read") {
+        // Effects and MCP keep their own refusals below, with their reasons.
+        if (READ_ONLY_TOOLS.has(name) && !offeredNames.has(name))
+          throw new Error(
+            `${name} is not available here; use one of: ${[...offeredNames].join(", ")}`,
+          );
+        if (INVALID_ARGUMENTS in call.function.arguments)
+          throw new Error(
+            `The ${name} arguments were not a JSON object (${String(call.function.arguments[INVALID_ARGUMENTS])}); send them again as one JSON object`,
+          );
+        if (refused.has(signature)) {
+          // The same call again: the user is not asked twice in one turn.
+          status = "denied";
+          output = `This exact ${name} call was already refused in this turn, so it was not asked again. Ask the user, or take another approach.`;
+        } else if (name === "read") {
           const args = ReadRangeArgs.parse(call.function.arguments);
           yield* emitStart();
           signal.throwIfAborted();
@@ -1862,7 +1885,8 @@ async function* agentTurn(
             signal.throwIfAborted();
             if (allowed !== true) {
               status = "denied";
-              output = "Write denied by host";
+              output =
+                "Write not approved. Do not repeat it unchanged: ask the user, or take another approach.";
             } else {
               record("approved");
               yield* emitStart();
@@ -1893,7 +1917,8 @@ async function* agentTurn(
             signal.throwIfAborted();
             if (allowed !== true) {
               status = "denied";
-              output = "Edit denied by host";
+              output =
+                "Edit not approved. Do not repeat it unchanged: ask the user, or take another approach.";
             } else {
               record("approved");
               yield* emitStart();
@@ -1924,7 +1949,8 @@ async function* agentTurn(
             signal.throwIfAborted();
             if (allowed !== true) {
               status = "denied";
-              output = "Command denied by host";
+              output =
+                "Command not approved. Do not repeat it unchanged: ask the user, or take another approach.";
             } else {
               record("approved");
               yield* emitStart();
@@ -1982,7 +2008,8 @@ async function* agentTurn(
             signal.throwIfAborted();
             if (allowed !== true) {
               status = "denied";
-              output = "MCP call denied by host";
+              output =
+                "MCP call not approved. Do not repeat it unchanged: ask the user, or take another approach.";
             } else {
               record("approved");
               yield* emitStart();
@@ -2015,6 +2042,7 @@ async function* agentTurn(
               : "Tool failed";
       }
       if (uncertain) status = "outcome_unknown";
+      if (status === "denied") refused.add(signature);
       const message: Message = {
         role: "tool",
         tool_name: name,

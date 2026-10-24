@@ -508,3 +508,30 @@ test("read takes offset and limit, as numbers or strings", async () => {
     await run.cleanup();
   }
 });
+
+test("a refused call repeated in the same turn is not asked again", async () => {
+  const edit = {
+    name: "edit",
+    arguments: {
+      path: "src/stats.ts",
+      old_string: "mean = 1",
+      new_string: "mean = 2",
+    },
+  };
+  const run = await session([edit, edit], "build", () => false);
+  try {
+    expect(run.proposals).toHaveLength(1);
+    expect(run.results.map((result) => result.status)).toEqual([
+      "denied",
+      "denied",
+    ]);
+    expect(run.results[0]?.output).toBe(
+      "Edit not approved. Do not repeat it unchanged: ask the user, or take another approach.",
+    );
+    expect(run.results[1]?.output).toMatch(
+      /^This exact edit call was already refused in this turn/,
+    );
+  } finally {
+    await run.cleanup();
+  }
+});

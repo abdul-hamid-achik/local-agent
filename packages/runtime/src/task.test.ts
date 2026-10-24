@@ -172,6 +172,33 @@ test("task runs a read-only subagent; its calls and final answer surface only in
   }
 });
 
+test("a subagent that calls task anyway is refused, not nested", async () => {
+  const run = await harness({
+    parent: [
+      {
+        calls: [{ name: "task", arguments: { prompt: "Look around" } }],
+      },
+    ],
+    child: (index) =>
+      index === 0
+        ? { calls: [{ name: "task", arguments: { prompt: "Nest deeper" } }] }
+        : { text: "Nothing to nest." },
+  });
+  try {
+    // Two child requests and no grandchild: the nested task never ran.
+    expect(run.childBodies).toHaveLength(2);
+    const refused = run.childBodies[1]?.messages.at(-1);
+    expect(refused).toMatchObject({ role: "tool", tool_name: "task" });
+    expect(JSON.parse(refused?.content ?? "")).toEqual({
+      status: "failed",
+      output:
+        "task is not available here; use one of: read, read_image, list, search, fetch, web_search",
+    });
+  } finally {
+    await run.cleanup();
+  }
+});
+
 test("the subagent stops at max_turns and reports the truncation", async () => {
   const run = await harness({
     parent: [

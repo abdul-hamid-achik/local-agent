@@ -210,7 +210,16 @@ type OpenAIStreamPart = {
     };
   }>;
   usage?: { prompt_tokens?: number; completion_tokens?: number };
+  /** What a server sends instead of a completion when it fails mid-stream. */
+  error?: { message?: unknown } | string;
 };
+
+/**
+ * The key a tool call's arguments carry when the model's JSON did not parse
+ * (or was not an object): the agent answers the call with an error the
+ * model can correct, instead of failing the turn.
+ */
+export const INVALID_ARGUMENTS = "__invalid_arguments";
 
 /** Parses one SSE body into JSON payloads; `data: [DONE]` ends the stream. */
 export async function* parseOpenAISSE(
@@ -222,8 +231,9 @@ export async function* parseOpenAISSE(
   try {
     for (;;) {
       const chunk = await reader.read();
-      if (chunk.done) break;
-      buffer += decoder.decode(chunk.value, { stream: true });
+      // A last event without its blank line still counts.
+      if (chunk.done) buffer += "\n\n";
+      else buffer += decoder.decode(chunk.value, { stream: true });
       for (;;) {
         const boundary = buffer.indexOf("\n\n");
         if (boundary === -1) break;
@@ -237,6 +247,7 @@ export async function* parseOpenAISSE(
           yield JSON.parse(data) as OpenAIStreamPart;
         }
       }
+      if (chunk.done) break;
     }
     throw new Error("OpenAI-compatible stream ended before [DONE]");
   } finally {
@@ -316,8 +327,14 @@ async function* openAILocalChat(
       try {
         arguments_ = JSON.parse(call.args || "{}");
       } catch {
-        throw new Error("Model tool arguments were not valid JSON");
+        arguments_ = undefined;
       }
+      if (
+        typeof arguments_ !== "object" ||
+        arguments_ === null ||
+        Array.isArray(arguments_)
+      )
+        arguments_ = { [INVALID_ARGUMENTS]: call.args.slice(0, 500) };
       yield RunEventSchema.parse({
         type: "tool_call",
         call: {
@@ -334,6 +351,13 @@ async function* openAILocalChat(
     outputSize += JSON.stringify(part).length;
     if (outputSize > 1_000_000)
       throw new Error("Model response exceeds size limit");
+    if (part.error !== undefined) {
+      const detail =
+        typeof part.error === "string" ? part.error : part.error.message;
+      throw new Error(
+        `OpenAI-compatible server error: ${String(detail ?? "unknown").slice(0, 300)}`,
+      );
+    }
     const delta = part.choices?.[0]?.delta;
     if (delta?.reasoning_content)
       yield RunEventSchema.parse({

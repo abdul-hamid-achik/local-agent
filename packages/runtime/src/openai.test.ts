@@ -281,3 +281,125 @@ test("an openai_local model the server does not list is refused before the chat"
     await rm(root, { recursive: true, force: true });
   }
 });
+
+/** An OpenAI-compatible server answering each chat request with the next SSE body. */
+function sseServer(bodies: string[][]) {
+  const requests: { messages: { role: string; content: string }[] }[] = [];
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    async fetch(req) {
+      if (new URL(req.url).pathname === "/v1/models")
+        return Response.json({ data: [{ id: "fixture-model" }] });
+      requests.push(
+        (await req.json()) as { messages: { role: string; content: string }[] },
+      );
+      const lines = bodies.shift() ?? [
+        '{"choices":[{"delta":{"content":"ok"}}]}',
+        "[DONE]",
+      ];
+      return new Response(lines.map((line) => `data: ${line}\n\n`).join(""), {
+        headers: { "Content-Type": "text/event-stream" },
+      });
+    },
+  });
+  return { server, requests };
+}
+
+test("tool arguments that are not JSON go back to the model as a failed call", async () => {
+  const { server, requests } = sseServer([
+    [
+      JSON.stringify({
+        choices: [
+          {
+            delta: {
+              tool_calls: [
+                {
+                  index: 0,
+                  id: "c1",
+                  function: { name: "read", arguments: "{path: a.txt" },
+                },
+              ],
+            },
+          },
+        ],
+      }),
+      "[DONE]",
+    ],
+  ]);
+  const root = await mkdtemp(join(tmpdir(), "local-agent-openai-"));
+  try {
+    using workspace = await Workspace.create(root);
+    const events: AgentEvent[] = [];
+    for await (const event of runAgent(
+      localProvider(`${server.url.origin}/v1`),
+      [{ role: "user", content: "read it" }],
+      {
+        workspace,
+        signal: AbortSignal.timeout(5_000),
+        approve: async () => false,
+      },
+    ))
+      events.push(event);
+    const result = events.find((event) => event.type === "tool_result");
+    expect(result).toMatchObject({
+      status: "failed",
+      output:
+        "The read arguments were not a JSON object ({path: a.txt); send them again as one JSON object",
+    });
+    // The turn went on: the model saw the error and answered.
+    expect(requests).toHaveLength(2);
+    expect(events.at(-1)?.type).toBe("turn_complete");
+  } finally {
+    server.stop(true);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a server error mid-stream fails the turn with its message", async () => {
+  const { server } = sseServer([
+    [JSON.stringify({ error: { message: "model overloaded" } }), "[DONE]"],
+  ]);
+  try {
+    await expect(
+      (async () => {
+        for await (const _ of chat(
+          localProvider(`${server.url.origin}/v1`),
+          [{ role: "user", content: "hi" }],
+          AbortSignal.timeout(5_000),
+        ));
+      })(),
+    ).rejects.toThrow("OpenAI-compatible server error: model overloaded");
+  } finally {
+    server.stop(true);
+  }
+});
+
+test("a last SSE event without its blank line still ends the stream", async () => {
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch: () =>
+      new Response(
+        'data: {"choices":[{"delta":{"content":"hi"}}]}\n\ndata: [DONE]\n',
+        {
+          headers: { "Content-Type": "text/event-stream" },
+        },
+      ),
+  });
+  try {
+    const events = [];
+    for await (const event of chat(
+      localProvider(`${server.url.origin}/v1`),
+      [{ role: "user", content: "hi" }],
+      AbortSignal.timeout(5_000),
+    ))
+      events.push(event);
+    expect(events).toEqual([
+      { type: "text", text: "hi" },
+      { type: "done", inputTokens: 0, outputTokens: 0 },
+    ]);
+  } finally {
+    server.stop(true);
+  }
+});
