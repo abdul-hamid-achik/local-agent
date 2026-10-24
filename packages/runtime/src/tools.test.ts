@@ -5,6 +5,7 @@ import { expect, test } from "vitest";
 import {
   type AgentEvent,
   type ApprovalRequest,
+  batchOutputLimit,
   readLines,
   runAgent,
   toolOutputLimit,
@@ -20,7 +21,8 @@ type Body = {
 
 /** A loopback Ollama that answers each step with the next scripted tool call, then "Done". */
 async function session(
-  calls: Call[],
+  /** One call per step, or an array for a step that makes several. */
+  calls: (Call | Call[])[],
   intent: "plan" | "build",
   approve: (proposal: ApprovalRequest) => boolean,
   options: {
@@ -50,9 +52,11 @@ async function session(
         });
       const body = (await request.json()) as Body;
       bodies.push(body);
-      const call = calls[body.messages.filter((m) => m.role === "tool").length];
+      const call =
+        calls[body.messages.filter((m) => m.role === "assistant").length];
+      const batch = call === undefined ? [] : [call].flat();
       return new Response(
-        `${JSON.stringify({ message: { role: "assistant", content: call ? "" : "Done", ...(call ? { tool_calls: [{ function: call }] } : {}) }, done: true })}\n`,
+        `${JSON.stringify({ message: { role: "assistant", content: call ? "" : "Done", ...(call ? { tool_calls: batch.map((one) => ({ function: one })) } : {}) }, done: true })}\n`,
       );
     },
   });
@@ -390,6 +394,39 @@ test("one tool result holds a quarter of the context window", () => {
   expect(toolOutputLimit(32_768)).toBe(24_576);
   expect(toolOutputLimit(2_048)).toBe(4_000);
   expect(toolOutputLimit(262_144)).toBe(100_000);
+});
+
+test("the results of one message share 40% of the window", () => {
+  expect(batchOutputLimit(32_768, 0)).toBe(24_576);
+  expect(batchOutputLimit(32_768, 1)).toBe(24_576);
+  expect(batchOutputLimit(32_768, 2)).toBe(19_660);
+  expect(batchOutputLimit(32_768, 4)).toBe(9_830);
+  expect(batchOutputLimit(32_768, 32)).toBe(1_228);
+  expect(batchOutputLimit(2_048, 32)).toBe(1_000);
+});
+
+test("a batch of reads is cut to its share, and the next step to its own", async () => {
+  const big = { name: "read", arguments: { path: "big.txt" } };
+  const run = await session([[big, big, big, big], big], "plan", () => true, {
+    seed: (root) =>
+      writeFile(
+        join(root, "big.txt"),
+        Array.from({ length: 5_000 }, (_, i) => `row ${i + 1}`).join("\n"),
+      ),
+  });
+  try {
+    const sizes = run.results.map((result) => result.output.length);
+    expect(sizes).toHaveLength(5);
+    // The default 16384-token window: 4 × 4915, then one whole 12288.
+    for (const size of sizes.slice(0, 4)) {
+      expect(size).toBeLessThanOrEqual(4_915);
+      expect(size).toBeGreaterThan(4_000);
+    }
+    expect(sizes[4]).toBeGreaterThan(12_000);
+    expect(sizes[4]).toBeLessThanOrEqual(12_288);
+  } finally {
+    await run.cleanup();
+  }
 });
 
 test("read pages through a file that does not fit, at line ends", () => {

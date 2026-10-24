@@ -1093,6 +1093,22 @@ export function toolOutputLimit(contextSize: number): number {
   return Math.min(100_000, Math.max(4_000, Math.floor((contextSize * 3) / 4)));
 }
 
+/**
+ * What each result of one assistant message's `calls` may hold: together
+ * they share about 40% of the window (at three characters a token), at
+ * least 1,000 characters each, never more than `toolOutputLimit`. Four
+ * reads at a quarter of the window each would fill it with results the
+ * model has not seen yet, which nothing could then shorten.
+ */
+export function batchOutputLimit(contextSize: number, calls: number): number {
+  const single = toolOutputLimit(contextSize);
+  if (calls <= 1) return single;
+  return Math.min(
+    single,
+    Math.max(1_000, Math.floor((contextSize * 6) / 5 / calls)),
+  );
+}
+
 /** `text` within `limit` characters, cut at a line end, saying it was cut. */
 function capOutput(text: string, limit: number, hint: string): string {
   if (text.length <= limit) return text;
@@ -1270,7 +1286,8 @@ async function* agentTurn(
 ): AsyncGenerator<AgentEvent> {
   const { signal, workspace } = options;
   const { deniedRead } = options;
-  const outputLimit = toolOutputLimit(provider.context_size);
+  // Set again for each assistant message, from how many calls it makes.
+  let outputLimit = toolOutputLimit(provider.context_size);
   const fetchGuard = fetchPolicy({
     ...(deniedRead
       ? {
@@ -1370,6 +1387,7 @@ async function* agentTurn(
       canonicalCallIds.add(call.id);
     }
     if (calls.length) assistant.tool_calls = calls;
+    outputLimit = batchOutputLimit(provider.context_size, calls.length);
     history.push(assistant);
     checkpoint();
     yield { type: "message", message: assistant };
@@ -1875,7 +1893,10 @@ async function* agentTurn(
                 signal,
               );
               status = result.isError ? "failed" : "unverified";
-              output = JSON.stringify(result);
+              output = JSON.stringify({
+                ...result,
+                text: capOutput(result.text, outputLimit, ""),
+              });
             }
           }
         } else {
