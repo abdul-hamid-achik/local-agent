@@ -47,7 +47,12 @@ test.each([
         ...flags,
       ],
       {
-        env: { PATH: process.env.PATH ?? "", OLLAMA_HOST: server.url.origin },
+        env: {
+          PATH: process.env.PATH ?? "",
+          OLLAMA_HOST: server.url.origin,
+          // The test's private config home, never the developer's.
+          XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME ?? "",
+        },
         stdout: "pipe",
         stderr: "pipe",
       },

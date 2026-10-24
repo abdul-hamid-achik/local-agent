@@ -14,6 +14,7 @@ const prompt = Bun.argv[3] ?? "hello";
 const model = "fixture-model";
 const editMode =
   mode === "edit-deny" || mode === "edit-approve" || verifyMode;
+const configHome = await mkdtemp(join(tmpdir(), "local-agent-config-"));
 const workspaceRoot = editMode
   ? await mkdtemp(join(tmpdir(), "local-agent-glyph-"))
   : undefined;
@@ -157,6 +158,9 @@ const child = Bun.spawn([process.execPath, ...args], {
     TERM: process.env.TERM ?? "xterm-256color",
     COLORTERM: process.env.COLORTERM ?? "",
     OLLAMA_HOST: server.url.origin,
+    // A private config home: the developer's MCP servers and rule trust
+    // stay out of the specs.
+    XDG_CONFIG_HOME: configHome,
   },
 });
 
@@ -174,6 +178,7 @@ async function shutdown(exitCode: number) {
     if (verifyMode && !(await Bun.file(join(workspaceRoot, "verified.txt")).text() === "checked")) exitCode = 1;
     await rm(workspaceRoot, { recursive: true, force: true });
   }
+  await rm(configHome, { recursive: true, force: true });
   process.exit(exitCode);
 }
 

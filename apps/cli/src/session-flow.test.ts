@@ -48,9 +48,13 @@ test("resumes completed state and inspects hazardous sessions without replaying 
         ...args,
       ],
       {
-        env: model
-          ? { OLLAMA_HOST: server.url.origin, LOCAL_AGENT_MODEL: "fixture" }
-          : { LOCAL_AGENT_PROVIDER: "invalid-on-purpose" },
+        env: {
+          // The test's private config home, never the developer's.
+          XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME ?? "",
+          ...(model
+            ? { OLLAMA_HOST: server.url.origin, LOCAL_AGENT_MODEL: "fixture" }
+            : { LOCAL_AGENT_PROVIDER: "invalid-on-purpose" }),
+        },
         stdout: "pipe",
         stderr: "pipe",
       },

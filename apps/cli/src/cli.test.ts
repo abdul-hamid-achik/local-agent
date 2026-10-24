@@ -56,8 +56,10 @@ test.each(["chalupa", "ollama"])(
               ? {
                   OLLAMA_HOST: `0.0.0.0:${server.port}`,
                   LOCAL_AGENT_MODEL: "fixture",
+                  XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME ?? "",
                 }
               : {
+                  XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME ?? "",
                   LOCAL_AGENT_PROVIDER: "chalupa",
                   LOCAL_AGENT_LOCAL_ONLY: "false",
                   LOCAL_AGENT_PROVIDER_CONFIG: JSON.stringify({
@@ -131,7 +133,11 @@ async function runCli(...args: string[]) {
     [process.execPath, "run", "--silent", "dev", ...args],
     {
       cwd: join(directory, "../../.."),
-      env: { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "" },
+      env: {
+        PATH: process.env.PATH ?? "",
+        HOME: process.env.HOME ?? "",
+        XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME ?? "",
+      },
       stdout: "pipe",
       stderr: "pipe",
     },
@@ -212,7 +218,11 @@ test("the local-agent launcher runs the CLI from the checkout, also through a sy
     for (const command of [launcher, link]) {
       const child = Bun.spawn([process.execPath, command, "--ui", "bogus"], {
         cwd: scratch,
-        env: { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "" },
+        env: {
+          PATH: process.env.PATH ?? "",
+          HOME: process.env.HOME ?? "",
+          XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME ?? "",
+        },
         stdout: "pipe",
         stderr: "pipe",
       });

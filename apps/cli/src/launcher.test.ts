@@ -23,7 +23,11 @@ test("the launcher ignores the working directory's bunfig.toml and .env", async 
     await symlink(LAUNCHER, link);
     const run = Bun.spawnSync([link, "--version"], {
       cwd: repo,
-      env: { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "" },
+      env: {
+        PATH: process.env.PATH ?? "",
+        HOME: process.env.HOME ?? "",
+        XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME ?? "",
+      },
     });
     expect(run.exitCode).toBe(0);
     expect(run.stdout.toString()).toMatch(/^local-agent \d+\.\d+\.\d+/);

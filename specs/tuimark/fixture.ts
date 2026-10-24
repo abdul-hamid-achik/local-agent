@@ -48,6 +48,7 @@ if (!basePort) throw new Error(`unknown mode: ${rawMode}`);
 const port = inline ? basePort + 100 : basePort;
 
 const workspaceRoot = await mkdtemp(join(tmpdir(), "local-agent-tuimark-"));
+const configHome = await mkdtemp(join(tmpdir(), "local-agent-config-"));
 await writeFile(join(workspaceRoot, "notes.txt"), "before\n");
 await writeFile(
   join(workspaceRoot, "long.txt"),
@@ -232,6 +233,9 @@ const env = {
   TERM: process.env.TERM ?? "xterm-256color",
   COLORTERM: process.env.COLORTERM ?? "",
   OLLAMA_HOST: server.url.origin,
+  // A private config home: the developer's MCP servers and rule trust stay
+  // out of the specs (HOME is forwarded for the Tuimark SDK's cache).
+  XDG_CONFIG_HOME: configHome,
   // How the Tuimark SDK finds its binary.
   ...Object.fromEntries(
     ["TUIMARK_BINARY", "HOME", "XDG_CACHE_HOME", "TMPDIR"].flatMap((name) =>
@@ -324,6 +328,7 @@ async function shutdown(exitCode: number) {
         : "before\n";
   if (contents !== expected) exitCode = 1;
   await rm(workspaceRoot, { recursive: true, force: true });
+  await rm(configHome, { recursive: true, force: true });
   if (sessionDirectory) await rm(sessionDirectory, { recursive: true, force: true });
   process.exit(exitCode);
 }
