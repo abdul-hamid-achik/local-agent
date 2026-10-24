@@ -12,8 +12,16 @@ import {
   writeFileSync,
 } from "node:fs";
 import { lstat, realpath } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import {
+  basename,
+  dirname,
+  isAbsolute,
+  join,
+  relative as relativePath,
+  resolve,
+} from "node:path";
 import { createTwoFilesPatch } from "diff";
+import { userConfigDir } from "#runtime/paths";
 import {
   DIRECTORY_FLAGS,
   openAt,
@@ -98,6 +106,8 @@ export class Workspace implements Disposable {
     readonly root: string,
     private fd: number,
     openedAs: string,
+    /** local-agent's config directory (lowercased, relative) when inside the root. */
+    private readonly configDir: string | undefined,
   ) {
     const trim = (path: string) =>
       path.endsWith("/") ? path.slice(0, -1) : path;
@@ -116,7 +126,12 @@ export class Workspace implements Disposable {
         actual.ino !== expected.ino
       )
         throw new Error("Workspace root changed during initialization");
-      return new Workspace(canonical, fd, resolve(root));
+      return new Workspace(
+        canonical,
+        fd,
+        resolve(root),
+        await configInside(canonical),
+      );
     } catch (error) {
       closeSync(fd);
       throw error;
@@ -283,8 +298,22 @@ export class Workspace implements Disposable {
       throw new Error(
         "Workspace path must name a file, not the workspace root",
       );
-    rejectExcluded(relative);
+    this.reject(relative);
     return relative;
+  }
+
+  /** Secrets, local-agent's own policy and the user's local-agent config. */
+  private reject(relative: string): void {
+    rejectExcluded(relative);
+    if (this.isConfig(relative)) throw new Error("Workspace path is excluded");
+  }
+
+  /** Whether a path is (or is inside) the user's local-agent config. */
+  private isConfig(relative: string): boolean {
+    const config = this.configDir;
+    if (config === undefined) return false;
+    const lower = relative.toLowerCase();
+    return config === "" || lower === config || lower.startsWith(`${config}/`);
   }
 
   private absolute(path: string): Error {
@@ -327,7 +356,7 @@ export class Workspace implements Disposable {
   async list(path = ""): Promise<string> {
     if (this.fd < 0) throw new Error("Workspace is closed");
     const relative = this.normalize(path);
-    if (relative) rejectExcluded(relative);
+    if (relative) this.reject(relative);
     return this.inDirectory(relative, (fd) => {
       const entries = this.entries(fd, relative);
       const lines = entries.map((entry) =>
@@ -359,7 +388,7 @@ export class Workspace implements Disposable {
     if (pattern.length > 500) throw new Error("Search pattern is too long");
     const test = matcher(pattern, options);
     const relative = this.normalize(options.path ?? "");
-    if (relative) rejectExcluded(relative);
+    if (relative) this.reject(relative);
     const state: SearchState = {
       test,
       matches: [],
@@ -448,7 +477,8 @@ export class Workspace implements Disposable {
         entry.isDirectory()
           ? !SKIPPED_DIRECTORIES.has(entry.name) &&
             !isExcludedName(entry.name, false) &&
-            !isUserConfig(parent, entry.name)
+            !isUserConfig(parent, entry.name) &&
+            !this.isConfig(relative ? `${relative}/${entry.name}` : entry.name)
           : !isExcludedName(entry.name, true),
       )
       .sort(
@@ -806,6 +836,32 @@ function isUserConfig(parent: string | undefined, name: string): boolean {
   return (
     parent?.toLowerCase() === ".config" && name.toLowerCase() === "local-agent"
   );
+}
+
+/**
+ * local-agent's config directory relative to a canonical workspace root,
+ * when it lies inside it (an XDG_CONFIG_HOME within the workspace, or a
+ * workspace at or above it). The directory may not exist yet: its nearest
+ * existing ancestor is resolved and the rest appended.
+ */
+async function configInside(root: string): Promise<string | undefined> {
+  let path = resolve(userConfigDir());
+  const tail: string[] = [];
+  for (;;) {
+    try {
+      path = await realpath(path);
+      break;
+    } catch {
+      const parent = dirname(path);
+      if (parent === path) return undefined;
+      tail.unshift(basename(path));
+      path = parent;
+    }
+  }
+  const inside = relativePath(root, join(path, ...tail));
+  return inside.startsWith("..") || isAbsolute(inside)
+    ? undefined
+    : inside.toLowerCase();
 }
 
 function rejectExcluded(relative: string): void {

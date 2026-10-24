@@ -8,21 +8,24 @@
 // Deny and ask rules only ever restrict and always apply; an allow rule
 // applies only once this user trusted it on this machine. Trust lives
 // outside every workspace, in `trusted-rules.json` under the user's config
-// directory, keyed by the workspace's real path: the "always" key and
-// `/permissions trust` write it, nothing a repository contains can.
+// directory, keyed by the workspace's real path and directory identity: the
+// "always" key and `/permissions trust` write it, nothing a repository
+// contains can.
 
 import { randomUUID } from "node:crypto";
 import {
   mkdir,
+  open,
   readFile,
   realpath,
   rename,
   rm,
+  stat,
   writeFile,
 } from "node:fs/promises";
-import { homedir } from "node:os";
-import { basename, dirname, join } from "node:path";
+import { dirname, join } from "node:path";
 import type { ApprovalRequest } from "#runtime/agent";
+import { userConfigDir } from "#runtime/paths";
 
 /** What a rule does to the requests it matches. "ask" is the dialog. */
 export type PermissionEffect = "allow" | "ask" | "deny";
@@ -111,10 +114,7 @@ export function permissionsPath(workspaceRoot: string): string {
 export function trustStorePath(
   env: Record<string, string | undefined> = process.env,
 ): string {
-  const config = env.XDG_CONFIG_HOME?.trim()
-    ? env.XDG_CONFIG_HOME
-    : join(homedir(), ".config");
-  return join(config, "local-agent", "trusted-rules.json");
+  return join(userConfigDir(env), "trusted-rules.json");
 }
 
 type TrustStore = { version: 1; workspaces: Record<string, string[]> };
@@ -122,14 +122,27 @@ type TrustStore = { version: 1; workspaces: Record<string, string[]> };
 const ruleKey = (rule: PermissionRule): string =>
   JSON.stringify([rule.tool, rule.pattern]);
 
-/** A missing or damaged store trusts nothing: every allow rule asks again. */
-async function readTrust(): Promise<TrustStore> {
+/**
+ * The store as stored. Missing is the empty store; a damaged one (bad JSON
+ * or shape) trusts nothing, and is never rewritten, so a repair keeps the
+ * other workspaces' trust.
+ */
+async function readTrust(): Promise<{ store: TrustStore; damaged: boolean }> {
+  let text: string;
   try {
-    const parsed = JSON.parse(await readFile(trustStorePath(), "utf8"));
+    text = await readFile(trustStorePath(), "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT")
+      return { store: { version: 1, workspaces: {} }, damaged: false };
+    return { store: { version: 1, workspaces: {} }, damaged: true };
+  }
+  try {
+    const parsed = JSON.parse(text);
     if (
       parsed?.version === 1 &&
       typeof parsed.workspaces === "object" &&
-      parsed.workspaces !== null
+      parsed.workspaces !== null &&
+      !Array.isArray(parsed.workspaces)
     ) {
       const workspaces: Record<string, string[]> = {};
       for (const [root, keys] of Object.entries(parsed.workspaces))
@@ -137,12 +150,44 @@ async function readTrust(): Promise<TrustStore> {
           workspaces[root] = keys.filter(
             (key): key is string => typeof key === "string",
           );
-      return { version: 1, workspaces };
+      return { store: { version: 1, workspaces }, damaged: false };
     }
   } catch {
-    // Missing or unreadable: the empty store.
+    // Not JSON: damaged.
   }
-  return { version: 1, workspaces: {} };
+  return { store: { version: 1, workspaces: {} }, damaged: true };
+}
+
+const LOCK_WAIT_MS = 2_000;
+const LOCK_STALE_MS = 10_000;
+
+/** One writer at a time across processes: an exclusive lock file beside the
+ * store, taken over when a crashed holder left it stale. */
+async function withTrustLock<T>(work: () => Promise<T>): Promise<T> {
+  const lock = `${trustStorePath()}.lock`;
+  await mkdir(dirname(lock), { recursive: true, mode: 0o700 });
+  const deadline = Date.now() + LOCK_WAIT_MS;
+  for (;;) {
+    try {
+      await (await open(lock, "wx", 0o600)).close();
+      break;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      const age = await stat(lock).then(
+        (info) => Date.now() - info.mtimeMs,
+        () => 0,
+      );
+      if (age > LOCK_STALE_MS) await rm(lock, { force: true });
+      else if (Date.now() > deadline)
+        throw new Error(`trust store is locked (${lock})`);
+      else await Bun.sleep(20);
+    }
+  }
+  try {
+    return await work();
+  } finally {
+    await rm(lock, { force: true });
+  }
 }
 
 /** Atomic and private: a temp file in the same directory, then a rename. */
@@ -161,12 +206,19 @@ async function writeTrust(store: TrustStore): Promise<void> {
   }
 }
 
-/** The store's key for a workspace: its real path, so a moved clone starts untrusted. */
+/**
+ * The store's key for a workspace: its real path plus the directory's
+ * identity, so a moved clone starts untrusted, and so does a different
+ * repository cloned later at the same path (a new directory).
+ */
 async function workspaceKey(workspaceRoot: string): Promise<string> {
+  let real = workspaceRoot;
   try {
-    return await realpath(workspaceRoot);
+    real = await realpath(workspaceRoot);
+    const info = await stat(real, { bigint: true });
+    return `${real}#${info.dev}:${info.ino}`;
   } catch {
-    return workspaceRoot;
+    return real;
   }
 }
 
@@ -174,13 +226,19 @@ async function updateTrust(
   workspaceRoot: string,
   change: (keys: Set<string>) => void,
 ): Promise<void> {
-  const store = await readTrust();
-  const root = await workspaceKey(workspaceRoot);
-  const keys = new Set(store.workspaces[root] ?? []);
-  change(keys);
-  if (keys.size) store.workspaces[root] = [...keys];
-  else delete store.workspaces[root];
-  await writeTrust(store);
+  await withTrustLock(async () => {
+    const { store, damaged } = await readTrust();
+    if (damaged)
+      throw new Error(
+        `the trust store ${trustStorePath()} is damaged; repair or remove it`,
+      );
+    const root = await workspaceKey(workspaceRoot);
+    const keys = new Set(store.workspaces[root] ?? []);
+    change(keys);
+    if (keys.size) store.workspaces[root] = [...keys];
+    else delete store.workspaces[root];
+    await writeTrust(store);
+  });
 }
 
 /**
@@ -243,23 +301,26 @@ export async function loadPermissionFile(
   const file = await readPermissionFile(workspaceRoot);
   if (file.warning || !file.rules.some((rule) => rule.effect === "allow"))
     return { ...file, untrusted: [] };
+  const { store, damaged } = await readTrust();
   const trusted = new Set(
-    (await readTrust()).workspaces[await workspaceKey(workspaceRoot)] ?? [],
+    store.workspaces[await workspaceKey(workspaceRoot)] ?? [],
   );
   const untrusted = file.rules.filter(
     (rule) => rule.effect === "allow" && !trusted.has(ruleKey(rule)),
   );
   if (untrusted.length === 0) return { ...file, untrusted };
+  const count = untrusted.length;
+  const named = untrusted
+    .slice(0, 3)
+    .map((rule) => `${rule.tool} ${rule.pattern}`)
+    .join(", ");
   return {
     version: 1,
     rules: file.rules.filter((rule) => !untrusted.includes(rule)),
     untrusted,
-    warning: `permissions.json: ${untrusted.length} allow rule${untrusted.length === 1 ? "" : "s"} not trusted on this machine ${untrusted.length === 1 ? "is" : "are"} ignored (${untrusted
-      .slice(0, 3)
-      .map((rule) => `${rule.tool} ${rule.pattern}`)
-      .join(
-        ", ",
-      )}${untrusted.length > 3 ? ", …" : ""}); review the file, then run /permissions trust`,
+    warning: damaged
+      ? `the trust store ${trustStorePath()} is damaged, so no allow rule in permissions.json applies; repair or remove it`
+      : `permissions.json: ${count} allow rule${count === 1 ? "" : "s"} not trusted on this machine ${count === 1 ? "is" : "are"} ignored (${named}${count > 3 ? ", …" : ""}); review them, then run /permissions trust (or local-agent --trust-rules)`,
   };
 }
 
@@ -360,34 +421,142 @@ function quoteWord(word: string): string {
 }
 
 /**
+ * Programs that run another program named in their arguments. Session
+ * grants for them are exact, and deny/ask rules look through them.
+ */
+export const COMMAND_WRAPPERS: ReadonlySet<string> = new Set([
+  "env",
+  "xargs",
+  "sudo",
+  "doas",
+  "su",
+  "nice",
+  "nohup",
+  "time",
+  "timeout",
+  "command",
+  "exec",
+  "watch",
+  "caffeinate",
+  "chroot",
+  "ssh",
+  "find",
+  "parallel",
+  "script",
+]);
+
+const SHELLS = new Set(["sh", "bash", "zsh", "dash", "ksh", "fish", "csh"]);
+
+/** Wrapper options that take the next word as their value. */
+const OPTION_VALUES: Record<string, ReadonlySet<string>> = {
+  sudo: new Set(["-u", "-g", "-C", "-p", "-h", "-U", "-r", "-t", "-D"]),
+  doas: new Set(["-u", "-C"]),
+  su: new Set(["-c", "-s", "-g", "-G"]),
+  env: new Set(["-u", "-C", "-S", "--unset", "--chdir"]),
+  timeout: new Set(["-s", "-k", "--signal", "--kill-after"]),
+  nice: new Set(["-n", "--adjustment"]),
+  xargs: new Set(["-I", "-n", "-P", "-L", "-s", "-d", "-E", "-a"]),
+  watch: new Set(["-n", "-d", "--interval"]),
+  ssh: new Set(["-p", "-i", "-l", "-o", "-F", "-J", "-L", "-R", "-D", "-E"]),
+};
+
+/** A program's name for matching: its basename, lowercased (APFS and NTFS
+ * resolve `RM` to `rm`). */
+const programName = (word: string): string =>
+  (word.split("/").at(-1) ?? "").toLowerCase();
+
+/**
+ * The commands an argv runs besides itself, best effort, for deny and ask
+ * rules: what follows a wrapper's options and assignments, a shell's `-c`
+ * script split at `;`, `&`, `|` and newlines, and `find -exec …`. Not a
+ * shell parser: deny rules are a guard rail, not a sandbox.
+ */
+function innerCommands(argv: readonly string[], depth = 0): string[][] {
+  if (depth > 4 || argv.length < 2) return [];
+  const program = programName(argv[0] ?? "");
+  const found: string[][] = [];
+  const add = (inner: string[]) => {
+    if (inner.length === 0) return;
+    found.push(inner, ...innerCommands(inner, depth + 1));
+  };
+  if (SHELLS.has(program)) {
+    const at = argv.findIndex(
+      (word, i) => i > 0 && /^-[a-z]*c[a-z]*$/i.test(word),
+    );
+    const script = at > 0 ? argv[at + 1] : undefined;
+    if (script !== undefined)
+      for (const segment of script.split(/[;&|\n]+/))
+        add(splitWords(segment.replace(/["'`()]/g, " ")));
+  } else if (program === "find") {
+    const at = argv.findIndex((word) =>
+      /^-(exec|execdir|ok|okdir)$/.test(word),
+    );
+    if (at > 0) {
+      const end = argv.findIndex((word, i) => i > at && /^[;+]$/.test(word));
+      add(argv.slice(at + 1, end < 0 ? undefined : end));
+    }
+  } else if (COMMAND_WRAPPERS.has(program)) {
+    // Skip options (and the values some take), env-style assignments and
+    // bare numbers (`timeout 5`, `nice -n 10`); then, for ssh, the host.
+    const values = OPTION_VALUES[program];
+    let i = 1;
+    while (i < argv.length) {
+      const word = argv[i] ?? "";
+      if (values?.has(word)) i += 2;
+      else if (/^(-|\d|[A-Za-z_][A-Za-z0-9_]*=)/.test(word)) i++;
+      else break;
+    }
+    if (program === "ssh") i++;
+    add(argv.slice(i));
+  }
+  return found;
+}
+
+/** The pre-quoting spelling: whitespace-split words and a trailing `*`. */
+function legacyPattern(pattern: string): { words: string[]; star: boolean } {
+  const trimmed = pattern.trimEnd();
+  const star = trimmed.endsWith("*");
+  return { words: splitWords(star ? trimmed.slice(0, -1) : trimmed), star };
+}
+
+/**
  * An argv pattern, exact unless it ends with a bare `*`: `npm test *`
  * matches `npm test` itself and `npm test anything`. One approval is one
- * argv vector (no shell), so words compare one to one, never re-split. A
- * deny or ask rule's program also matches by basename (`rm *` refuses
- * `/bin/rm -rf x`); an allow rule's program never does, so `git *` does
- * not approve a planted `./git`.
+ * argv vector (no shell), so words compare one to one, never re-split.
+ *
+ * Allow rules match the argv as given and nothing else: never a planted
+ * `./git` for `git *`, never an empty or malformed pattern. Deny and ask
+ * rules lean the other way: the program matches by name, case-insensitively
+ * (`rm *` refuses `/bin/rm` and `RM`), the commands a wrapper or `sh -c`
+ * would run are checked too, an empty pattern matches every command (as it
+ * always did), and a pattern with an unbalanced quote falls back to plain
+ * words instead of silently matching nothing.
  */
 function commandMatches(
   rule: PermissionRule,
   request: PermissionRequest,
 ): boolean {
-  const parsed = commandPattern(rule.pattern);
+  const restrict = rule.effect !== "allow";
+  const parsed =
+    commandPattern(rule.pattern) ??
+    (restrict ? legacyPattern(rule.pattern) : undefined);
   if (!parsed) return false;
   const { words: core, star } = parsed;
-  const words = request.argv?.length
+  if (core.length === 0) return star || restrict;
+  const argv = request.argv?.length
     ? [...request.argv]
     : splitWords(request.target);
-  if (core.length === 0) return star;
-  if (star ? words.length < core.length : words.length !== core.length)
-    return false;
-  return core.every(
-    (word, i) =>
-      word === words[i] ||
-      (i === 0 &&
-        rule.effect !== "allow" &&
-        !word.includes("/") &&
-        basename(words[0] ?? "") === word),
-  );
+  const matches = (words: readonly string[]) =>
+    (star ? words.length >= core.length : words.length === core.length) &&
+    core.every(
+      (word, i) =>
+        word === words[i] ||
+        (i === 0 &&
+          restrict &&
+          !word.includes("/") &&
+          programName(words[0] ?? "") === word.toLowerCase()),
+    );
+  return matches(argv) || (restrict && innerCommands(argv).some(matches));
 }
 
 /**
@@ -519,7 +688,13 @@ function patternTarget(rule: PermissionRule): string {
 export async function appendRule(
   workspaceRoot: string,
   rule: PermissionRule,
-): Promise<{ file: string; created: boolean; gitignoreAdded: boolean }> {
+): Promise<{
+  file: string;
+  created: boolean;
+  /** False when the file already held the rule (it was only trusted). */
+  added: boolean;
+  gitignoreAdded: boolean;
+}> {
   const existing = await readPermissionFile(workspaceRoot);
   if (existing.warning) throw new Error(existing.warning);
   if (rule.effect === "allow") {
@@ -566,7 +741,12 @@ export async function appendRule(
   } catch {
     // No .gitignore: nothing to add the entry to.
   }
-  return { file, created: existing.rules.length === 0, gitignoreAdded };
+  return {
+    file,
+    created: existing.rules.length === 0,
+    added: !present,
+    gitignoreAdded,
+  };
 }
 
 /** `/permissions clear rules`: the file, rewritten with no rules, and its trust dropped. */
@@ -581,17 +761,22 @@ export async function clearRules(
 }
 
 /**
- * `/permissions trust`: trusts every allow rule the file holds right now,
- * for this workspace only. Returns the rules that were not trusted before,
- * so the caller can name what it just enabled.
+ * `/permissions trust`: trusts the allow rules the file holds right now,
+ * for this workspace only — all of them, or only those in `only` (the
+ * rules the user was shown) that are still in the file. Returns the rules
+ * that were not trusted before, so the caller can name what it enabled.
  */
 export async function trustRules(
   workspaceRoot: string,
+  only?: readonly PermissionRule[],
 ): Promise<{ trusted: PermissionRule[] }> {
   const file = await readPermissionFile(workspaceRoot);
   if (file.warning) throw new Error(file.warning);
   const trusted: PermissionRule[] = [];
-  const allows = file.rules.filter((rule) => rule.effect === "allow");
+  const shown = only && new Set(only.map(ruleKey));
+  const allows = file.rules.filter(
+    (rule) => rule.effect === "allow" && (!shown || shown.has(ruleKey(rule))),
+  );
   if (allows.length === 0) return { trusted };
   await updateTrust(workspaceRoot, (keys) => {
     for (const rule of allows)
@@ -625,4 +810,39 @@ export function permissionRequest(
     case "mcp":
       return { tool: "mcp", target: proposal.name };
   }
+}
+
+/**
+ * The workspace file's rules as every client consults them, read fresh on
+ * each call (an edit to the file applies to the next proposal): `verdict`
+ * runs before a client's own approval path, and `deniedRead` is the
+ * runtime's hook for the reads that never ask. A warning (an untrusted or
+ * broken file) reaches `onWarning` once per distinct text.
+ */
+export function workspaceRules(
+  workspaceRoot: string,
+  onWarning?: (warning: string) => void,
+): {
+  verdict(proposal: ApprovalRequest): Promise<PermissionVerdict>;
+  deniedRead(request: PermissionRequest): Promise<string | undefined>;
+} {
+  let warned: string | undefined;
+  const rules = async () => {
+    const loaded = await loadPermissionFile(workspaceRoot);
+    if (loaded.warning && loaded.warning !== warned) {
+      warned = loaded.warning;
+      onWarning?.(loaded.warning);
+    }
+    return loaded.rules;
+  };
+  return {
+    verdict: async (proposal) =>
+      evaluate(await rules(), permissionRequest(proposal)),
+    deniedRead: async (request) => {
+      const verdict = evaluate(await rules(), request);
+      return verdict.effect === "deny"
+        ? (verdict.rule?.pattern ?? "")
+        : undefined;
+    },
+  };
 }

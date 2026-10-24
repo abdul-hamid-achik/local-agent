@@ -464,3 +464,39 @@ test("the host's permission rules and the user's local-agent config are out of r
   await writeFile(join(root, "src", "local-agent", "a.ts"), "x");
   expect(await workspace.read("src/local-agent/a.ts")).toBe("x");
 });
+
+test("an XDG_CONFIG_HOME inside the workspace is out of reach too", async () => {
+  const root = await temp("local-agent-xdg-");
+  const saved = process.env.XDG_CONFIG_HOME;
+  // The directory need not exist when the workspace opens.
+  process.env.XDG_CONFIG_HOME = join(root, "dot", "cfg");
+  let workspace: Workspace;
+  try {
+    workspace = await Workspace.create(root);
+    workspaces.push(workspace);
+  } finally {
+    process.env.XDG_CONFIG_HOME = saved;
+  }
+  await mkdir(join(root, "dot", "cfg", "local-agent"), { recursive: true });
+  await writeFile(
+    join(root, "dot", "cfg", "local-agent", "trusted-rules.json"),
+    "trusted needle",
+  );
+  await writeFile(join(root, "dot", "cfg", "git.conf"), "other needle");
+  for (const path of [
+    "dot/cfg/local-agent/trusted-rules.json",
+    "DOT/cfg/Local-Agent/trusted-rules.json",
+  ]) {
+    await expect(workspace.read(path)).rejects.toThrow("excluded");
+    await expect(workspace.prepareWrite(path, "{}\n")).rejects.toThrow(
+      "excluded",
+    );
+  }
+  await expect(workspace.list("dot/cfg/local-agent")).rejects.toThrow(
+    "excluded",
+  );
+  expect(await workspace.list("dot/cfg")).toBe("git.conf");
+  const found = await workspace.search("needle");
+  expect(found).toContain("dot/cfg/git.conf");
+  expect(found).not.toContain("trusted-rules");
+});

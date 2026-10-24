@@ -42,6 +42,7 @@ export {
 } from "#runtime/net";
 export {
   appendRule,
+  COMMAND_WRAPPERS,
   clearRules,
   evaluate,
   loadPermissionFile,
@@ -52,10 +53,12 @@ export {
   type PermissionTool,
   type PermissionVerdict,
   permissionRequest,
+  permissionsPath,
   proposeRule,
   readPermissionFile,
   trustRules,
   trustStorePath,
+  workspaceRules,
 } from "#runtime/permissions";
 export {
   Workspace,

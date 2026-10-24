@@ -1,7 +1,16 @@
-import { mkdir, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  stat,
+  utimes,
+  writeFile,
+} from "node:fs/promises";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "vitest";
+import { userConfigDir } from "#runtime/paths";
 import {
   appendRule,
   clearRules,
@@ -420,6 +429,7 @@ test("a damaged trust store trusts nothing", async () => {
   expect((await loadPermissionFile(root)).untrusted).toEqual([
     rule("allow", "edit", "*"),
   ]);
+  await rm(trustStorePath());
 });
 
 test("command deny rules match the program by basename; allow rules never do", () => {
@@ -453,4 +463,127 @@ test("command deny rules match the program by basename; allow rules never do", (
       run("echo a b", ["echo", "a b"]),
     ).effect,
   ).toBe("ask");
+});
+
+test("deny and ask rules look through wrappers, shells and find -exec", () => {
+  const deny = [rule("deny", "run_command", "rm *")];
+  for (const argv of [
+    ["sudo", "-u", "root", "rm", "-rf", "/"],
+    ["env", "FOO=1", "rm", "x"],
+    ["timeout", "-s", "KILL", "5", "rm", "x"],
+    ["nice", "-n", "10", "/bin/rm", "x"],
+    ["xargs", "-n", "1", "rm"],
+    ["ssh", "-p", "22", "host", "rm", "-rf", "/"],
+    ["bash", "-c", "echo hi; rm -rf /"],
+    ["sh", "-ec", "true && RM -rf /"],
+    ["find", ".", "-name", "*.log", "-exec", "rm", "{}", ";"],
+    ["sudo", "bash", "-c", "rm -rf /"],
+    ["RM", "-rf", "/"],
+  ]) {
+    expect(
+      evaluate(deny, run(argv.join(" "), argv)).effect,
+      argv.join(" "),
+    ).toBe("deny");
+  }
+  // Allow rules never look inside: `rm *` does not allow `sudo rm`.
+  const allow = [rule("allow", "run_command", "rm *")];
+  const sudo = ["sudo", "rm", "x"];
+  expect(evaluate(allow, run(sudo.join(" "), sudo)).effect).toBe("ask");
+  const upper = ["RM", "x"];
+  expect(evaluate(allow, run(upper.join(" "), upper)).effect).toBe("ask");
+});
+
+test("an empty or malformed restricting pattern still restricts", () => {
+  const argv = ["make", "all"];
+  const request = run(argv.join(" "), argv);
+  expect(evaluate([rule("deny", "run_command", "")], request).effect).toBe(
+    "deny",
+  );
+  expect(evaluate([rule("allow", "run_command", "")], request).effect).toBe(
+    "ask",
+  );
+  // An unbalanced quote: a deny rule falls back to plain words, an allow
+  // rule matches nothing.
+  const quoted = ["git", "push", '"origin'];
+  const push = run(quoted.join(" "), quoted);
+  expect(
+    evaluate([rule("deny", "run_command", 'git push "origin')], push).effect,
+  ).toBe("deny");
+  expect(
+    evaluate([rule("allow", "run_command", 'git push "origin')], push).effect,
+  ).toBe("ask");
+});
+
+test("appendRule says whether it added the rule or only trusted it", async () => {
+  const root = await tempRoot();
+  const once = await appendRule(root, rule("allow", "edit", "/src/**"));
+  expect(once).toMatchObject({ created: true, added: true });
+  const twice = await appendRule(root, rule("allow", "edit", "/src/**"));
+  expect(twice).toMatchObject({ created: false, added: false });
+});
+
+test("trustRules can be limited to the rules the user was shown", async () => {
+  const root = await tempRoot();
+  const shown = rule("allow", "edit", "/src/**");
+  const late = rule("allow", "run_command", "curl *");
+  await plant(root, [shown, late]);
+  expect((await trustRules(root, [shown])).trusted).toEqual([shown]);
+  expect((await loadPermissionFile(root)).untrusted).toEqual([late]);
+  // A shown rule no longer in the file is not trusted.
+  expect(
+    (await trustRules(root, [rule("allow", "edit", "*")])).trusted,
+  ).toEqual([]);
+});
+
+test("trust follows the directory, not only its path", async () => {
+  const root = await tempRoot();
+  await appendRule(root, rule("allow", "edit", "*"));
+  expect((await loadPermissionFile(root)).untrusted).toEqual([]);
+  // Another repository cloned later at the same path starts untrusted.
+  await rm(root, { recursive: true, force: true });
+  await mkdir(root);
+  await plant(root, [rule("allow", "edit", "*")]);
+  expect((await loadPermissionFile(root)).untrusted).toEqual([
+    rule("allow", "edit", "*"),
+  ]);
+});
+
+test("the trust store serializes writers and takes over a stale lock", async () => {
+  const roots = await Promise.all(Array.from({ length: 6 }, tempRoot));
+  await Promise.all(
+    roots.map((root) => appendRule(root, rule("allow", "edit", "*"))),
+  );
+  for (const root of roots)
+    expect((await loadPermissionFile(root)).untrusted).toEqual([]);
+  // A crashed writer's lock (older than ten seconds) does not wedge trust.
+  const lock = `${trustStorePath()}.lock`;
+  await writeFile(lock, "");
+  const old = new Date(Date.now() - 60_000);
+  await utimes(lock, old, old);
+  const root = await tempRoot();
+  await appendRule(root, rule("allow", "edit", "/a"));
+  expect((await loadPermissionFile(root)).untrusted).toEqual([]);
+  await expect(stat(lock)).rejects.toThrow();
+});
+
+test("a damaged trust store is never rewritten", async () => {
+  const root = await tempRoot();
+  await writeFile(trustStorePath(), "{not json");
+  await expect(appendRule(root, rule("allow", "edit", "*"))).rejects.toThrow(
+    "damaged",
+  );
+  expect(await readFile(trustStorePath(), "utf8")).toBe("{not json");
+  expect((await loadPermissionFile(root)).warning).toContain("damaged");
+  await rm(trustStorePath());
+});
+
+test("the config directory ignores a relative XDG_CONFIG_HOME", () => {
+  expect(userConfigDir({ XDG_CONFIG_HOME: "/x" })).toBe("/x/local-agent");
+  for (const value of ["rel", "./rel", "", undefined])
+    expect(userConfigDir({ XDG_CONFIG_HOME: value })).toBe(
+      join(homedir(), ".config", "local-agent"),
+    );
+  expect(trustStorePath({ XDG_CONFIG_HOME: "rel" })).toBe(
+    join(homedir(), ".config", "local-agent", "trusted-rules.json"),
+  );
 });
