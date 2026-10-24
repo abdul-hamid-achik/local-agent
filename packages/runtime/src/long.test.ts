@@ -62,6 +62,7 @@ async function run(
     session?: SessionContext;
     maxTurns?: number;
     compact?: boolean;
+    intent?: "build" | "plan" | "chat";
     /** The prompt size the model reports, in tokens (none when absent). */
     promptTokens?: number;
   } = {},
@@ -97,7 +98,7 @@ async function run(
       history,
       {
         workspace,
-        intent: "build",
+        intent: options.intent ?? "build",
         signal: AbortSignal.timeout(20_000),
         approve: async () => true,
         ...(options.session ? { session: options.session } : {}),
@@ -157,6 +158,9 @@ test("a long conversation sends its newest exchanges, says what it left out, and
   }
 });
 
+const TODO =
+  "Your todo list, as you last wrote it (that message is no longer in this request):";
+
 test("a todo list the window leaves out rides in the system prompt", async () => {
   const list =
     "- [x] read the spec\n- [~] write the parser\n- [ ] run the tests\n3 todos: 1 done, 1 in progress, 1 pending";
@@ -187,9 +191,7 @@ test("a todo list the window leaves out rides in the system prompt", async () =>
   expect(
     far.requests[0]?.some((m) => m.content.includes("write the parser")),
   ).toBe(true);
-  expect(system).toContain(
-    `Your todo list, as you last wrote it (that message is no longer in this request):\n${list}`,
-  );
+  expect(system).toContain(`${TODO}\n${list}`);
   // The list takes its room from the window, not past it.
   const big = Array.from(
     { length: 50 },
@@ -208,10 +210,64 @@ test("a todo list the window leaves out rides in the system prompt", async () =>
     { role: "user", content: "go on" },
   ]);
   const sent = long.requests[0] ?? [];
-  expect(sent[0]?.content).toContain(big);
+  // Cut to a share of the window, at a line end: what remains to do first.
+  const carried = (sent[0]?.content ?? "").split(`${TODO}\n`)[1] ?? "";
+  expect(carried.startsWith("- [ ] step 0 ")).toBe(true);
+  expect(carried.endsWith("\n…")).toBe(true);
+  expect(carried.length).toBeLessThan(big.length);
   expect(
     (sent[0]?.content.length ?? 0) + promptChars(sent.slice(1) as Message[]),
   ).toBeLessThan(16_384 * 3 * 0.7);
+  // Done items give way first.
+  const mixed = [
+    ...Array.from(
+      { length: 45 },
+      (_, i) => `- [x] ${`done ${i} `.padEnd(200, "x")}`,
+    ),
+    "- [~] the one in progress",
+    "- [ ] the one left",
+    "47 todos: 45 done, 1 in progress, 1 pending",
+  ].join("\n");
+  const trimmed = await run([
+    ...plan.map((m) =>
+      m.role === "tool"
+        ? {
+            ...m,
+            content: JSON.stringify({ status: "succeeded", output: mixed }),
+          }
+        : m,
+    ),
+    ...earlier(118, 1_000),
+    { role: "user", content: "go on" },
+  ]);
+  expect(trimmed.requests[0]?.[0]?.content).toContain(
+    `${TODO}\n- [~] the one in progress\n- [ ] the one left\n47 todos: 45 done, 1 in progress, 1 pending`,
+  );
+  // A list with nothing left to do is not carried, nor where the model
+  // cannot write one (chat).
+  const done = await run([
+    ...plan.map((m) =>
+      m.role === "tool"
+        ? {
+            ...m,
+            content: JSON.stringify({
+              status: "succeeded",
+              output:
+                "- [x] all of it\n1 todos: 1 done, 0 in progress, 0 pending",
+            }),
+          }
+        : m,
+    ),
+    ...earlier(118, 1_000),
+    { role: "user", content: "go on" },
+  ]);
+  expect(done.requests[0]?.[0]?.content).not.toContain(TODO);
+  const chat = await run(
+    [...plan, ...earlier(118, 1_000), { role: "user", content: "go on" }],
+    [],
+    { intent: "chat" },
+  );
+  expect(chat.requests[0]?.[0]?.content).not.toContain(TODO);
   // In the window, it is not said twice.
   const near = await run([...plan, { role: "user", content: "go on" }]);
   expect(near.requests[0]?.[0]?.content).not.toContain("Your todo list");
