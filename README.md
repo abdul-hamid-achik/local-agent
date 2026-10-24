@@ -102,12 +102,19 @@ a child and draws the whole screen from `apps/cli/src/tuimark/ui/app.tui`.
   filtered as you type: `up`/`down` choose, `tab` completes into the draft,
   `enter` completes while the chosen command differs from what you typed and
   runs it once it matches, and `esc` closes the popup without touching the
-  draft. `shift+tab` toggles plan/build like `/mode`. `ctrl+p` opens the
+  draft. `shift+tab` cycles build → plan → chat like `/mode`. `ctrl+p` opens the
   command palette, `/help` lists the commands and every key. `ctrl+l` jumps the transcript back
   to the newest message. `/theme dark|light|auto` switches the session theme
   (no argument reports the current one; nothing is persisted). `/mouse on|off`
   toggles mouse reporting in fullscreen — wheel scrolling and clicks, off by
   default so the terminal keeps its native selection; inline has no mouse.
+  Each tool card is titled by its tool (Read, Edit, Command, `MCP · server ·
+  tool`), marks how the call ended (`✓` succeeded, `✗` denied or failed, `!`
+  outcome unknown or unverified) and says how long it ran; a successful edit
+  shows the lines it changed and a created file its lines. While a turn
+  runs, spinners mark the streaming reply and a running tool, and the status
+  bar draws the stream's pace (pieces per second, flat while an approval
+  waits) after the elapsed time.
   Tool cards show only the first eight lines of a result; `/details` opens
   the last tool call's full output in a scrollable viewer (a modal in
   fullscreen, `esc` or `q` closes it; an expanded block in the inline live
