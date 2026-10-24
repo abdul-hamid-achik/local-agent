@@ -691,6 +691,13 @@ function domainMatches(pattern: string, host: string): boolean {
   return domain === host;
 }
 
+/**
+ * A path as a case-insensitive, normalization-insensitive filesystem sees
+ * it (macOS's default APFS, Windows): `src/Secrets/k` and a decomposed `é`
+ * name the same file as `src/secrets/k` and a composed one.
+ */
+const pathKey = (path: string) => path.normalize("NFC").toLowerCase();
+
 /** `server__tool` with `*` wildcards anywhere. */
 function mcpMatches(pattern: string, name: string): boolean {
   if (pattern === "" || pattern === "*") return true;
@@ -704,7 +711,13 @@ function ruleMatches(
   if (rule.tool !== request.tool) return false;
   switch (rule.tool) {
     case "edit":
-      return pathGlobMatches(rule.pattern, request.target);
+      // A deny or ask rule matches every spelling of the file it names: on
+      // a case-insensitive disk `src/Secrets/k` is `src/secrets/k`. An allow
+      // rule matches only its own, so a case-sensitive disk's other file
+      // is asked about, never allowed by it.
+      return rule.effect === "allow"
+        ? pathGlobMatches(rule.pattern, request.target)
+        : pathGlobMatches(pathKey(rule.pattern), pathKey(request.target));
     case "run_command":
       return commandMatches(rule, request);
     case "fetch":

@@ -71,6 +71,31 @@ test("edit patterns: globs, anchoring and escaped literals", () => {
   ).toBe("ask");
 });
 
+test("a deny or ask edit rule matches every spelling of its path; an allow rule only its own", () => {
+  const rules = [
+    rule("allow", "edit", "/src/**"),
+    rule("deny", "edit", "/src/secrets/**"),
+  ];
+  expect(evaluate(rules, edit("src/secrets/k")).effect).toBe("deny");
+  // The same file on a case-insensitive disk.
+  expect(evaluate(rules, edit("src/Secrets/k")).effect).toBe("deny");
+  expect(evaluate(rules, edit("SRC/SECRETS/K")).effect).toBe("deny");
+  // A decomposed é names the composed file.
+  expect(
+    evaluate([rule("ask", "edit", "/café/**")], edit("cafe\u0301/menu")).effect,
+  ).toBe("ask");
+  expect(
+    evaluate(
+      [rule("allow", "edit", "/**"), rule("ask", "edit", "/café/**")],
+      edit("cafe\u0301/menu"),
+    ).rule?.pattern,
+  ).toBe("/café/**");
+  // An allow rule never widens to another spelling.
+  expect(
+    evaluate([rule("allow", "edit", "/src/a.ts")], edit("src/A.ts")).effect,
+  ).toBe("ask");
+});
+
 test("run_command patterns: star prefixes, exact matches, one argv each", () => {
   const rules = [rule("allow", "run_command", "npm test *")];
   expect(evaluate(rules, run("npm test")).effect).toBe("allow");
