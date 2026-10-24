@@ -657,14 +657,27 @@ export function tableRuns(rows: string[]): Run[] {
 
 // --------------------------------------------------------------------- markdown
 
-/** An opening fence: three or more backticks or tildes, then an info string. */
-const FENCE_OPEN = /^\s{0,3}(`{3,}|~{3,})\s*([^`]*)$/;
+/**
+ * An opening fence: three or more backticks or tildes, then an info string.
+ * Any indent opens one, not only up to three spaces: inside a list item the
+ * fence sits under the item's text, and models indent it by four or more.
+ */
+const FENCE_OPEN = /^(\s*)(`{3,}|~{3,})\s*([^`]*)$/;
 /** A bullet (`-`, `*`, `+`) or a numbered (`1.`, `1)`) list item. */
 const LIST_ITEM = /^(\s*)([-*+]|\d{1,9}[.)])\s+(.*)$/;
 
-function closesFence(line: string, open: string): boolean {
+/** The same mark, at least as long, indented at most three past the opening. */
+function closesFence(line: string, open: string, indent: number): boolean {
   const mark = open[0] ?? "`";
-  return new RegExp(`^\\s{0,3}\\${mark}{${open.length},}\\s*$`).test(line);
+  return new RegExp(
+    `^\\s{0,${indent + 3}}\\${mark}{${open.length},}\\s*$`,
+  ).test(line);
+}
+
+/** A code line without the fence's own indent (a lazier line loses what it has). */
+function unindent(line: string, indent: number): string {
+  const lead = /^ */.exec(line)?.[0].length ?? 0;
+  return line.slice(Math.min(lead, indent));
 }
 
 /**
@@ -675,9 +688,10 @@ export function startsOpenFence(text: string): boolean {
   const lines = cleanText(text).split("\n");
   const fence = FENCE_OPEN.exec(lines[0] ?? "");
   if (!fence) return false;
-  const open = fence[1] ?? "```";
+  const open = fence[2] ?? "```";
+  const indent = fence[1]?.length ?? 0;
   for (let i = 1; i < lines.length; i++)
-    if (closesFence(lines[i] ?? "", open)) return false;
+    if (closesFence(lines[i] ?? "", open, indent)) return false;
   return true;
 }
 
@@ -762,12 +776,17 @@ export function parseBlocksAt(
     if (fence) {
       flush();
       const at = i;
-      const open = fence[1] ?? "```";
+      const open = fence[2] ?? "```";
+      const indent = fence[1]?.length ?? 0;
       const body: string[] = [];
-      for (i++; i < lines.length && !closesFence(lines[i] ?? "", open); i++) {
-        body.push(lines[i] ?? "");
+      for (
+        i++;
+        i < lines.length && !closesFence(lines[i] ?? "", open, indent);
+        i++
+      ) {
+        body.push(unindent(lines[i] ?? "", indent));
       }
-      const lang = clip((fence[2] ?? "").trim().split(/\s+/)[0] ?? "", 24);
+      const lang = clip((fence[3] ?? "").trim().split(/\s+/)[0] ?? "", 24);
       starts.push(at);
       blocks.push(codeBlock(next(), lang, body));
     } else if (TABLE_ROW.test(line)) {

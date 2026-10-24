@@ -26,6 +26,7 @@ import {
   type Run,
   resultSummary,
   runsText,
+  startsOpenFence,
   tableRuns,
   tokenizeLine,
   ViewBuilder,
@@ -504,6 +505,35 @@ test("fences: an info string with spaces opens one, and only the same mark close
   expect(runsText(blocks[0]?.runs ?? [])).toBe("a = 1\n~~~\nstill code");
   // A streamed prefix is the same mapping: the open fence is code already.
   expect(parseStreaming('```python title="x.py"\na = 1')[0]?.code).toBe(true);
+});
+
+test("fences: one under a list item is code, without the item's indent", () => {
+  const blocks = parseBlocks(
+    [
+      "1. Install:",
+      "",
+      "    ```sh",
+      "    bun install --frozen-lockfile",
+      "      rm -rf *.tmp",
+      "    ```",
+      "2. Run it",
+    ].join("\n"),
+  );
+  expect(blocks.map((b) => [b.item, b.code])).toEqual([
+    [true, false],
+    [false, true],
+    [true, false],
+  ]);
+  expect(blocks[1]?.lang).toBe("sh");
+  expect(runsText(blocks[1]?.runs ?? [])).toBe(
+    "bun install --frozen-lockfile\n  rm -rf *.tmp",
+  );
+  // A mark indented further than three past the opening is code, not the end.
+  const open = parseBlocks("```md\n    ```\nstill code\n```\nafter");
+  expect(runsText(open[0]?.runs ?? [])).toBe("    ```\nstill code");
+  expect(open[1]?.para).toBe(true);
+  expect(startsOpenFence("    ```sh\n    bun i")).toBe(true);
+  expect(startsOpenFence("    ```sh\n    bun i\n    ```")).toBe(false);
 });
 
 test("a message view is bounded: characters, blocks and code line width", () => {
