@@ -362,7 +362,6 @@ export interface Store {
   };
   draft: string;
   placeholder: string;
-  busy: boolean;
   /** The status bar: ambient facts, or a transient message (see idleStatus). */
   status: string;
   /**
@@ -714,7 +713,6 @@ export function initialStore(init: StoreInit): Store {
     },
     draft: "",
     placeholder: PLACEHOLDER,
-    busy: false,
     status: idleStatus(init.mcpServers, init.intent, {
       connecting: init.mcpConnecting,
     }),

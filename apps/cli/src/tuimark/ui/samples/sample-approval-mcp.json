@@ -717,7 +717,6 @@
   },
   "draft": "",
   "placeholder": "Type to queue a message",
-  "busy": true,
   "status": "Waiting for approval · y allow · a session · ! always · n deny · Esc deny",
   "commit_buf": {
     "id": "commit",

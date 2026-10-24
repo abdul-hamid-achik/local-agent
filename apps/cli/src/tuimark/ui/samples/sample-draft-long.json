@@ -590,7 +590,6 @@
   },
   "draft": "draft line 1\ndraft line 2\ndraft line 3\ndraft line 4\ndraft line 5\ndraft line 6\ndraft line 7\ndraft line 8\ndraft line 9\ndraft line 10\ndraft line 11\ndraft line 12",
   "placeholder": "Message the model",
-  "busy": false,
   "status": "build · last 1m 06s · 32 tok/s",
   "commit_buf": {
     "id": "commit",

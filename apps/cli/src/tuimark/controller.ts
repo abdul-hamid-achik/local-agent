@@ -60,6 +60,7 @@ import { tokensPerSecond } from "#cli/preview";
 import { terminalText } from "#cli/text";
 import {
   type Block,
+  type Card,
   cleanText,
   clip,
   fencedCodeBlocks,
@@ -77,8 +78,11 @@ import {
 } from "#cli/tuimark/blocks";
 import {
   CLIPBOARD_TOOL_NAMES,
+  COPY_TIMEOUT_MS,
   type CopyResult,
+  characters,
   charCount,
+  clipboardText,
   selectionHint,
 } from "#cli/tuimark/clipboard";
 import {
@@ -1775,6 +1779,12 @@ export class TuimarkClient {
         return;
       }
       ok = false;
+      // A refused head is not what the store shows: the next sync sends it
+      // again, whichever path wrote it (a tick, a phase, a publish).
+      if (writes.some((write) => write.path === "head")) {
+        this.headShown = "";
+        this.headSeconds = -1;
+      }
       await this.noteFailure(failure);
     });
     this.tail = next;
@@ -2137,10 +2147,7 @@ export class TuimarkClient {
   private syncHead(): void {
     const writes = this.headWrites();
     if (writes.length === 0) return;
-    void this.write(writes).then((ok) => {
-      // A refused write: the next sync sends it again.
-      if (!ok) this.headShown = "";
-    });
+    void this.write(writes);
   }
 
   /** What the head says the turn is doing; a change is written at once. */
@@ -2171,6 +2178,30 @@ export class TuimarkClient {
     this.flashed = false;
     if (!this.decide && !this.asking)
       void this.write([{ path: "status", value: this.idleText() }]);
+  }
+
+  /**
+   * The write that takes a tool card off hold once its approval or question
+   * is answered: running if the call goes on (its status is the running
+   * one, not "waiting for approval" until the next event), otherwise as it
+   * was. None when the card is gone (the turn ended).
+   */
+  private releaseCard(before: Card | undefined, running: boolean): Write[] {
+    if (!before || !this.liveTool) return [];
+    this.liveTool = {
+      ...this.liveTool,
+      card: running ? { ...before, status: "running", running: true } : before,
+    };
+    this.dirty = false;
+    return [{ path: "live", value: this.liveTool }];
+  }
+
+  /** What the ambient status keeps of the turn that just ended: how long, how fast. */
+  private recordTurn(): void {
+    this.lastTurn = {
+      seconds: this.turnSeconds(),
+      speed: tokensPerSecond(this.evalCount, this.evalDuration),
+    };
   }
 
   /** The writes that paint the header ctx for `used` tokens. */
@@ -2503,6 +2534,9 @@ export class TuimarkClient {
         terminalText(raw).split("\n")[0]?.trim() ?? "",
         60,
       );
+      // A transient of this turn, like a verdict: the next tool result puts
+      // the ambient status back, which keeps "1 queued".
+      this.flashed = true;
       await this.write([
         { path: "draft", value: "" },
         {
@@ -2995,18 +3029,24 @@ export class TuimarkClient {
   private async copyReply(what: "reply" | "code"): Promise<void> {
     const status = (text: string) =>
       this.write([{ path: "status", value: text }]);
+    // What is copied is the model's text without the control bytes the view
+    // strips too (an ESC sequence in a fence must not reach the clipboard).
     const reply = this.history.findLast(
       (message) =>
-        message.role === "assistant" && message.content.trim() !== "",
+        message.role === "assistant" &&
+        clipboardText(message.content).trim() !== "",
     );
     if (!reply) {
       await status(NO_REPLY_STATUS);
       return;
     }
+    // The last block with something in it: an empty fence is no code to copy.
     const text =
       what === "reply"
-        ? reply.content
-        : fencedCodeBlocks(reply.content).at(-1)?.text;
+        ? clipboardText(reply.content)
+        : fencedCodeBlocks(reply.content)
+            .map((block) => clipboardText(block.text))
+            .findLast((code) => code.trim() !== "");
     if (text === undefined) {
       await status(NO_CODE_STATUS);
       return;
@@ -3015,15 +3055,31 @@ export class TuimarkClient {
       ok: false,
       reason: "none",
     };
-    const label = what === "reply" ? "the last reply" : "the last code block";
+    // While a turn runs the reply being written is not in the history yet:
+    // what is copied is the last one that finished, and the status says so.
+    const running = this.busy;
+    const label =
+      what === "reply"
+        ? running
+          ? "the last finished reply"
+          : "the last reply"
+        : running
+          ? "the last code block of the last finished reply"
+          : "the last code block";
     if (copied.ok) {
       await status(
-        `Copied ${label} (${charCount(Array.from(text).length)} chars) with ${copied.tool}`,
+        `Copied ${label} (${charCount(characters(text))} chars) with ${copied.tool}${running ? "; the one being written is not done yet" : ""}`,
       );
       return;
     }
     if (copied.reason === "failed") {
       await status(oneLine(`Copy failed: ${copied.tool} ${copied.detail}`));
+      return;
+    }
+    if (copied.reason === "timeout") {
+      await status(
+        `${copied.tool} did not finish in ${COPY_TIMEOUT_MS / 1000} s; the clipboard may have it`,
+      );
       return;
     }
     await status(
@@ -3192,6 +3248,8 @@ export class TuimarkClient {
         resolve(false);
         return;
       }
+      /** The card as it was before the dialog put it on hold. */
+      let held: Card | undefined;
       const finish = async (
         allowed: boolean,
         session = false,
@@ -3234,6 +3292,8 @@ export class TuimarkClient {
         await this.write([
           { path: "approval", value: noApproval() },
           { path: "status", value: verdict },
+          // The card is no longer on hold: it runs (allowed) or is as it was.
+          ...this.releaseCard(held, allowed),
           ...this.headWrites(),
           ...(granted !== undefined ? this.grantsWrites() : []),
         ]);
@@ -3261,6 +3321,7 @@ export class TuimarkClient {
       ];
       if (this.liveTool) {
         // The card goes in the same write as the dialog, so the two never disagree.
+        held = this.liveTool.card;
         this.liveTool = {
           ...this.liveTool,
           card: onHold(this.liveTool.card, "waiting for approval"),
@@ -3302,6 +3363,8 @@ export class TuimarkClient {
         return;
       }
       const stash = this.draftNow;
+      /** The card as it was before the question put it on hold. */
+      let held: Card | undefined;
       const finish = async (answer?: Answer): Promise<void> => {
         if (this.asking !== state) return;
         signal.removeEventListener("abort", abort);
@@ -3325,6 +3388,7 @@ export class TuimarkClient {
           ...(verdict !== undefined
             ? [{ path: "status", value: verdict }]
             : []),
+          ...this.releaseCard(held, answer !== undefined),
           ...this.headWrites(),
         ]);
       };
@@ -3361,6 +3425,7 @@ export class TuimarkClient {
         ...this.headWrites(),
       ];
       if (this.liveTool) {
+        held = this.liveTool.card;
         this.liveTool = {
           ...this.liveTool,
           card: onHold(this.liveTool.card, QUESTION_CARD_STATUS),
@@ -3498,7 +3563,6 @@ export class TuimarkClient {
         // The welcome goes with the first message and never returns.
         { path: "empty", value: false },
         { path: "draft", value: "" },
-        { path: "busy", value: true },
         { path: "placeholder", value: PLACEHOLDER_BUSY },
         // The same ambient status as at rest: a transient one of the last
         // turn (an error, a command's answer) goes with the new turn.
@@ -3580,6 +3644,8 @@ export class TuimarkClient {
     /** A failed turn's notice view, committed (inline) in the finally below. */
     let notice: MessageView | undefined;
     let finished = false;
+    /** The turn ends on the ambient status (no error, no cancel, no goal note). */
+    let ambient = false;
     // A goal's commands: each run_command call's argv, and the calls that
     // succeeded (matched up when the turn ends; see settleGoal).
     const commandArgs = new Map<string, unknown>();
@@ -3778,12 +3844,9 @@ export class TuimarkClient {
             break;
         }
       }
-      // What the ambient status keeps of this turn from now on.
-      this.lastTurn = {
-        seconds: this.turnSeconds(),
-        speed: tokensPerSecond(this.evalCount, this.evalDuration),
-      };
+      this.recordTurn();
       status = this.idleText();
+      ambient = true;
       finished = true;
     } catch (error) {
       const aborted = request.signal.aborted;
@@ -3872,6 +3935,9 @@ export class TuimarkClient {
       // nothing that runs before it may write it on again.
       this.headOn = false;
       this.resumeClock();
+      // A cancelled or failed turn ended too: the bar's "last" is the turn
+      // that ended last, not an older one.
+      if (!finished) this.recordTurn();
       if (this.timer) clearInterval(this.timer);
       this.timer = undefined;
       clearTimeout(this.armTimer);
@@ -3900,11 +3966,15 @@ export class TuimarkClient {
       // and one that goes on starts its next turn with no gap a send
       // could take (runTurn).
       const goalEnd = await this.settleGoal();
-      if (goalEnd) status = goalEnd;
+      if (goalEnd) {
+        status = goalEnd;
+        ambient = false;
+      }
       await this.publishMessages([
-        { path: "busy", value: false },
         { path: "placeholder", value: PLACEHOLDER },
-        { path: "status", value: status },
+        // The ambient status as of now, not as of the turn's last event: a
+        // send queued while the placement or the goal settled is a fact in it.
+        { path: "status", value: ambient ? this.idleText() : status },
         ...(this.goal ? [] : [{ path: "header.goal_on", value: false }]),
         { path: "approval", value: noApproval() },
         { path: "question", value: noQuestion() },

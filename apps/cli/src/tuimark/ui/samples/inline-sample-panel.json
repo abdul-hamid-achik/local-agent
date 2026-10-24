@@ -432,7 +432,6 @@
   },
   "draft": "",
   "placeholder": "Message the model",
-  "busy": false,
   "status": "Status",
   "commit_buf": {
     "id": "commit",

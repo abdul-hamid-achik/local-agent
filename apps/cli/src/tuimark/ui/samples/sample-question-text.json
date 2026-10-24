@@ -590,7 +590,6 @@
   },
   "draft": "",
   "placeholder": "Type your answer",
-  "busy": true,
   "status": "Waiting for your answer · esc skip",
   "commit_buf": {
     "id": "commit",

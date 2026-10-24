@@ -295,7 +295,10 @@ export async function runTuimark(
     ...(deps.placement ? { placement: deps.placement } : {}),
     ...(deps.environment ? { environment: deps.environment } : {}),
     // The real clipboard tools; Tuimark owns the TTY, so never OSC 52.
-    copy: deps.copy ?? copyToClipboard,
+    // A tool is never taken from the workspace or the working directory.
+    copy:
+      deps.copy ??
+      ((text: string) => copyToClipboard(text, { exclude: [workspace.root] })),
     termProgram: deps.termProgram ?? process.env.TERM_PROGRAM,
     signal,
     run: deps.run,

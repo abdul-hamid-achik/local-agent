@@ -609,7 +609,6 @@
   },
   "draft": "",
   "placeholder": "Message the model",
-  "busy": false,
   "status": "Sessions · enter loads · esc closes",
   "commit_buf": {
     "id": "commit",

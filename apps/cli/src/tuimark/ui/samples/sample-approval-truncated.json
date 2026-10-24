@@ -14598,7 +14598,6 @@
   },
   "draft": "",
   "placeholder": "Type to queue a message",
-  "busy": true,
   "status": "Preview truncated · y allow · n deny · Esc deny",
   "commit_buf": {
     "id": "commit",

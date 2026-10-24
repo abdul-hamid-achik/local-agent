@@ -380,7 +380,6 @@ export function approvalSample(): Store {
   const call = builder.takeCall();
   store.live = liveToolView(call, "edit", "approval");
   store.approval = approvalState(EDIT_PROPOSAL);
-  store.busy = true;
   store.placeholder = PLACEHOLDER_BUSY;
   store.head = headState("approval", 12);
   store.status = APPROVAL_STATUS;
@@ -431,7 +430,6 @@ function questionStore(question: Question, sel = -1): Store {
   const live = liveToolView(builder.takeCall(), "ask_user", "requested");
   store.live = { ...live, card: onHold(live.card, QUESTION_CARD_STATUS) };
   store.question = questionState(question, sel);
-  store.busy = true;
   store.head = headState("answer", 12);
   store.placeholder =
     question.kind === "freetext"
@@ -497,7 +495,6 @@ export function streamingSample(): Store {
     "Here is the plan:\n\n```ts\nconst retries = 3;\nfor (let i = 0; i < retries; i++) {\n  await fetch(url);",
   );
   store.earlier = { n: 250 };
-  store.busy = true;
   store.placeholder = PLACEHOLDER_BUSY;
   store.head = headState("streaming", 12);
   return store;
@@ -514,7 +511,6 @@ export function thinkingSample(): Store {
       "and rethrow the last error so callers still see it.",
     ].join("\n"),
   );
-  store.busy = true;
   store.placeholder = PLACEHOLDER_BUSY;
   store.head = headState("thinking", 7);
   return store;
@@ -572,7 +568,6 @@ export function goalSample(): Store {
   store.header.goal = "goal 2/8";
   store.header.goal_on = true;
   store.live = streamingView("Running the fetch tests next.");
-  store.busy = true;
   store.placeholder = PLACEHOLDER_BUSY;
   store.head = headState("streaming", 41);
   return store;
@@ -603,7 +598,6 @@ export function commandApprovalSample(): Store {
     80,
     "/home/me/project",
   );
-  store.busy = true;
   store.placeholder = PLACEHOLDER_BUSY;
   store.head = headState("approval", 12);
   store.status = APPROVAL_STATUS;

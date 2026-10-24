@@ -1547,3 +1547,43 @@ test("fencedCodeBlocks: an unclosed fence runs to the end, a fence under a list 
   const long = `\`\`\`\n${"x".repeat(20000)}\n\`\`\``;
   expect(fencedCodeBlocks(long)[0]?.text.length).toBe(20000);
 });
+
+test("fencedCodeBlocks and the view agree on what is a code block", () => {
+  const sources = [
+    // A lazy line after a list item, then an indented fence under it.
+    "- step\nlazy line\n    ```js\n    second\n    ```",
+    // A table row and a quote under an item end the item's hold on a deep fence.
+    "- item\n\n    | a | b |\n    |--|--|\n\n    ```js\n    x\n    ```",
+    "- item\n\n    > quoted\n\n    ```js\n    after quote\n    ```",
+    // Indented four with no list above: not a fence, in the view or here.
+    "Text\n\n    ```sh\n    bun add x\n    ```\n",
+    // A numbered item with its fence, a second item, and a later fence.
+    "1. one\n\n   ```sh\n   a\n   ```\n2. two\n\n```sh\nb\n```\n",
+    "Plain\n\n```\nno lang\n```\n\n~~~\ntilde\n~~~\n",
+    "```py\nunclosed\nstill code",
+    // A table is a code block of the view's, but not a fenced one.
+    "| a | b |\n|:--|--:|\n| 1 | 2 |\n\n```ts\nreal\n```\n",
+  ];
+  for (const source of sources) {
+    const view = parseBlocks(source).filter(
+      (block) => block.code && !block.table,
+    );
+    expect(fencedCodeBlocks(source), source).toHaveLength(view.length);
+  }
+  // The cases that used to disagree, with the text they keep.
+  expect(fencedCodeBlocks(sources[0] ?? "")).toEqual([
+    { lang: "js", text: "second" },
+  ]);
+  // After an indented table row the deep fence is no fence, here as in the view.
+  expect(fencedCodeBlocks(sources[1] ?? "")).toEqual([]);
+  expect(fencedCodeBlocks(sources[2] ?? "")).toEqual([]);
+});
+
+test("fencedCodeBlocks keeps an empty fence as an empty block and the whole of a long reply", () => {
+  expect(fencedCodeBlocks("```\n```")).toEqual([{ lang: "", text: "" }]);
+  expect(fencedCodeBlocks("```\n\n```")).toEqual([{ lang: "", text: "" }]);
+  // Past the view's character bound the blocks still copy whole.
+  const huge = `${"filler\n\n".repeat(MAX_MESSAGE_CHARS / 4)}\`\`\`\nlast one\n\`\`\``;
+  expect(huge.length).toBeGreaterThan(MAX_MESSAGE_CHARS);
+  expect(fencedCodeBlocks(huge).at(-1)?.text).toBe("last one");
+});

@@ -118,6 +118,9 @@ const reply = (text: string): Script =>
 
 const store = (ui: FakeHost) => ui.store as unknown as Store;
 
+/** A turn runs (or waits on a question or an approval): the composer is not at rest. */
+const isBusy = (ui: FakeHost) => store(ui).placeholder !== "Message the model";
+
 /** The text of the in-flight reply: the final blocks and the tail. */
 const liveText = (s: Store) =>
   [...s.live.blocks, ...s.live.tail]
@@ -133,7 +136,7 @@ const viewText = (view: MessageView) =>
 test("a turn publishes the prompt, streams, keeps the reply and returns to idle", async () => {
   const { ui, client } = setup(reply("hello there"));
   await ui.fire("send", "hi");
-  expect(store(ui).busy).toBe(true);
+  expect(isBusy(ui)).toBe(true);
   expect(store(ui).messages[0]).toMatchObject({ is_user: true });
   expect(store(ui).draft).toBe("");
   expect(store(ui).placeholder).toBe("Type to queue a message");
@@ -144,7 +147,7 @@ test("a turn publishes the prompt, streams, keeps the reply and returns to idle"
     [false, true],
   ]);
   expect(s.live.active).toBe(false);
-  expect(s.busy).toBe(false);
+  expect(s.placeholder).toBe("Message the model");
   expect(s.placeholder).toBe("Message the model");
   expect(s.status).toBe("build · last <1s");
   expect(s.header.ctx_label).toBe("120/8.0k");
@@ -421,7 +424,7 @@ test("esc cancels the turn and gives the queued message back to the composer", a
   // After what was typed since, never in its place.
   expect(store(ui).draft).toBe("typed meanwhile\nqueued one");
   expect(seen).toHaveLength(1);
-  expect(store(ui).busy).toBe(false);
+  expect(isBusy(ui)).toBe(false);
 });
 
 test("a queued prompt runs after a failed turn too, without duplicating the failed one", async () => {
@@ -932,7 +935,7 @@ test("cancelling the turn closes an open question without an answer", async () =
   expect(store(ui).status).toBe("Cancelled");
   expect(store(ui).placeholder).not.toBe(QUESTION_PLACEHOLDER_CHOICE);
   // A later send is a message again.
-  expect(store(ui).busy).toBe(false);
+  expect(isBusy(ui)).toBe(false);
 });
 
 test("approval: deny, and esc (also dialog_cancel), keep the edit out", async () => {
@@ -963,7 +966,7 @@ test("a cancelled turn says Cancelled, takes the prompt back and restores the dr
   expect(store(ui).status).toBe("Cancelled");
   expect(store(ui).messages).toHaveLength(0);
   expect(store(ui).draft).toBe("slow one");
-  expect(store(ui).busy).toBe(false);
+  expect(isBusy(ui)).toBe(false);
 });
 
 test("fullscreen: a cancelled or failed reply keeps what had arrived", async () => {
@@ -1063,7 +1066,7 @@ test("esc while an approval is pending denies it", async () => {
   client.abort();
   await client.idle();
   expect(store(ui).approval.open).toBe(false);
-  expect(store(ui).busy).toBe(false);
+  expect(isBusy(ui)).toBe(false);
   // Aborting is a deny: the promise resolved to false, not to a wrong true.
   expect(decisions).toEqual([false]);
 });
@@ -1188,7 +1191,7 @@ test("idle() waits for a turn that is aborted while its first write is in flight
   await sent;
   // The turn was cancelled before it started: the runtime never ran.
   expect(started).toBe(false);
-  expect(store(ui).busy).toBe(false);
+  expect(isBusy(ui)).toBe(false);
 });
 
 test("a refused write is shown on the status line, once, and remembered in a bounded list", async () => {
@@ -1732,7 +1735,7 @@ test("quit aborts the running turn and answers quit", async () => {
   await client.idle();
   expect(aborted).toBe(true);
   expect(ui.statusLog()).toContain("Turn cancelled · ctrl+c again to quit");
-  expect(store(ui).busy).toBe(false);
+  expect(isBusy(ui)).toBe(false);
   // The prompt came back to the composer (no session): it is cleared first.
   expect(store(ui).status).toBe("Cancelled");
   expect(store(ui).draft).toBe("go");
@@ -1753,7 +1756,7 @@ test("the process signal aborts the turn too", async () => {
   await ui.fire("send", "go");
   aborts.abort();
   await client.idle();
-  expect(store(ui).busy).toBe(false);
+  expect(isBusy(ui)).toBe(false);
 });
 
 test("a long history shows a window and 'load earlier' widens it by 100", async () => {
@@ -2492,7 +2495,7 @@ test("esc closes the popup only: draft untouched, turn not cancelled", async () 
     }),
   );
   await ui.fire("send", "go");
-  expect(store(ui).busy).toBe(true);
+  expect(isBusy(ui)).toBe(true);
   await ui.fire("typed", "/m");
   expect(store(ui).slash.open).toBe(true);
   const batches = ui.batches.length;
@@ -2505,7 +2508,7 @@ test("esc closes the popup only: draft untouched, turn not cancelled", async () 
       .flat()
       .filter((w) => w.path === "draft"),
   ).toEqual([]);
-  expect(store(ui).busy).toBe(true);
+  expect(isBusy(ui)).toBe(true);
   // The dismissed popup stays closed for this draft, opens for the next.
   await ui.fire("typed", "/mo");
   expect(store(ui).slash.open).toBe(false);
@@ -2514,7 +2517,7 @@ test("esc closes the popup only: draft untouched, turn not cancelled", async () 
   expect(store(ui).slash.open).toBe(true);
   release();
   await client.idle();
-  expect(store(ui).busy).toBe(false);
+  expect(isBusy(ui)).toBe(false);
 });
 
 test("enter completes over the popup only when the choice differs", async () => {
@@ -2524,7 +2527,7 @@ test("enter completes over the popup only when the choice differs", async () => 
   await ui.fire("send", "/mo");
   expect(store(ui).draft).toBe("/mode ");
   expect(store(ui).slash.open).toBe(false);
-  expect(store(ui).busy).toBe(false);
+  expect(isBusy(ui)).toBe(false);
   expect(seen).toEqual([]);
   // A moved choice completes to that row, still without running it.
   await ui.fire("typed", "/m");
@@ -3128,7 +3131,7 @@ test("/details is refused while a turn runs and never covers an approval", async
   await busy.ui.fire("send", "read it");
   await busy.client.idle();
   await busy.ui.fire("send", "wait");
-  await until(() => store(busy.ui).busy);
+  await until(() => isBusy(busy.ui));
   await busy.ui.fire("send", "/details");
   expect(store(busy.ui).status).toBe(
     "Busy · wait for the current turn to finish",
@@ -3696,7 +3699,7 @@ test("a slow placement read never holds the composer: its warning follows a late
   await ui.fire("send", "one");
   await client.idle();
   // The turn is over and the composer free, the read still out.
-  expect(store(ui).busy).toBe(false);
+  expect(isBusy(ui)).toBe(false);
   expect(store(ui).messages.some((m: MessageView) => m.is_notice)).toBe(false);
   answer({ sizeBytes: 100, vramBytes: 50 });
   await ui.fire("send", "two");
@@ -5372,7 +5375,10 @@ test("ctrl+c between a goal's turns stops the goal before its next turn, and the
   ui.refuse = (writes) => {
     if (
       !presses.length &&
-      writes.some((write) => write.path === "busy" && write.value === false)
+      writes.some(
+        (write) =>
+          write.path === "placeholder" && write.value === "Message the model",
+      )
     )
       presses.push(ui.fire("quit_request"));
     return undefined;
@@ -5405,7 +5411,10 @@ test("ctrl+c between a goal's turns gives a queued send back instead of running 
   ui.refuse = (writes) => {
     if (
       !presses.length &&
-      writes.some((write) => write.path === "busy" && write.value === false)
+      writes.some(
+        (write) =>
+          write.path === "placeholder" && write.value === "Message the model",
+      )
     )
       presses.push(ui.fire("quit_request"));
     return undefined;
@@ -5499,7 +5508,7 @@ test("a goal runs its turns until the model reports done, and says what the evid
     "Goal reported done — evidence: `bun test` exited 0",
   );
   expect(store(ui).header.goal_on).toBe(false);
-  expect(store(ui).busy).toBe(false);
+  expect(isBusy(ui)).toBe(false);
   // Every turn reports to the client, and refusals share one set.
   expect(options.every((o) => typeof o.goal === "function")).toBe(true);
   expect(options[0]?.refused).toBeInstanceOf(Set);
@@ -5682,7 +5691,9 @@ test("esc in a goal turn's tail, where no cancel reaches a turn, still ends the 
   ui.refuse = (writes) => {
     if (
       !pressed &&
-      writes.some((w) => w.path === "busy" && w.value === false)
+      writes.some(
+        (w) => w.path === "placeholder" && w.value === "Message the model",
+      )
     ) {
       pressed = true;
       void ui.fire("cancel");
@@ -5705,7 +5716,12 @@ test("esc in a goal turn's tail, where no cancel reaches a turn, still ends the 
   );
   let again = false;
   late.ui.refuse = (writes) => {
-    if (!again && writes.some((w) => w.path === "busy" && w.value === false)) {
+    if (
+      !again &&
+      writes.some(
+        (w) => w.path === "placeholder" && w.value === "Message the model",
+      )
+    ) {
       again = true;
       void late.ui.fire("cancel");
       void late.ui.fire("send", "and then this");
@@ -5722,7 +5738,7 @@ test("esc in a goal turn's tail, where no cancel reaches a turn, still ends the 
   ]);
   expect(store(late.ui).status).not.toContain("Goal");
   expect(store(late.ui).header.goal_on).toBe(false);
-  expect(store(late.ui).busy).toBe(false);
+  expect(isBusy(late.ui)).toBe(false);
 });
 
 test("a typed message that starts like a goal's is still the user's", async () => {
@@ -6328,8 +6344,9 @@ test("/copy is not refused while a turn runs: it copies the last finished reply"
   await client.idle();
   await ui.fire("send", "go");
   await ui.fire("send", "/copy code");
+  // The reply being written is not in the history yet: the status says which one it copied.
   expect(store(ui).status).toBe(
-    "Copied the last code block (2 chars) with fakeclip",
+    "Copied the last code block of the last finished reply (2 chars) with fakeclip; the one being written is not done yet",
   );
   expect(clip.copied).toEqual(["ls"]);
   // Another command is still refused while busy.
@@ -6536,4 +6553,227 @@ test("the copy count is characters, not UTF-16 units", async () => {
   expect(store(ui).status).toBe(
     "Copied the last reply (3 chars) with fakeclip",
   );
+});
+
+test("/copy code: an empty fence is no code, the last block with text is copied", async () => {
+  const clip = fakeClipboard();
+  const { ui, client } = setup(
+    seededThen("```sh\nls -la\n```\n\n```\n\n```", reply("unused")),
+    { copy: clip.copy },
+  );
+  await ui.fire("send", "seed");
+  await client.idle();
+  await ui.fire("send", "/copy code");
+  expect(clip.copied).toEqual(["ls -la"]);
+  const empty = fakeClipboard();
+  const only = setup(seededThen("Words.\n\n```\n```\n", reply("x")), {
+    copy: empty.copy,
+  });
+  await only.ui.fire("send", "seed");
+  await only.client.idle();
+  await only.ui.fire("send", "/copy code");
+  expect(store(only.ui).status).toBe("No code block in the last reply");
+  expect(empty.copied).toEqual([]);
+});
+
+test("what reaches the clipboard has no control bytes: an ESC sequence in a fence is gone, a tab stays", async () => {
+  const clip = fakeClipboard();
+  const reply1 =
+    "Run:\n\n```sh\n\x1b[31mred\x1b[0m\tbell\x07\n```\n\x1b]0;title\x07done";
+  const { ui, client } = setup(seededThen(reply1, reply("x")), {
+    copy: clip.copy,
+  });
+  await ui.fire("send", "seed");
+  await client.idle();
+  await ui.fire("send", "/copy code");
+  await ui.fire("send", "/copy");
+  expect(clip.copied).toEqual([
+    "red\tbell",
+    "Run:\n\n```sh\nred\tbell\n```\ndone",
+  ]);
+});
+
+test("the count is characters a reader sees: one family emoji is one", async () => {
+  const clip = fakeClipboard();
+  const { ui, client } = setup(reply("a👨‍👩‍👧e\u0301"), { copy: clip.copy });
+  await ui.fire("send", "hi");
+  await client.idle();
+  await ui.fire("send", "/copy");
+  expect(store(ui).status).toBe(
+    "Copied the last reply (3 chars) with fakeclip",
+  );
+});
+
+test("a tool that timed out is named, and says the clipboard may have it", async () => {
+  const slow = fakeClipboard({ ok: false, reason: "timeout", tool: "xclip" });
+  const { ui, client } = setup(reply("hello"), { copy: slow.copy });
+  await ui.fire("send", "hi");
+  await client.idle();
+  await ui.fire("send", "/copy");
+  expect(store(ui).status).toBe(
+    "xclip did not finish in 3 s; the clipboard may have it",
+  );
+});
+
+test("a send queued while the turn runs shows as 'Queued', then as '1 queued' once a tool result gives the ambient bar back", async () => {
+  let toResult: () => void = () => {};
+  const gate1 = new Promise<void>((r) => {
+    toResult = r;
+  });
+  let end: () => void = () => {};
+  const gate2 = new Promise<void>((r) => {
+    end = r;
+  });
+  const { ui, client } = setup(async function* (ctx) {
+    if (ctx.messages.at(-1)?.content !== "go") return;
+    yield { type: "tool_requested", id: "r1", name: "read" };
+    yield { type: "tool_start", id: "r1", name: "read" };
+    await gate1;
+    yield {
+      type: "tool_result",
+      id: "r1",
+      name: "read",
+      status: "succeeded",
+      output: "o",
+    };
+    await gate2;
+  });
+  await ui.fire("send", "go");
+  await ui.fire("send", "later");
+  expect(store(ui).status).toBe("Queued: later");
+  toResult();
+  await until(() => store(ui).status === "build · 1 queued");
+  end();
+  await client.idle();
+});
+
+test("a cancelled or failed turn is the last turn too: the bar does not keep an older one", async () => {
+  let nowMs = 1_000_000;
+  const { ui, client } = setup(
+    async function* (ctx) {
+      const prompt = ctx.messages.at(-1)?.content;
+      nowMs += prompt === "first" ? 5_000 : 2_000;
+      if (prompt === "first")
+        yield {
+          type: "message",
+          message: { role: "assistant", content: "ok" },
+        };
+      else if (prompt === "fail") throw new Error("boom");
+      else
+        await new Promise((_, reject) =>
+          ctx.options.signal.addEventListener("abort", () =>
+            reject(new Error("aborted")),
+          ),
+        );
+    },
+    { now: () => nowMs },
+  );
+  const idleBar = async () => {
+    // Any idle write: a panel opened and closed rests the bar at the ambient status.
+    await ui.fire("send", "/status");
+    await ui.fire("panel_close");
+    return store(ui).status;
+  };
+  await ui.fire("send", "first");
+  await client.idle();
+  expect(await idleBar()).toBe("build · last 5s");
+  await ui.fire("send", "slow");
+  await ui.fire("cancel");
+  await client.idle();
+  expect(await idleBar()).toBe("build · last 2s");
+  await ui.fire("send", "fail");
+  await client.idle();
+  expect(await idleBar()).toBe("build · last 2s");
+});
+
+test("a send queued while the placement settles is a fact of the status the turn ends on", async () => {
+  const { ui, client } = setup(
+    async function* (ctx) {
+      if (ctx.messages.at(-1)?.content !== "go") return;
+      yield { type: "done", inputTokens: 1, outputTokens: 1 };
+      yield { type: "message", message: { role: "assistant", content: "ok" } };
+    },
+    {
+      // The placement read is slow: the turn waits for it (up to 300 ms) before it ends.
+      placement: async () => {
+        await new Promise((r) => setTimeout(r, 150));
+        return null;
+      },
+    },
+  );
+  await ui.fire("send", "go");
+  await until(() => store(ui).head.text === "" || !store(ui).head.on);
+  await ui.fire("send", "later");
+  await client.idle();
+  const ending = ui.batches.find((batch) =>
+    batch.some(
+      (w) => w.path === "placeholder" && w.value === "Message the model",
+    ),
+  );
+  const shown = ending?.find((w) => w.path === "status")?.value;
+  expect(shown).toBe("build · last <1s · 1 queued");
+});
+
+test("once an approval is answered the card is no longer on hold: it runs", async () => {
+  let release: () => void = () => {};
+  const gate = new Promise<void>((r) => {
+    release = r;
+  });
+  const { ui, client } = setup(async function* ({ options }) {
+    yield {
+      type: "message",
+      message: {
+        role: "assistant",
+        content: "",
+        tool_calls: [
+          {
+            id: "c1",
+            function: { name: "edit", arguments: { path: "a.txt" } },
+          },
+        ],
+      },
+    };
+    yield { type: "tool_requested", id: "e1", name: "edit" };
+    await options.approve(editProposal(), options.signal);
+    await gate;
+  });
+  await ui.fire("send", "edit");
+  await untilApproval(ui);
+  expect(store(ui).live.card).toMatchObject({ running: false, mark: "?" });
+  await ui.fire("dialog_confirm");
+  expect(store(ui).live.card).toMatchObject({
+    status: "running",
+    running: true,
+    mark: "",
+    warn: false,
+  });
+  release();
+  await client.idle();
+});
+
+test("a refused head write is sent again, whichever path wrote it", async () => {
+  let nowMs = 1_000_000;
+  const { ui, client } = setup(
+    quiet(async ({ options }) => {
+      await new Promise((r) => options.signal.addEventListener("abort", r));
+    }),
+    { now: () => nowMs },
+  );
+  await ui.fire("send", "go");
+  expect(store(ui).head.text).toBe("waiting for the model · 0s");
+  let refused = 0;
+  ui.refuse = (writes) => {
+    if (refused === 0 && writes.some((w) => w.path === "head")) {
+      refused++;
+      return "refused";
+    }
+    return undefined;
+  };
+  nowMs += 1_000;
+  await client.flush();
+  expect(refused).toBe(1);
+  // The same second again: the head still differs from the store's, so it goes out.
+  await until(() => store(ui).head.text === "waiting for the model · 1s");
+  await ui.fire("cancel");
+  await client.idle();
 });

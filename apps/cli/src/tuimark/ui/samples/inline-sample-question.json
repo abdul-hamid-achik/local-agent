@@ -355,7 +355,6 @@
   },
   "draft": "",
   "placeholder": "enter takes the chosen row",
-  "busy": true,
   "status": "Waiting for your answer · esc skip",
   "commit_buf": {
     "id": "commit",

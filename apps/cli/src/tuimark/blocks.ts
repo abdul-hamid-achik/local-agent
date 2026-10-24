@@ -969,47 +969,19 @@ export function startsOpenFence(text: string): boolean {
 
 /**
  * The fenced code blocks of a markdown source, in order, each with its info
- * word and its text exactly as the model wrote it (what `/copy code` puts on
- * the clipboard): not the parsed blocks, which cut a long reply, color the
- * code into runs and turn a pipe table into a code block of its own. The
- * fences follow the rules of the parser above (an opening fence indented
- * four or more counts only under a list item; the same mark, at least as
- * long, closes it; the next less-indented list item ends it); a fence that
- * never closes runs to the end, as in the view.
+ * word and its text as the model wrote it (what `/copy code` puts on the
+ * clipboard): a tab stays a tab and a long block or reply is not cut. It is
+ * the view's own parse that finds them (`parseBlocksAt` with a capture), so
+ * what is a code block here is what the transcript shows as one: lazy lines
+ * after a list item, an indented fence under an item, a table or a quote
+ * ending an item, an unclosed fence running to the end.
  */
 export function fencedCodeBlocks(
   markdown: string,
 ): { lang: string; text: string }[] {
-  // Raw, but for the line ends: a tab in a Makefile must survive the copy.
-  const lines = markdown.replace(/\r\n?/g, "\n").split("\n");
-  const found: { lang: string; text: string }[] = [];
-  let underItem = false;
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i] ?? "";
-    const fence = FENCE_OPEN.exec(line);
-    if (fence && fenceOpens(fence[1]?.length ?? 0, underItem)) {
-      const open = fence[2] ?? "```";
-      const indent = fence[1]?.length ?? 0;
-      const body: string[] = [];
-      for (
-        i++;
-        i < lines.length && !closesFence(lines[i] ?? "", open, indent);
-        i++
-      ) {
-        if (leavesFence(lines[i] ?? "", indent)) {
-          i--;
-          break;
-        }
-        body.push(unindent(lines[i] ?? "", indent));
-      }
-      found.push({
-        lang: (fence[3] ?? "").trim().split(/\s+/)[0] ?? "",
-        text: body.join("\n"),
-      });
-    } else if (LIST_ITEM.test(line)) underItem = true;
-    else if (line.trim() !== "" && !/^\s{2,}/.test(line)) underItem = false;
-  }
-  return found;
+  const codes: { lang: string; text: string }[] = [];
+  parseBlocksAt(markdown, "c", 0, undefined, undefined, codes);
+  return codes;
 }
 
 /**
@@ -1054,13 +1026,23 @@ export function parseBlocksAt(
   first = 0,
   links?: LinkRef[],
   tableCols?: number,
+  /**
+   * Collects each fenced code block's text as written (see
+   * fencedCodeBlocks). With it the whole source is parsed, not the view's
+   * bounded prefix, and the classification of every line is the same.
+   */
+  codes?: { lang: string; text: string }[],
 ): Parsed {
   const blocks: Block[] = [];
   const starts: number[] = [];
-  const cut = markdown.length > MAX_MESSAGE_CHARS;
-  const lines = cleanText(
-    cut ? markdown.slice(0, MAX_MESSAGE_CHARS) : markdown,
-  ).split("\n");
+  const cut = codes === undefined && markdown.length > MAX_MESSAGE_CHARS;
+  const source = cut ? markdown.slice(0, MAX_MESSAGE_CHARS) : markdown;
+  const lines = cleanText(source).split("\n");
+  // The source's own lines, for the text a capture keeps. Cleaning can only
+  // disagree on the count when an escape sequence spans lines; then the
+  // cleaned lines stand in, so the two never misalign.
+  const rawSplit = codes ? source.replace(/\r\n/g, "\n").split("\n") : lines;
+  const rawLines = rawSplit.length === lines.length ? rawSplit : lines;
   let para: string[] = [];
   let paraAt = 0;
   let quote: string[] = [];
@@ -1105,6 +1087,7 @@ export function parseBlocksAt(
       const open = fence[2] ?? "```";
       const indent = fence[1]?.length ?? 0;
       const body: string[] = [];
+      const rawBody: string[] = [];
       for (
         i++;
         i < lines.length && !closesFence(lines[i] ?? "", open, indent);
@@ -1116,8 +1099,10 @@ export function parseBlocksAt(
           break;
         }
         body.push(unindent(lines[i] ?? "", indent));
+        rawBody.push(unindent(rawLines[i] ?? "", indent));
       }
       const lang = clip((fence[3] ?? "").trim().split(/\s+/)[0] ?? "", 24);
+      codes?.push({ lang, text: rawBody.join("\n") });
       starts.push(at);
       blocks.push(codeBlock(next(), lang, body));
     } else if (TABLE_ROW.test(line)) {

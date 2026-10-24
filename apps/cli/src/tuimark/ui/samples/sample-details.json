@@ -599,7 +599,6 @@
   },
   "draft": "",
   "placeholder": "Message the model",
-  "busy": false,
   "status": "Latest tool output: read",
   "commit_buf": {
     "id": "commit",

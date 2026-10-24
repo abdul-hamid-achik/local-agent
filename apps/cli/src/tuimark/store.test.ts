@@ -95,7 +95,6 @@ test("the initial store has every path the document reads", () => {
   expect(Object.keys(store).sort()).toEqual(
     [
       "approval",
-      "busy",
       "commit_blocks",
       "commit_buf",
       "details",
