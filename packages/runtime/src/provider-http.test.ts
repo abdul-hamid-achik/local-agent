@@ -574,16 +574,17 @@ describe("provider request retries", () => {
 
   test("a wait for Retry-After ends the moment the request is aborted", async () => {
     let requests = 0;
+    const controller = new AbortController();
     const server = serve(() => {
       requests++;
+      // Abort once the server has the request, not on a clock of the test's own.
+      setTimeout(() => controller.abort(new Error("stop")), 50);
       return new Response("busy", {
         status: 503,
         headers: { "retry-after": "10" },
       });
     });
     try {
-      const controller = new AbortController();
-      setTimeout(() => controller.abort(new Error("stop")), 150);
       const started = Date.now();
       await expect(
         events(providers.openai(server.url.origin), controller.signal),
@@ -643,7 +644,28 @@ describe("provider request retries", () => {
     }
   });
 
-  test("Retry-After is honoured but capped; a missing one backs off", () => {
+  test("a Retry-After longer than the cap is not retried early: the answer is returned at once", async () => {
+    let requests = 0;
+    const server = serve(() => {
+      requests++;
+      return new Response("busy", {
+        status: 503,
+        headers: { "retry-after": "60" },
+      });
+    });
+    try {
+      const started = Date.now();
+      await expect(events(providers.openai(server.url.origin))).rejects.toThrow(
+        /\(503\)/,
+      );
+      expect(Date.now() - started).toBeLessThan(1_000);
+      expect(requests).toBe(1);
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test("Retry-After is honoured up to the cap; a missing one backs off", () => {
     const after = (value?: string) =>
       providerRetryDelayMs(
         new Response(null, {
@@ -654,8 +676,13 @@ describe("provider request retries", () => {
       );
     expect(after("2")).toBe(2_000);
     expect(after("0")).toBe(0);
-    expect(after("3600")).toBe(10_000);
-    expect(after(new Date(Date.now() + 3_600_000).toUTCString())).toBe(10_000);
+    expect(after("10")).toBe(10_000);
+    // Longer than we wait: no retry at all, the answer stands.
+    expect(after("11")).toBeUndefined();
+    expect(after("3600")).toBeUndefined();
+    expect(
+      after(new Date(Date.now() + 3_600_000).toUTCString()),
+    ).toBeUndefined();
     expect(after("soon")).toBeGreaterThan(0);
     expect(after()).toBeGreaterThan(0);
     expect(after()).toBeLessThan(10_000);

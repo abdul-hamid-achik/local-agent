@@ -193,17 +193,22 @@ const maxRetryWaitMs = 10_000;
 /** Answers that say "not now" before any reply: the server did nothing with the request. */
 const retryableStatuses = new Set([429, 502, 503, 504]);
 
-/** The wait before retry `attempt` (0-based): the server's Retry-After, capped, else a short backoff. */
+/**
+ * The wait before retry `attempt` (0-based): the server's Retry-After, else a
+ * short backoff. Undefined when the server asks for longer than we wait:
+ * retrying early would only be refused again, so the answer stands.
+ */
 export function providerRetryDelayMs(
   response: Response | undefined,
   attempt: number,
-): number {
+): number | undefined {
   const header = response?.headers.get("retry-after")?.trim();
   if (header) {
     const ms = /^\d+$/.test(header)
       ? Number(header) * 1_000
       : Date.parse(header) - Date.now();
-    if (Number.isFinite(ms)) return Math.min(Math.max(ms, 0), maxRetryWaitMs);
+    if (Number.isFinite(ms))
+      return ms > maxRetryWaitMs ? undefined : Math.max(ms, 0);
   }
   return 250 * 2 ** attempt;
 }
@@ -239,6 +244,7 @@ function guardedFetch(signal: AbortSignal, timeoutMs: number): typeof fetch {
       const caller = init?.signal
         ? AbortSignal.any([signal, init.signal])
         : signal;
+      const retries = maxProviderRetries;
       for (let attempt = 0; ; attempt++) {
         const controller = new AbortController();
         const headersTimer = setTimeout(
@@ -256,19 +262,21 @@ function guardedFetch(signal: AbortSignal, timeoutMs: number): typeof fetch {
           clearTimeout(headersTimer);
           // Only a refused or reset connection; a timeout or a cancel is final
           // (their errors are not tunnelLost, and pause throws once cancelled).
-          if (attempt < maxProviderRetries && tunnelLost(error)) {
-            await pause(providerRetryDelayMs(undefined, attempt), caller);
+          if (attempt < retries && tunnelLost(error)) {
+            await pause(providerRetryDelayMs(undefined, attempt) ?? 0, caller);
             continue;
           }
           throw controller.signal.reason ?? error;
         }
         clearTimeout(headersTimer);
+        const delay = providerRetryDelayMs(response, attempt);
         if (
-          attempt < maxProviderRetries &&
-          retryableStatuses.has(response.status)
+          attempt < retries &&
+          retryableStatuses.has(response.status) &&
+          delay !== undefined
         ) {
           await response.body?.cancel().catch(() => undefined);
-          await pause(providerRetryDelayMs(response, attempt), caller);
+          await pause(delay, caller);
           continue;
         }
         return wrapBodyWithIdleTimeout(response, timeoutMs, controller);
