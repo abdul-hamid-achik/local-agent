@@ -32,6 +32,11 @@ bun run dev
 from the repository root. To put `local-agent` on your PATH, run `bun link`
 in `apps/cli`.
 
+Tags are releases: the [releases page](https://github.com/abdul-hamid-achik/local-agent/releases)
+carries a source tarball with checksums for every `v*` tag (there are no
+prebuilt binaries of the TypeScript client yet), and `--version` prints the
+installed one.
+
 ## First session
 
 Point a run at the repository you want the agent to inspect or change — the

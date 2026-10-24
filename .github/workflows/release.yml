@@ -1,0 +1,69 @@
+name: Release
+
+# A `v*` tag publishes the CLI: the gates run once more, then the GitHub
+# release carries a source tarball of the tag and its checksums. The CLI
+# installs from source (Bun 1.4.2 + Ollama); there are no prebuilt binaries,
+# because the Tuimark client reads its ui/*.tui documents from disk next to
+# the module. Historical Go releases keep their own tags and assets.
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  verify:
+    uses: ./.github/workflows/verify.yml
+    permissions:
+      contents: read
+
+  release:
+    name: source tarball and notes
+    needs: verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+
+      - name: Pack the source tree
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          name="local-agent-${TAG}-src"
+          git archive --format=tar.gz --prefix="${name}/" -o "${name}.tar.gz" "$TAG"
+          sha256sum "${name}.tar.gz" > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Write the release notes
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          {
+            printf '## Install from source\n\n'
+            printf '```sh\n'
+            printf 'git clone https://github.com/abdul-hamid-achik/local-agent.git\n'
+            printf 'cd local-agent && git checkout %s\n' "$TAG"
+            printf 'bun install --frozen-lockfile\n'
+            printf 'bun run dev        # Tuimark client, default model\n'
+            printf '```\n\n'
+            printf 'Requires Bun 1.4.2 and a running Ollama. Detached source tarball:\n'
+            printf '`local-agent-%s-src.tar.gz` (checksums in `SHA256SUMS.txt`).\n\n' "$TAG"
+            printf '## Changes\n\n'
+            git log --no-merges --format='- %s' "$(git describe --tags --abbrev=0 "${TAG}^" 2>/dev/null || echo "${TAG}^")..${TAG}"
+          } > "$RUNNER_TEMP/notes.md"
+          cat "$RUNNER_TEMP/notes.md"
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          gh release create "$TAG" \
+            --title "$TAG" \
+            --notes-file "$RUNNER_TEMP/notes.md" \
+            "local-agent-${TAG}-src.tar.gz" SHA256SUMS.txt

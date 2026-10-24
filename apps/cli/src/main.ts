@@ -58,6 +58,7 @@ try {
     args: Bun.argv.slice(2),
     options: {
       help: { type: "boolean", short: "h" },
+      version: { type: "boolean" },
       model: { type: "string" },
       think: { type: "string" },
       context: { type: "string" },
@@ -81,10 +82,16 @@ try {
     },
   });
   const ui = parseUi(values.ui);
+  if (values.version) {
+    const pkg = (await import("../package.json")) as { version?: string };
+    console.log(`local-agent ${pkg.version ?? "0.0.0"}`);
+    process.exit(0);
+  }
   if (values.help) {
     console.log(`Bun Local Agent — experimental agent
 
 bun dev [--model MODEL (default: ${DEFAULT_OLLAMA_MODEL})] [--mode fullscreen|inline|headless] [--ui vue|tuimark] [-p PROMPT] [--json]
+  --version            Print the CLI version and exit
   --model MODEL        Ollama model (default: ${DEFAULT_OLLAMA_MODEL}, or LOCAL_AGENT_MODEL);
                        Chalupa keeps the model of its profile
   --think on|off       Turn the model's thinking on or off (or LOCAL_AGENT_THINK=1|0);
