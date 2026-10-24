@@ -201,17 +201,23 @@ const MAX_LINK_CHECKS = 64;
  * ones that name a link to one: a word that resolves inside `cwd` through a
  * symbolic link whose target the file tools would hide, shown as
  * `notes.txt -> .env`. A dangling link is judged by its text. Checked when
- * the proposal is made; a link changed afterwards is not seen.
+ * the proposal is made; a link changed afterwards is not seen. At most
+ * MAX_LINK_CHECKS words are followed; with more, the proposal is flagged
+ * rather than passed unchecked.
  */
 async function secretArguments(
   argv: readonly string[],
   cwd: string,
 ): Promise<string[]> {
   const found = secretPathsIn(argv);
-  const words = pathTokens(argv).filter(
-    (word) => !word.startsWith("-") && !word.startsWith("~"),
-  );
-  for (const word of [...new Set(words)].slice(0, MAX_LINK_CHECKS)) {
+  const words = [
+    ...new Set(
+      pathTokens(argv).filter(
+        (word) => !word.startsWith("-") && !word.startsWith("~"),
+      ),
+    ),
+  ];
+  for (const word of words.slice(0, MAX_LINK_CHECKS)) {
     const path = resolve(cwd, word);
     if (path !== cwd && !path.startsWith(`${cwd}${sep}`)) continue;
     let target: string | undefined;
@@ -231,6 +237,10 @@ async function secretArguments(
       inside === ".." || inside.startsWith(`..${sep}`) ? target : inside;
     if (isSecretPath(shown)) found.push(`${word} -> ${shown}`);
   }
+  // Words past the cap are not looked at, and a link among them could point
+  // at a secret: say so, which withholds the grants, instead of passing them.
+  if (words.length > MAX_LINK_CHECKS)
+    found.push(`${words.length} path words, only ${MAX_LINK_CHECKS} checked`);
   return found;
 }
 

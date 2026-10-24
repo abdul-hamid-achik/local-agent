@@ -415,6 +415,27 @@ test("a command that carries a secret path in one argument, or names a link to o
   expect(await secretsOf("cat", "plain.txt")).toBeUndefined();
 });
 
+test("more path words than are checked for links flags the command instead of passing the rest", async () => {
+  const root = await temp();
+  await writeFile(join(root, ".env"), "TOKEN=planted");
+  await symlink(".env", join(root, "last.txt"));
+  const words = Array.from({ length: 64 }, (_, i) => `w${i}.txt`);
+  const secretsOf = async (...argv: string[]) =>
+    (await createCommandProposal(argv, root, 1000)).secretPaths;
+  // At the limit every word is looked at, and the link is seen.
+  expect(await secretsOf("cat", ...words.slice(1), "last.txt")).toEqual([
+    "last.txt -> .env",
+  ]);
+  // Past it the link is not looked at, so the proposal says it is unchecked.
+  expect(await secretsOf("cat", ...words, "last.txt")).toEqual([
+    "65 path words, only 64 checked",
+  ]);
+  // Past it, harmless words alone are flagged too: the check cannot tell.
+  expect(await secretsOf("cat", ...words, "plain.txt")).toEqual([
+    "65 path words, only 64 checked",
+  ]);
+});
+
 function alive(pid: number): boolean {
   try {
     process.kill(pid, 0);
