@@ -1447,3 +1447,21 @@ test("text right after a pre block starts on its own line", async () => {
     await run.cleanup();
   }
 });
+
+test("pre blocks get LF line endings and at most one blank line in a row", async () => {
+  stubFetch((url) =>
+    url.endsWith("/crlf")
+      ? htmlPage("<pre>a\r\n\r\n   \r\n\r\nb\r\n  c</pre>")
+      : undefined,
+  );
+  const run = await session([
+    { name: "fetch", arguments: { url: "http://docs.example/crlf" } },
+  ]);
+  try {
+    expect(run.output(0)).toContain("\n\na\n\nb\n  c\n");
+    expect(run.output(0)).not.toContain("\r");
+  } finally {
+    restoreFetch();
+    await run.cleanup();
+  }
+});

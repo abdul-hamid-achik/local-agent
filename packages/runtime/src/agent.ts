@@ -367,7 +367,10 @@ async function htmlToText(html: string): Promise<string> {
     runs
       .map((run, index) =>
         run.pre
-          ? run.text.trimEnd()
+          ? run.text
+              .replace(/\r\n?/g, "\n")
+              .replace(/\n(?:[ \t]*\n){2,}/g, "\n\n")
+              .trimEnd()
           : (index === 0 ? run.text.trimStart() : run.text)
               .replace(/[ \t]+/g, " ")
               .replace(/\n\s*\n+/g, "\n\n"),
