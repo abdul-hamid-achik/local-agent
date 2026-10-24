@@ -707,12 +707,21 @@ async function duckduckgoSearch(
   return null;
 }
 
+/** A numeric entity's character. Zero, surrogates and anything past U+10FFFF
+ * are not characters (fromCodePoint throws on the last), so, as in HTML, they
+ * become U+FFFD and one hostile entity cannot fail the whole call. */
+function codePointText(code: number): string {
+  return code === 0 || code > 0x10ffff || (code >= 0xd800 && code <= 0xdfff)
+    ? "\uFFFD"
+    : String.fromCodePoint(code);
+}
+
 /** Decode the handful of HTML entities DuckDuckGo titles/snippets contain. */
 function decodeEntities(text: string): string {
   return text
-    .replace(/&#(\d+);/g, (_, code) => String.fromCodePoint(Number(code)))
+    .replace(/&#(\d+);/g, (_, code) => codePointText(Number(code)))
     .replace(/&#x([0-9a-f]+);/gi, (_, code) =>
-      String.fromCodePoint(parseInt(code, 16)),
+      codePointText(parseInt(code, 16)),
     )
     .replace(
       /&(amp|lt|gt|quot|apos|nbsp);/g,

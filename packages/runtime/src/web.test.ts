@@ -24,15 +24,29 @@ let responder:
   | undefined;
 /** Every stubbed request's init, in call order (header assertions). */
 let requestInits: { url: string; headers: Record<string, string> }[] = [];
+/** Every stubbed request's URL, in call order (which providers were tried). */
+let requestedUrls: string[] = [];
+/** Like the real fetch, a stubbed response never outlives its request's signal. */
+function untilAborted<T>(pending: Promise<T> | T, signal: AbortSignal) {
+  return new Promise<T>((resolve, reject) => {
+    if (signal.aborted) return reject(signal.reason);
+    signal.addEventListener("abort", () => reject(signal.reason), {
+      once: true,
+    });
+    Promise.resolve(pending).then(resolve, reject);
+  });
+}
 globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   const url = String(input);
+  requestedUrls.push(url);
   if (init?.headers)
     requestInits.push({
       url,
       headers: init.headers as Record<string, string>,
     });
   const response = responder?.(url);
-  return response ?? BUILTIN_FETCH(input, init);
+  if (response === undefined) return BUILTIN_FETCH(input, init);
+  return init?.signal ? untilAborted(response, init.signal) : response;
 }) as typeof fetch;
 /** Non-loopback URLs answered by the responder; everything else hits real fetch. */
 function stubFetch(
@@ -43,6 +57,7 @@ function stubFetch(
 function restoreFetch() {
   responder = undefined;
   requestInits = [];
+  requestedUrls = [];
   hostAddresses.clear();
   readDenial = undefined;
 }
@@ -58,6 +73,7 @@ async function session(
   intent: "plan" | "build" | "chat" = "plan",
   vision = false,
   mcp?: McpConnection[],
+  signal: AbortSignal = AbortSignal.timeout(10_000),
 ) {
   const root = await mkdtemp(join(tmpdir(), "local-agent-web-"));
   const bodies: Body[] = [];
@@ -98,7 +114,7 @@ async function session(
       {
         workspace,
         intent,
-        signal: AbortSignal.timeout(10_000),
+        signal,
         approve: (async (proposal: ApprovalRequest) => true) as never,
         mcp,
         fetchPolicy: { resolve: resolveHost },
@@ -1037,6 +1053,42 @@ test("deny rules refuse a fetch host on any hop and a web search", async () => {
       "fetch docs.example",
       "web_search anything",
     ]);
+  } finally {
+    restoreFetch();
+    await run.cleanup();
+  }
+});
+
+const htmlPage = (body: string, contentType = "text/html; charset=utf-8") =>
+  new Response(body, { headers: { "content-type": contentType } });
+
+test("numeric entities outside the Unicode range decode to U+FFFD instead of failing the call", async () => {
+  delete process.env.LOCAL_AGENT_SEARXNG_URL;
+  stubFetch((url) => {
+    if (url === "http://page.example/a")
+      return htmlPage(
+        `<html><body><a href="/wiki/guide/boss">Boss &#99999999; &#x110000; &#xD800; &#0; &#65;</a></body></html>`,
+      );
+    if (url.startsWith("https://lite.duckduckgo.com/lite/"))
+      return htmlPage(
+        `<html><body><table><tr><td><a href="/l/?uddg=https%3A%2F%2Fbun.sh%2Fa">Hit &#99999999; &#xD800;</a></td></tr></table></body></html>`,
+      );
+    return undefined;
+  });
+  const run = await session([
+    { name: "fetch", arguments: { url: "http://page.example/a" } },
+    { name: "web_search", arguments: { query: "x" } },
+  ]);
+  try {
+    expect(run.results.map((result) => result.status)).toEqual([
+      "succeeded",
+      "succeeded",
+    ]);
+    // A lone surrogate would pass fromCodePoint but is not text.
+    expect(run.output(0)).toContain("Boss \uFFFD \uFFFD \uFFFD \uFFFD A");
+    expect(run.output(0).isWellFormed()).toBe(true);
+    expect(run.output(1)).toContain("1. Hit \uFFFD \uFFFD");
+    expect(run.output(1).isWellFormed()).toBe(true);
   } finally {
     restoreFetch();
     await run.cleanup();
