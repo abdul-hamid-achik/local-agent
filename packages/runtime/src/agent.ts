@@ -328,9 +328,11 @@ const NAV_PATHS = new Set([
   "/search",
 ]);
 
-/** Pages that answer with a bot challenge instead of content. */
+/** Pages that answer with a bot challenge instead of content. The marker
+ *  must be page-fatal: `challenge-platform` alone is injected into ordinary
+ *  pages by Bot Fight Mode and would reject valid content. */
 const BOT_CHALLENGE =
-  /Just a moment\.\.\.|cf-browser-verification|challenge-platform|Enable JavaScript and cookies to continue/i;
+  /Just a moment\.\.\.|cf-browser-verification|Enable JavaScript and cookies to continue/i;
 
 /** URL or alt words that mark decorative image chrome. */
 const IMAGE_CHROME = /(logo|icon|sprite|avatar|favicon|emoji|badge)/i;
@@ -425,11 +427,13 @@ async function extractHtmlAssets(
           .join(" ")
           .trim();
         // Chrome art never helps a reader: logos, icons, sprites, avatars,
-        // and images declared smaller than 200px on their longest side.
+        // and images smaller than 200px on their longest known side — the
+        // srcset descriptor counts, so a 96px preview of a 2000px map stays.
         if (IMAGE_CHROME.test(url) || IMAGE_CHROME.test(alt)) return;
-        const declared = Math.max(width ?? 0, height ?? 0);
-        if (declared > 0 && declared < 200) return;
-        const area = (width ?? 0) * (height ?? width ?? 0);
+        const known = Math.max(width ?? 0, height ?? 0, best.width ?? 0);
+        if (known > 0 && known < 200) return;
+        const area =
+          (width ?? best.width ?? 0) * (height ?? width ?? best.width ?? 0);
         images.push({
           url,
           width,

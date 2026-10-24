@@ -524,6 +524,150 @@ test("chat intent hard-denies edits exactly like plan, but keeps MCP approval-ga
   }
 });
 
+test("chat dispatches an MCP call through the approval boundary", async () => {
+  let approvals = 0;
+  const root = await mkdtemp(join(tmpdir(), "local-agent-chat-mcp-"));
+  const bodies: Body[] = [];
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    async fetch(request) {
+      const path = new URL(request.url).pathname;
+      if (path === "/api/tags")
+        return Response.json({ models: [{ name: "fixture", size: 1000 }] });
+      if (path === "/api/show")
+        return Response.json({
+          capabilities: ["completion", "tools"],
+          model_info: { "fixture.context_length": 16384 },
+        });
+      const body = (await request.json()) as Body;
+      bodies.push(body);
+      const step = bodies.length;
+      return new Response(
+        `${JSON.stringify({
+          message:
+            step === 1
+              ? {
+                  role: "assistant",
+                  content: "",
+                  tool_calls: [
+                    {
+                      id: "mcp-1",
+                      function: {
+                        name: "browser__browser_navigate",
+                        arguments: { url: "https://example.com" },
+                      },
+                    },
+                  ],
+                }
+              : { role: "assistant", content: "Done" },
+          done: true,
+        })}\n`,
+      );
+    },
+  });
+  const events: AgentEvent[] = [];
+  try {
+    using workspace = await Workspace.create(root);
+    for await (const event of runAgent(
+      resolveProvider({ OLLAMA_HOST: server.url.origin }, "fixture"),
+      [{ role: "user", content: "go" }],
+      {
+        workspace,
+        intent: "chat",
+        signal: AbortSignal.timeout(10_000),
+        approve: (async () => {
+          approvals += 1;
+          return true;
+        }) as never,
+        mcp: fakeBrowserMcp(),
+      },
+    ))
+      events.push(event);
+  } finally {
+    await server.stop(true);
+  }
+  const results = events.flatMap((event) =>
+    event.type === "tool_result" ? [event] : [],
+  );
+  expect(approvals).toBe(1);
+  expect(results.map((result) => result.status)).toEqual(["unverified"]);
+  expect(results[0]?.output).toContain("navigated");
+  await rm(root, { recursive: true, force: true });
+});
+
+test("plan refuses an MCP call without asking the approver", async () => {
+  let approvals = 0;
+  const root = await mkdtemp(join(tmpdir(), "local-agent-plan-mcp-"));
+  const bodies: Body[] = [];
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    async fetch(request) {
+      const path = new URL(request.url).pathname;
+      if (path === "/api/tags")
+        return Response.json({ models: [{ name: "fixture", size: 1000 }] });
+      if (path === "/api/show")
+        return Response.json({
+          capabilities: ["completion", "tools"],
+          model_info: { "fixture.context_length": 16384 },
+        });
+      const body = (await request.json()) as Body;
+      bodies.push(body);
+      const step = bodies.length;
+      return new Response(
+        `${JSON.stringify({
+          message:
+            step === 1
+              ? {
+                  role: "assistant",
+                  content: "",
+                  tool_calls: [
+                    {
+                      id: "mcp-1",
+                      function: {
+                        name: "browser__browser_navigate",
+                        arguments: { url: "https://example.com" },
+                      },
+                    },
+                  ],
+                }
+              : { role: "assistant", content: "Done" },
+          done: true,
+        })}\n`,
+      );
+    },
+  });
+  const events: AgentEvent[] = [];
+  try {
+    using workspace = await Workspace.create(root);
+    for await (const event of runAgent(
+      resolveProvider({ OLLAMA_HOST: server.url.origin }, "fixture"),
+      [{ role: "user", content: "go" }],
+      {
+        workspace,
+        intent: "plan",
+        signal: AbortSignal.timeout(10_000),
+        approve: (async () => {
+          approvals += 1;
+          return true;
+        }) as never,
+        mcp: fakeBrowserMcp(),
+      },
+    ))
+      events.push(event);
+  } finally {
+    await server.stop(true);
+  }
+  const results = events.flatMap((event) =>
+    event.type === "tool_result" ? [event] : [],
+  );
+  expect(approvals).toBe(0);
+  expect(results.map((result) => result.status)).toEqual(["denied"]);
+  expect(results[0]?.output).toContain("Plan mode does not authorize MCP");
+  await rm(root, { recursive: true, force: true });
+});
+
 // 1x1 PNG, magic bytes intact.
 const TINY_PNG = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
