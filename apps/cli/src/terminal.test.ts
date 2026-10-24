@@ -422,8 +422,10 @@ test.each([
 test("mode switch changes the Ollama tool catalog", async () => {
   const root = await mkdtemp(join(tmpdir(), "local-agent-terminal-tools-"));
   const workspace = await Workspace.create(root);
-  const requests: Array<{ tools?: Array<{ function?: { name?: string } }> }> =
-    [];
+  const requests: Array<{
+    tools?: Array<{ function?: { name?: string } }>;
+    messages?: Array<{ role: string; content: string }>;
+  }> = [];
   const server = Bun.serve({
     hostname: "127.0.0.1",
     port: 0,
@@ -521,4 +523,14 @@ test("mode switch changes the Ollama tool catalog", async () => {
     "run_command",
     "todo_write",
   ]);
+
+  // A line that starts with a path is a message, not an unknown command.
+  await terminal.flush();
+  await terminal.mockInput.pasteBracketedText("/tmp/a.log is empty");
+  terminal.mockInput.pressEnter();
+  await expect.poll(() => requests.length).toBe(3);
+  expect(requests[2]?.messages?.at(-1)).toMatchObject({
+    role: "user",
+    content: "/tmp/a.log is empty",
+  });
 });

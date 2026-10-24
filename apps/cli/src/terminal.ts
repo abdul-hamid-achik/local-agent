@@ -35,6 +35,18 @@ const messageSyntax = SyntaxStyle.fromStyles({
   "markup.raw": { fg: "#a3be8c" },
 });
 
+/**
+ * A command is one line whose first word is a name (`/mode plan`): a pasted
+ * block, or a line that starts with a path (`/tmp/a.log is empty`), is a
+ * message, as in the Tuimark client.
+ */
+function isCommand(text: string): boolean {
+  return (
+    !text.includes("\n") &&
+    (text === "/" || /^\/[^\s/]+$/.test(text.split(/\s/, 1)[0] ?? ""))
+  );
+}
+
 export function createTerminalRoot(
   provider: Provider,
   mode: Presentation,
@@ -99,7 +111,7 @@ export function createTerminalRoot(
 
       async function submit() {
         if (busy.value) {
-          if (draft.value.trim().startsWith("/"))
+          if (isCommand(draft.value.trim()))
             status.value = "Busy · wait for the current turn to finish";
           return;
         }
@@ -148,7 +160,7 @@ export function createTerminalRoot(
             : "MCP servers: 0 · use --mcp-config to connect trusted servers";
           return;
         }
-        if (command.startsWith("/")) {
+        if (isCommand(command)) {
           status.value = `Unknown command: ${command}. Use /help`;
           return;
         }
