@@ -520,7 +520,9 @@ test("a note for a result with images says the images counted", async () => {
   );
   const note = saved.messages.at(-1);
   expect(note?.images).toBeUndefined();
-  expect(note?.content).toContain("The output and its images (293 KiB)");
+  expect(note?.content).toContain(
+    "The output and its images (293 KiB) were too large",
+  );
   store.close();
 });
 

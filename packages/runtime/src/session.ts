@@ -868,7 +868,7 @@ export function shortenedResult(
       : {}),
     content: JSON.stringify({
       status,
-      output: `The output${result.images?.length ? " and its images" : ""} (${sizeNote(bytes)}) was too large for the session to keep, so it is not in this conversation; the status above stands. Ask for less, for example a narrower read or a filter.`,
+      output: `${result.images?.length ? "The output and its images" : "The output"} (${sizeNote(bytes)}) ${result.images?.length ? "were" : "was"} too large for the session to keep, so it is not in this conversation; the status above stands. Ask for less, for example a narrower read or a filter.`,
     }),
   };
 }
