@@ -129,16 +129,27 @@ a child and draws the whole screen from `apps/cli/src/tuimark/ui/app.tui`.
   it, and its title names that receipt. `/status` opens a read-only panel
   with the effective config (model, provider and endpoint, think, context
   used, workspace, mode, session and its database, theme, mouse, session
-  grants, MCP counts); `/mcp` opens the same panel listing each connected
-  server with its tool names under the old count line. `/sessions` (with
-  `--session-db` at startup) lists the workspace's saved sessions:
+  grants, MCP counts, and the Chalupa environment when Chalupa launched the
+  process); `/mcp` opens the same panel listing each connected
+  server with its tool names under the old count line. `/provider` asks the
+  model's endpoint once, read-only (GET only, 5 seconds at most), and opens
+  the same panel over its answer: the answer time, Ollama's version, and from
+  `/api/ps` whether the model is loaded, its size, the share in GPU memory and
+  the context it was loaded with. Once a model has answered, the client
+  reads `/api/ps` once on its own, in the background: a model partly outside
+  GPU memory, or loaded with less context than asked, leaves a warning in the
+  transcript after that turn (after a later one when `/api/ps` is slow).
+  `/sessions` (with `--session-db` at startup) lists the workspace's saved
+  sessions:
   `up`/`down` choose, `enter` loads that conversation whole and the next
   turn continues it (refused while a turn runs; the draft is kept and
   session grants — this process's trust — survive, as the confirming
   status says; a session with an uncertain tool outcome or interrupted
   tool calls is refused with the same words `--resume` would fail with).
-  Without `--session-db` it says so. `/export` writes the visible
-  conversation as markdown to
+  Without `--session-db` it says so. `/sessions new` starts over: a new
+  saved session with `--session-db`, otherwise a new temporary conversation
+  (refused while a turn runs; session grants survive, as the status says).
+  `/export` writes the visible conversation as markdown to
   `local-agent-transcript-YYYYMMDD-HHMMSS.md` in the workspace (never
   overwriting: a taken name gets a numeric suffix) and names the file on
   the status line.
@@ -184,6 +195,17 @@ first lines, then the reasoning of earlier steps) until it is near 45%; the
 latest request, calls and unread results stay whole, the session keeps the
 shortened history, and the transcript says "Context compacted". The Vue client
 and the desktop app do not compact.
+
+When the history still does not fit, every client sends only its newest whole
+exchanges: a request starts at a user message and fits under 70% of the
+window with the system prompt and the tools. The current turn always goes
+whole, so a turn whose own results pass the window is still sent as it is.
+Nothing a request leaves out is shortened. The model is told how many of the
+oldest messages it cannot see, the session keeps all of them, and the Tuimark
+transcript says "Context window full" when more are left out (headless prints
+a line on stderr). A conversation holds up to 9999 messages and a session's
+saved state up to 8 MiB; past either the turn is refused with a sentence that
+says so, and the Tuimark client adds that `/sessions new` starts over.
 
 Thinking streams as its own `thinking` event, apart from the answer. The Tuimark
 client shows a dim "Thinking…" block with the last three lines while it streams
