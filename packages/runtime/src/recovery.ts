@@ -146,41 +146,23 @@ function planSettlement(
     .filter(
       (row) => !(row.event_type === "started" && storedConclusion(store, row)),
     );
-  const runs = new Set(open.map((row) => row.run_id));
-  if (runs.size > 1) return undefined;
-  const [run] = runs;
+  if (new Set(open.map((row) => row.run_id)).size > 1) return undefined;
   const used = new Set<number>();
   const plan: Settlement = { events: [], results: [], answered: false };
   for (const [offset, call] of pending.calls.entries()) {
     const ordinal = pending.first + offset + 1;
     // One run's canonical call ids are unique (the store refuses a repeat).
-    const matches = (row: EventRow) =>
-      row.canonical_call_id === call.id &&
-      row.tool_name === call.function.name &&
-      row.ordinal === ordinal;
-    const row = open.find(matches);
+    const row = open.find(
+      (other) =>
+        other.canonical_call_id === call.id &&
+        other.tool_name === call.function.name &&
+        other.ordinal === ordinal,
+    );
     if (!row) {
-      // `started` is committed before a call is dispatched: no record, no
-      // dispatch. A record that has ended is a ledger the history does not
-      // match, and no result is invented for it, unless the user concluded
-      // about it (an unknown outcome the history never got).
-      const ended = call.id
-        ? store
-            .executionsOfCall(session.id, session.workspaceId, call.id)
-            .filter(
-              (other) =>
-                matches(other) && (run === undefined || other.run_id === run),
-            )
-        : [];
-      if (
-        concluded &&
-        ended.some((other) => other.execution_id === concluded.executionId)
-      ) {
-        plan.answered = true;
-        plan.results.push(concludedResult(call, concluded));
-        continue;
-      }
-      if (ended.length) return undefined;
+      // `started` is committed before a call is dispatched, and an
+      // execution's end only with its result (commitOutcome, recover): an
+      // unanswered call with no open record never ran. An ended record of
+      // the same id is another call's, from a run that used the id too.
       plan.results.push(toolResult(call, "failed", NOT_RUN));
       continue;
     }
@@ -225,13 +207,16 @@ function storedConclusion(store: SessionStore, row: EventRow) {
   return found && found.latest_event_id === row.id ? found : undefined;
 }
 
-/** Whether a call of the history has no result there. */
-function awaitsResult(messages: readonly Message[], callId: string): boolean {
-  return (
-    messages.some((message) =>
-      message.tool_calls?.some((call) => call.id === callId),
-    ) && !messages.some((message) => message.tool_call_id === callId)
-  );
+/**
+ * Whether a hazard's call still awaits its result: it is one of the last
+ * assistant message's unanswered calls (an earlier message's call with the
+ * same id, from a run that used the id too, does not count). A history
+ * broken elsewhere counts as awaiting, so nothing is recorded against it.
+ */
+function awaitsResult(messages: readonly Message[], row: EventRow): boolean {
+  const pending = unanswered(messages);
+  if (!pending) return historyProblem(messages) !== undefined;
+  return pending.calls.some((call) => call.id === row.canonical_call_id);
 }
 
 /**
@@ -369,10 +354,7 @@ export async function reconcileExecution(
     // A call with no result gets one with the conclusion, or nothing is
     // recorded: a hidden hazard whose call stays unanswered is a session
     // that can neither continue nor be recovered.
-    if (
-      awaitsResult(session.messages, hazard.canonical_call_id) &&
-      !plan?.answered
-    )
+    if (awaitsResult(session.messages, hazard) && !plan?.answered)
       throw new Error(
         plan
           ? "Record what happened to the earlier call first: a session answers its calls in order"

@@ -671,53 +671,170 @@ test("a conclusion is refused, and nothing recorded, when its call could not get
     ).rejects.toThrow("does not match its ledger");
     expect(store.reconciliationOf(mixed.id, "e9")).toBeUndefined();
     expect(store.listHazards(mixed.id, mixed.workspaceId)).toHaveLength(1);
+    // A history broken before its end answers nothing either.
+    const created = await store.createSession(root);
+    const broken = store.saveStateCAS(created.id, created.workspaceId, 0, [
+      { role: "user", content: "go" },
+      { role: "assistant", content: "", tool_calls: [call("c11", "write")] },
+      { role: "user", content: "interrupted" },
+    ]);
+    record(
+      store,
+      execution(broken, "e11", "c11", "write", 1, "effectful"),
+      "requested",
+      "started",
+    );
+    await expect(
+      reconcileExecution(store, broken.publicId, root, {
+        executionId: "e11",
+        disposition: "effect_applied",
+      }),
+    ).rejects.toThrow("does not match its ledger");
+    expect(store.reconciliationOf(broken.id, "e11")).toBeUndefined();
   } finally {
     await cleanup();
   }
 });
 
-test("a call the ledger ended is never told it did not run; an unknown one is answered by its conclusion", async () => {
+/** A history whose first turn answered `first`, and whose second asked for `again`. */
+function reused(
+  store: SessionStore,
+  session: Session,
+  first: ReturnType<typeof call>,
+  again: ReturnType<typeof call>[],
+) {
+  return store.saveStateCAS(session.id, session.workspaceId, 0, [
+    { role: "user", content: "go" },
+    { role: "assistant", content: "", tool_calls: [first] },
+    {
+      role: "tool",
+      tool_name: first.function.name,
+      tool_call_id: first.id,
+      content: "x",
+    },
+    { role: "user", content: "again" },
+    { role: "assistant", content: "", tool_calls: again },
+  ]);
+}
+
+test("an ended execution of a reused call id is the earlier call's: the new call with no record never ran", async () => {
   const { root, store, cleanup } = await fixture();
   try {
-    const completed = await interrupted(store, root, [call("c1", "write")]);
+    // Run 1 answered call_0; run 2's provider used call_0 again, for the
+    // same tool and arguments, and stopped before recording it.
+    const session = reused(
+      store,
+      await store.createSession(root),
+      call("call_0", "read"),
+      [call("call_0", "read")],
+    );
     record(
       store,
-      execution(completed, "e1", "c1", "write", 1, "effectful"),
+      execution(session, "e1", "call_0", "read", 1, "read_only", "run-1"),
       "requested",
       "started",
       "completed",
     );
-    expect(settleInterrupted(store, completed)).toEqual({
-      state: completed,
-      closed: 0,
-    });
-    const unknown = await interrupted(store, root, [
-      call("c2", "mcp_deploy"),
-      call("c3", "read"),
-    ]);
+    const { state, closed } = settleInterrupted(store, session);
+    expect(closed).toBe(1);
+    expect(output(state.messages[5])).toContain("Not run");
+    expect(sessionProblem(store, state)).toBeUndefined();
+  } finally {
+    await cleanup();
+  }
+});
+
+test("a call id reused in a later step of the same run does not stop the step's conclusion", async () => {
+  const { root, store, cleanup } = await fixture();
+  try {
+    const session = reused(
+      store,
+      await store.createSession(root),
+      call("call_0", "read"),
+      [call("call_0", "read"), call("call_1", "write")],
+    );
     record(
       store,
-      execution(unknown, "e2", "c2", "mcp_deploy", 1, "unknown"),
+      execution(session, "e1", "call_0", "read", 1, "read_only"),
       "requested",
       "started",
-      "outcome_unknown",
+      "completed",
     );
-    expect(settleInterrupted(store, unknown).closed).toBe(0);
-    expect(recoveryItems(store, unknown)).toMatchObject([
-      { executionId: "e2", state: "unknown" },
-    ]);
+    record(
+      store,
+      {
+        ...execution(session, "e2", "call_1", "write", 2, "effectful"),
+        iteration: 2,
+      },
+      "requested",
+      "started",
+    );
     const { state, closed } = await reconcileExecution(
       store,
-      unknown.publicId,
+      session.publicId,
       root,
-      { executionId: "e2", disposition: "effect_applied", note: "deployed" },
+      { executionId: "e2", disposition: "effect_not_applied", note: "" },
     );
     expect(closed).toBe(2);
-    expect(
-      JSON.parse(state.messages[2]?.content ?? "{}") as { status: string },
-    ).toMatchObject({ status: "unverified" });
-    expect(output(state.messages[3])).toContain("Not run");
+    expect(output(state.messages[5])).toContain("Not run");
+    expect(output(state.messages[6])).toContain("it made no change");
     expect(sessionProblem(store, state)).toBeUndefined();
+  } finally {
+    await cleanup();
+  }
+});
+
+test("a conclusion about a call whose id an earlier call used answers it, or records nothing", async () => {
+  const { root, store, cleanup } = await fixture();
+  try {
+    const hazard = (session: Session, id: string) =>
+      record(
+        store,
+        execution(session, id, "call_0", "write", 1, "effectful", "run-2"),
+        "requested",
+        "started",
+      );
+    const answers = reused(
+      store,
+      await store.createSession(root),
+      call("call_0", "write"),
+      [call("call_0", "write")],
+    );
+    hazard(answers, "e2");
+    const { state, closed } = await reconcileExecution(
+      store,
+      answers.publicId,
+      root,
+      { executionId: "e2", disposition: "effect_applied", note: "" },
+    );
+    expect(closed).toBe(1);
+    expect(output(state.messages[5])).toContain("its change is in place");
+    expect(settleInterrupted(store, state).closed).toBe(0);
+    expect(sessionProblem(store, state)).toBeUndefined();
+    // With a ledger the history does not match (a stray open call of
+    // another run), the earlier call's result must not pass for this
+    // call's: nothing is recorded and the hazard stays listed.
+    const stray = reused(
+      store,
+      await store.createSession(root),
+      call("call_0", "write"),
+      [call("call_0", "write")],
+    );
+    hazard(stray, "e3");
+    record(
+      store,
+      execution(stray, "e9", "other", "read", 1, "read_only", "run-3"),
+      "requested",
+    );
+    await expect(
+      reconcileExecution(store, stray.publicId, root, {
+        executionId: "e3",
+        disposition: "effect_applied",
+        note: "",
+      }),
+    ).rejects.toThrow("does not match its ledger");
+    expect(store.reconciliationOf(stray.id, "e3")).toBeUndefined();
+    expect(recoveryItems(store, stray)).toMatchObject([{ executionId: "e3" }]);
   } finally {
     await cleanup();
   }

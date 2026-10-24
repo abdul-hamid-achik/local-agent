@@ -551,19 +551,6 @@ export class SessionStore {
       .all(sessionId, workspaceId);
   }
 
-  /** The latest event of each execution of one canonical call id. */
-  executionsOfCall(
-    sessionId: number,
-    workspaceId: string,
-    canonicalCallId: string,
-  ): EventRow[] {
-    return this.db
-      .query<EventRow, [number, string, string]>(
-        "SELECT e.* FROM execution_events e JOIN (SELECT execution_id, MAX(id) id FROM execution_events WHERE session_id = ? AND workspace_id = ? AND canonical_call_id = ? GROUP BY execution_id) latest ON latest.id = e.id ORDER BY e.id",
-      )
-      .all(sessionId, workspaceId, canonicalCallId);
-  }
-
   /** The reconciliation of an execution in this session, if any. */
   reconciliationOf(
     sessionId: number,
