@@ -15,14 +15,37 @@ permissions:
   contents: write
 
 jobs:
+  # `--version` reads apps/cli/package.json: a tag that names another
+  # version would ship a CLI that misreports itself. Checked first, before
+  # the gates spend their minutes.
+  version:
+    name: the tag names the CLI's version
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Compare the tag with apps/cli/package.json
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          version="$(jq -r .version apps/cli/package.json)"
+          if [ "v${version}" != "$TAG" ]; then
+            echo "::error::tag $TAG does not match apps/cli/package.json version ${version}"
+            exit 1
+          fi
+
   verify:
+    needs: version
     uses: ./.github/workflows/verify.yml
     permissions:
       contents: read
 
   release:
     name: source tarball and notes
-    needs: verify
+    needs: [version, verify]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
