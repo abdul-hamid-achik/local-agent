@@ -37,6 +37,9 @@ const EXTERNAL_DATA =
 export const ASK_USER_NOTE =
   "ask_user asks the user one question and waits. Use it when the work cannot go on without their decision or a fact only they have, not for what the workspace or a search can tell you, and not to ask permission: an answer never approves an edit, write, command or MCP call, which still go through the host. If the user declines, continue with what you know or say what you need.";
 
+export const GOAL_NOTE =
+  "A goal is running: the user gave you an objective, and the host sends the next turn itself while it stays open. Before you end each turn, call goal_status once: continue while work remains, done when the objective is met (as evidence, the commands you ran that show it, exactly as you ran them), or blocked when you need something you cannot get yourself (say what). done and blocked end the goal. A goal adds no permission: every edit, write, command and MCP call still goes through the host.";
+
 /** The session intent: what the agent may do and how it is framed. */
 export type Intent = "plan" | "build" | "chat";
 

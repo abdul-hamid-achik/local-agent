@@ -19,9 +19,12 @@ export {
   type Answer,
   type Approval,
   type ApprovalRequest,
+  type GoalReport,
+  MAX_HISTORY_MESSAGES,
   type Question,
   runAgent,
   type SessionContext,
+  StepLimitError,
   sessionProblem,
 } from "#runtime/agent";
 export {

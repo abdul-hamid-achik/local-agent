@@ -28,6 +28,7 @@ import {
 } from "#runtime/index";
 import {
   ASK_USER_NOTE,
+  GOAL_NOTE,
   hostInstructions,
   type Intent,
   projectInstructions,
@@ -109,6 +110,20 @@ const AskOption = z.object({
 });
 // The kind follows the options when it is left out: a list is a choice.
 // Only a choice keeps its options: yes/no and a typed answer have none.
+const GoalStatusArgs = z.object({
+  state: z.enum(["continue", "done", "blocked"]),
+  summary: z.string().trim().min(1).max(500),
+  evidence: z
+    .array(
+      z.object({
+        kind: z.enum(["command", "file", "note"]),
+        ref: z.string().trim().min(1).max(1000),
+      }),
+    )
+    .max(8)
+    .nullish()
+    .transform((value) => value ?? []),
+});
 const AskUserArgs = z
   .object({
     question: z.string().trim().min(1).max(2048),
@@ -1111,6 +1126,38 @@ const tools: Tool[] = [
       },
     },
   },
+  {
+    type: "function",
+    function: {
+      name: "goal_status",
+      description:
+        "Report where the running goal stands, once before you end each turn: continue while work remains, done when the objective is met, blocked when you need something you cannot get yourself. done and blocked end the goal. For done, give as evidence the commands you ran that show it (kind command, ref exactly as run) and the files that hold the work. This records your report; it runs nothing and verifies nothing.",
+      parameters: {
+        type: "object",
+        properties: {
+          state: { type: "string", enum: ["continue", "done", "blocked"] },
+          summary: {
+            type: "string",
+            description:
+              "1-500 chars: what is done and what is left, or what blocks it",
+          },
+          evidence: {
+            type: "array",
+            description: "Up to 8 items",
+            items: {
+              type: "object",
+              properties: {
+                kind: { type: "string", enum: ["command", "file", "note"] },
+                ref: { type: "string" },
+              },
+              required: ["kind", "ref"],
+            },
+          },
+        },
+        required: ["state", "summary"],
+      },
+    },
+  },
 ];
 /** Tools with no external effects; plan intent offers these and nothing else. */
 const READ_ONLY_TOOLS = new Set([
@@ -1123,10 +1170,12 @@ const READ_ONLY_TOOLS = new Set([
   "task",
   "todo_write",
   "ask_user",
+  "goal_status",
 ]);
 /** Read-only tools that never join a parallel batch: a question waits on
- * the one user, so two at once (or one beside reads) run one by one. */
-const SERIAL_TOOLS = new Set(["ask_user"]);
+ * the one user, so two at once (or one beside reads) run one by one; a
+ * goal's report is recorded in call order. */
+const SERIAL_TOOLS = new Set(["ask_user", "goal_status"]);
 /** The subagent catalog: read-only inspection only. No todo_write (its own
  * run state), no task (no recursion, depth 1), no effects, no MCP. */
 const SUBAGENT_TOOLS = new Set([
@@ -1176,6 +1225,16 @@ export type Answer =
   | Readonly<{ kind: "choice"; id: string }>
   | Readonly<{ kind: "text"; text: string }>
   | Readonly<{ kind: "declined" }>;
+
+/** The model's report on a running goal (goal_status). */
+export type GoalReport = Readonly<{
+  state: "continue" | "done" | "blocked";
+  summary: string;
+  evidence: readonly Readonly<{
+    kind: "command" | "file" | "note";
+    ref: string;
+  }>[];
+}>;
 
 /** How much of a typed answer reaches the model. */
 const ANSWER_MAX = 4000;
@@ -1452,6 +1511,17 @@ export type AgentOptions = {
    * Resolves `declined` when the user skips; rejects only on abort.
    */
   ask?: (question: Question, signal: AbortSignal) => Promise<Answer>;
+  /**
+   * Receives the model's goal_status report while a goal runs. Without it
+   * the tool is not offered (no goal, a subagent, headless).
+   */
+  goal?: (report: GoalReport) => void;
+  /**
+   * Calls refused so far, by name and arguments: a refused or declined one
+   * is refused again without asking. Per turn when absent; a goal passes
+   * one set for all its turns, so a denial outlives the turn it was made in.
+   */
+  refused?: Set<string>;
   /** Why commands cannot run in the sandbox. Default the runtime's check; tests replace. */
   sandboxUnavailable?: (workspaceRoot: string) => string | undefined;
   signal: AbortSignal;
@@ -1545,6 +1615,14 @@ async function admitTurn(
   return admission.capabilities;
 }
 
+/**
+ * A turn that used its every step without ending. Everything it ran is
+ * already committed; a goal treats it as a turn boundary, not a failure.
+ */
+export class StepLimitError extends Error {
+  override name = "StepLimitError";
+}
+
 /** Internal control-flow signal: a subagent run hit its turn or call budget. */
 class SubagentStopped extends Error {
   constructor(readonly reason: "turn_limit" | "budget") {
@@ -1635,14 +1713,21 @@ async function* agentTurn(
     ...options.fetchPolicy,
   });
   const mcpTools = new Map<string, McpConnection>();
-  // ask_user only where the host can ask (see AgentOptions.ask).
-  const builtins = options.ask
-    ? tools
-    : tools.filter((tool) => tool.function.name !== "ask_user");
+  // ask_user only where the host can ask, goal_status only while a goal
+  // runs (see AgentOptions.ask and .goal).
+  const builtins = tools.filter(
+    (tool) =>
+      (tool.function.name !== "ask_user" || options.ask) &&
+      (tool.function.name !== "goal_status" || options.goal),
+  );
   const availableTools = [...builtins];
   for (const connection of options.mcp ?? []) {
     for (const tool of connection.tools) {
-      if (availableTools.some((entry) => entry.function.name === tool.name))
+      // A built-in's name stays reserved while it is not offered.
+      if (
+        tools.some((entry) => entry.function.name === tool.name) ||
+        availableTools.some((entry) => entry.function.name === tool.name)
+      )
         throw new Error(`Duplicate tool name: ${tool.name}`);
       mcpTools.set(tool.name, connection);
       availableTools.push({
@@ -1683,13 +1768,6 @@ async function* agentTurn(
       );
   };
   checkpoint();
-  const instructions = [
-    hostInstructions(options.intent ?? "build"),
-    options.ask && !options.subagent ? ASK_USER_NOTE : "",
-    await projectInstructions(workspace),
-  ]
-    .filter(Boolean)
-    .join("\n\n");
   const capabilities = await admitTurn(provider, signal);
   const stepLimit = options.maxTurns ?? 20;
   const offeredTools = options.subagent
@@ -1709,8 +1787,19 @@ async function* agentTurn(
   const offeredNames = new Set(
     offeredTools.map((tool) => tool.function.name ?? ""),
   );
-  // Calls refused this turn, by name and arguments.
-  const refused = new Set<string>();
+  // A note only for a tool this turn offers (chat has no goal_status, a
+  // subagent neither tool).
+  const instructions = [
+    hostInstructions(options.intent ?? "build"),
+    offeredNames.has("ask_user") ? ASK_USER_NOTE : "",
+    offeredNames.has("goal_status") ? GOAL_NOTE : "",
+    await projectInstructions(workspace),
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+  // Calls refused this turn (or this goal), by name and arguments.
+  const refused = options.refused ?? new Set<string>();
+  const refusedIn = options.refused ? "in this goal" : "in this turn";
   // The last call's reported prompt size and the characters it was made
   // of: the next prompt is estimated from the characters added since.
   let anchor: { tokens: number; chars: number } | undefined;
@@ -1988,8 +2077,8 @@ async function* agentTurn(
           status = "denied";
           output =
             name === "ask_user"
-              ? "The user already declined this question in this turn. Continue with what you know, or say what you need."
-              : `This exact ${name} call was already refused in this turn, so it was not asked again. Ask the user, or take another approach.`;
+              ? `The user already declined this question ${refusedIn}. Continue with what you know, or say what you need.`
+              : `This exact ${name} call was already refused ${refusedIn}, so it was not asked again. Ask the user, or take another approach.`;
         } else if (name === "read") {
           const args = ReadRangeArgs.parse(call.function.arguments);
           yield* emitStart();
@@ -2241,8 +2330,7 @@ async function* agentTurn(
           })}`;
           if (refused.has(signature)) {
             status = "denied";
-            output =
-              "The user already declined this question in this turn. Continue with what you know, or say what you need.";
+            output = `The user already declined this question ${refusedIn}. Continue with what you know, or say what you need.`;
           } else {
             const answer = await ask(args, signal);
             signal.throwIfAborted();
@@ -2253,6 +2341,20 @@ async function* agentTurn(
             output = outcome.output;
             if (outcome.declined) status = "denied";
           }
+        } else if (name === "goal_status") {
+          const args = GoalStatusArgs.parse(call.function.arguments);
+          const report = options.goal;
+          // Never reached without a running goal: the offered check
+          // refuses the call first. Kept so the callback is never assumed.
+          if (!report) throw new Error("goal_status is not available here");
+          yield* emitStart();
+          report(args);
+          output =
+            args.state === "continue"
+              ? "Recorded: continue. The host sends the next turn when this one ends."
+              : args.state === "done"
+                ? "Recorded: done. The goal ends with this turn: tell the user what was done."
+                : "Recorded: blocked. The goal ends with this turn: tell the user what you need.";
         } else if (name === "todo_write") {
           const args = TodoWriteArgs.parse(call.function.arguments);
           yield* emitStart();
@@ -2643,5 +2745,5 @@ async function* agentTurn(
     signal.throwIfAborted();
   }
   if (options.subagent) throw new SubagentStopped("turn_limit");
-  throw new Error(`Agent reached the ${stepLimit}-step limit`);
+  throw new StepLimitError(`Agent reached the ${stepLimit}-step limit`);
 }
