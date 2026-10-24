@@ -38,16 +38,54 @@ function weighted(text: string): number {
  * qwen3.5's drop earlier turns' reasoning). A wide character counts three.
  */
 export function promptChars(messages: readonly Message[]): number {
+  return messageSizes(messages).reduce((total, size) => total + size, 0);
+}
+
+/** Each message's share of promptChars, in order. */
+function messageSizes(messages: readonly Message[]): number[] {
   const lastUser = messages.findLastIndex((message) => message.role === "user");
-  let chars = 0;
-  for (const [index, message] of messages.entries()) {
-    chars += weighted(message.content);
-    if (message.thinking && index > lastUser)
-      chars += weighted(message.thinking);
-    if (message.tool_calls) chars += JSON.stringify(message.tool_calls).length;
-    chars += (message.images?.length ?? 0) * IMAGE_CHARS;
+  return messages.map(
+    (message, index) =>
+      weighted(message.content) +
+      (message.thinking && index > lastUser ? weighted(message.thinking) : 0) +
+      (message.tool_calls ? JSON.stringify(message.tool_calls).length : 0) +
+      (message.images?.length ?? 0) * IMAGE_CHARS,
+  );
+}
+
+/**
+ * Where a request's history starts so it fits: 0 when all of `history`
+ * does, in `budget` characters (promptChars) and `maxMessages` messages;
+ * else the first user message from which the rest does. An exchange is
+ * never split, so a tool result always follows its call. The part left
+ * out is rounded up to a multiple of `step` characters: the start holds
+ * still while a few exchanges are added, since each move costs the server
+ * its cached prompt. It never passes the last user message (the current
+ * turn goes whole), so the rest may still be too long: the caller checks.
+ */
+export function windowStart(
+  history: readonly Message[],
+  budget: number,
+  step: number,
+  maxMessages: number,
+): number {
+  const sizes = messageSizes(history);
+  const total = sizes.reduce((sum, size) => sum + size, 0);
+  if (total <= budget && history.length <= maxMessages) return 0;
+  const over = Math.max(0, total - budget);
+  const drop = step > 0 ? Math.ceil(over / step) * step : over;
+  const lastUser = history.findLastIndex((message) => message.role === "user");
+  let dropped = 0;
+  for (let index = 1; index < lastUser; index++) {
+    dropped += sizes[index - 1] ?? 0;
+    if (
+      history[index]?.role === "user" &&
+      dropped >= drop &&
+      history.length - index <= maxMessages
+    )
+      return index;
   }
-  return chars;
+  return Math.max(0, lastUser);
 }
 
 /**
@@ -92,18 +130,22 @@ function isElided(content: string): boolean {
  * many as can be: first images, then tool results the model has already
  * read, then the reasoning of earlier steps of the current turn. The last
  * user message, the last assistant message and every result after it are
- * the model's current work and stay whole. Messages are copied, not changed.
+ * the model's current work and stay whole, and so does everything before
+ * `from` (the part a windowed request leaves out: shortening it saves the
+ * request nothing). Messages are copied, not changed.
  */
 export function compactHistory(
   history: readonly Message[],
   chars: number,
+  from = 0,
 ): { messages: Message[]; elided: number; saved: number } {
   const messages = history.map((message) => ({ ...message }));
   const lastUser = messages.findLastIndex((message) => message.role === "user");
   const lastAssistant = messages.findLastIndex(
     (message) => message.role === "assistant",
   );
-  const kept = (index: number) => index === lastUser || index >= lastAssistant;
+  const kept = (index: number) =>
+    index < from || index === lastUser || index >= lastAssistant;
   const changed = new Set<number>();
   let saved = 0;
   const passes: ((message: Message, index: number) => number)[] = [

@@ -14,6 +14,7 @@ import {
   COMPACT_LOW,
   compactHistory,
   promptChars,
+  windowStart,
 } from "#runtime/compact";
 import type { Provider } from "#runtime/config";
 import { postEditDiagnostics } from "#runtime/diagnostics";
@@ -1407,6 +1408,17 @@ export type AgentEvent =
       tokensBefore: number;
       tokensAfter: number;
     }
+  | {
+      /**
+       * The request leaves the history's oldest `left` messages out: they
+       * no longer fit the context window. It sends the newest `sent`, from
+       * a user message on. The history and the durable state keep all of
+       * them; this event carries counts only. Said when the start moves.
+       */
+      type: "windowed";
+      left: number;
+      sent: number;
+    }
   | { type: "turn_complete"; messages: Message[] };
 
 export type SessionContext = { store: SessionStore; state: Session };
@@ -1471,6 +1483,18 @@ export type AgentOptions = {
 
 /** Messages one provider request carries, the system prompt included. */
 export const MAX_REQUEST_MESSAGES = 1000;
+/**
+ * Messages a conversation holds. A request sends only the newest that fit
+ * (windowStart); past this many the conversation is full.
+ */
+export const MAX_HISTORY_MESSAGES = 10_000;
+
+/** The system prompt's note when a request leaves the oldest `left` messages out. */
+function windowNote(left: number): string {
+  return `The oldest ${left} messages of this conversation are not in this request: they no longer fit the context window. If the user refers to something you cannot see, say so rather than guess.`;
+}
+/** Characters reserved in the window budget for that note. */
+const WINDOW_NOTE_CHARS = 300;
 
 /** Capabilities of each model that passed admission in this process. */
 const admitted = new Map<string, readonly string[]>();
@@ -1635,9 +1659,9 @@ async function* agentTurn(
   const canonicalCallIds = new Set<string>();
   // A conversation the request cannot carry is refused before anything is
   // saved or asked, in a sentence rather than a schema error.
-  if (messages.length >= MAX_REQUEST_MESSAGES)
+  if (messages.length >= MAX_HISTORY_MESSAGES)
     throw new ConversationFullError(
-      `This conversation is full: it has ${messages.length} messages, and a request carries at most ${MAX_REQUEST_MESSAGES - 1} besides the system prompt.`,
+      `This conversation is full: it has ${messages.length} messages, and a session holds at most ${MAX_HISTORY_MESSAGES - 1}.`,
     );
   const history = z.array(MessageSchema).min(1).parse(messages);
   if (
@@ -1694,18 +1718,38 @@ async function* agentTurn(
   let nudged = false;
   let nudge: Message | undefined;
   const toolChars = JSON.stringify(offeredTools).length;
+  // A request's history holds what fits under the share of the window
+  // compaction aims below, less the system prompt and the tools; the part
+  // it leaves out moves in steps of the share compaction frees.
+  const windowChars = provider.context_size * CHARS_PER_TOKEN;
+  const budgetChars = Math.max(
+    0,
+    windowChars * COMPACT_HIGH -
+      instructions.length -
+      WINDOW_NOTE_CHARS -
+      toolChars,
+  );
+  const stepChars = windowChars * (COMPACT_HIGH - COMPACT_LOW);
+  // The start last reported (`windowed`), so a still window is said once.
+  let reported = 0;
   for (let step = 0; step < stepLimit; step++) {
     signal.throwIfAborted();
+    // The request is the history's newest exchanges that fit: the history
+    // itself (and the durable state) keeps every message.
+    const room = MAX_REQUEST_MESSAGES - 1 - (nudge ? 1 : 0);
+    let start = windowStart(history, budgetChars, stepChars, room);
     if (options.compact) {
       const window = provider.context_size;
-      const chars = promptChars(history) + instructions.length;
+      const chars = promptChars(history.slice(start)) + instructions.length;
       const estimate = anchor
         ? anchor.tokens + (chars - anchor.chars) / CHARS_PER_TOKEN
         : (chars + toolChars) / CHARS_PER_TOKEN;
       if (estimate > window * COMPACT_HIGH) {
+        // Only what the request carries is worth shortening.
         const { messages, elided, saved } = compactHistory(
           history,
           Math.ceil((estimate - window * COMPACT_LOW) * CHARS_PER_TOKEN),
+          start,
         );
         if (elided > 0) {
           history.splice(0, history.length, ...messages);
@@ -1717,22 +1761,35 @@ async function* agentTurn(
             tokensBefore: Math.round(estimate),
             tokensAfter: Math.round(estimate - saved / CHARS_PER_TOKEN),
           };
+          start = windowStart(history, budgetChars, stepChars, room);
         }
       }
     }
-    const callChars = promptChars(history) + instructions.length;
+    if (start > 0 && start !== reported)
+      yield {
+        type: "windowed",
+        left: start,
+        sent: history.length - start,
+      };
+    reported = start;
+    const sent = history.slice(start);
+    const callChars = promptChars(sent) + instructions.length;
     const assistant: Message = { role: "assistant", content: "" };
     const calls: ToolCall[] = [];
     const request: Message[] = [
-      { role: "system", content: instructions },
-      ...history,
+      {
+        role: "system",
+        content:
+          start > 0 ? `${instructions}\n\n${windowNote(start)}` : instructions,
+      },
+      ...sent,
       ...(nudge ? [nudge] : []),
     ];
     // A turn whose own calls fill the request stops here, everything it
     // ran already saved, rather than failing inside the transport.
     if (request.length > MAX_REQUEST_MESSAGES)
       throw new ConversationFullError(
-        `This conversation filled up during the turn: ${history.length} messages, more than a request carries (${MAX_REQUEST_MESSAGES - 1}). What ran so far is saved.`,
+        `This conversation filled up during the turn: its current turn alone is ${history.length - start} messages, more than a request carries (${MAX_REQUEST_MESSAGES - 1}). What ran so far is saved.`,
       );
     const afterNote = nudge !== undefined;
     nudge = undefined;

@@ -269,6 +269,11 @@ export function compactedNotice(
   return `Context compacted: ${event.elided} earlier message${event.elided === 1 ? "" : "s"} shortened, about ${tokens(event.tokensBefore)} → ${tokens(event.tokensAfter)} of ${tokens(size)} tokens. The model can run those tools again.`;
 }
 
+/** The notice when requests start leaving more of the oldest messages out. */
+export function windowedNotice(event: { left: number; sent: number }): string {
+  return `Context window full: the model now sees the newest ${event.sent} messages. The oldest ${event.left} stay in the session but are not sent; /sessions new starts over.`;
+}
+
 export function contextLabel(used: number, size: number): string {
   return `${tokens(used)}/${tokens(size)}`;
 }

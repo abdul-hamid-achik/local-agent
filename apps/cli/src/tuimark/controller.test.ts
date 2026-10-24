@@ -3276,6 +3276,27 @@ test("/sessions new without a store starts a temporary conversation; while busy 
   expect(seenMessages.at(-1)).toEqual(["user:second"]);
 });
 
+test("a windowed request leaves a notice when more is left out, not on every turn", async () => {
+  const lefts = [40, 40, 80];
+  let turn = 0;
+  const { ui, client } = setup(async function* () {
+    const left = lefts[turn++] ?? 0;
+    yield { type: "windowed", left, sent: 60 };
+    yield { type: "message", message: { role: "assistant", content: "ok" } };
+  });
+  for (const prompt of ["one", "two", "three"]) {
+    await ui.fire("send", prompt);
+    await client.idle();
+  }
+  const notices = store(ui)
+    .messages.filter((m: MessageView) => m.is_notice)
+    .map(viewText);
+  expect(notices).toEqual([
+    "Context window full: the model now sees the newest 60 messages. The oldest 40 stay in the session but are not sent; /sessions new starts over.",
+    "Context window full: the model now sees the newest 60 messages. The oldest 80 stay in the session but are not sent; /sessions new starts over.",
+  ]);
+});
+
 test("a full conversation says so, and how to start a new one", async () => {
   const { ui, client } = setup(
     quiet(async () => {

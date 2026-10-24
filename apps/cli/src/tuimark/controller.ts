@@ -137,6 +137,7 @@ import {
   sessionRows,
   statusLines,
   WAITING_STATUS,
+  windowedNotice,
 } from "#cli/tuimark/store";
 import { LiveStream } from "#cli/tuimark/stream";
 import { Transcript } from "#cli/tuimark/transcript";
@@ -925,6 +926,9 @@ export class TuimarkClient {
     );
   }
 
+  /** The most messages a request has left out, as last noticed (see "windowed"). */
+  private windowNoticed = 0;
+
   /** Endpoint, model and size whose placement this process has read. */
   private readonly placementRead = new Set<string>();
 
@@ -1178,6 +1182,7 @@ export class TuimarkClient {
     // builder and the checkpoint target change together, so the next
     // turn can only continue (and checkpoint) the loaded session.
     this.session = context;
+    this.windowNoticed = 0;
     this.history.length = 0;
     this.history.push(...(context?.state.messages ?? []));
     this.builder = new ViewBuilder();
@@ -2944,6 +2949,16 @@ export class TuimarkClient {
               else if (view && view.links.length > 0)
                 await this.commitLinks(view);
             }
+            await this.publishMessages();
+            break;
+          }
+          case "windowed": {
+            // Said when more is left out than before, not on every turn.
+            if (event.left <= this.windowNoticed) break;
+            this.windowNoticed = event.left;
+            const view = this.builder.notice(windowedNotice(event));
+            this.transcript.push(view);
+            if (this.inline) await this.commitView(view);
             await this.publishMessages();
             break;
           }

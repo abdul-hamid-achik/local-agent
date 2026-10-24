@@ -487,6 +487,10 @@ Interrupted tool outcomes require inspection; they are never automatically repla
                 process.stderr.write(
                   `context compacted: ${event.elided} earlier messages shortened (about ${event.tokensBefore} → ${event.tokensAfter} tokens)\n`,
                 );
+              else if (event.type === "windowed")
+                process.stderr.write(
+                  `context window full: the oldest ${event.left} messages are not sent (${event.sent} are)\n`,
+                );
             }
             if (!values.json) process.stdout.write("\n");
           } else if (client === "tuimark") {
