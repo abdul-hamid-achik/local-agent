@@ -6,6 +6,7 @@ import {
   ProviderSchema,
   providerStreamIdleTimeoutMs,
 } from "#runtime/config";
+import { tunnelLost, withRetries } from "#runtime/retry";
 
 export {
   admitOllamaModel,
@@ -89,6 +90,7 @@ export {
   placementWarning,
   probeProvider,
 } from "#runtime/probe";
+export { providerRetryDelayMs } from "#runtime/retry";
 export {
   type ChangeLine,
   changeLines,
@@ -188,52 +190,10 @@ function wrapBodyWithIdleTimeout(
   });
 }
 
-const maxProviderRetries = 2;
-const maxRetryWaitMs = 10_000;
-/** Answers that say "not now" before any reply: the server did nothing with the request. */
-const retryableStatuses = new Set([429, 502, 503, 504]);
-
-/**
- * The wait before retry `attempt` (0-based): the server's Retry-After, else a
- * short backoff. Undefined when the server asks for longer than we wait:
- * retrying early would only be refused again, so the answer stands.
- */
-export function providerRetryDelayMs(
-  response: Response | undefined,
-  attempt: number,
-): number | undefined {
-  const header = response?.headers.get("retry-after")?.trim();
-  if (header) {
-    const ms = /^\d+$/.test(header)
-      ? Number(header) * 1_000
-      : Date.parse(header) - Date.now();
-    if (Number.isFinite(ms))
-      return ms > maxRetryWaitMs ? undefined : Math.max(ms, 0);
-  }
-  return 250 * 2 ** attempt;
-}
-
-/** A pause that the request's own signal can end. */
-const pause = (ms: number, signal: AbortSignal) =>
-  new Promise<void>((resolve, reject) => {
-    if (signal.aborted) return reject(signal.reason);
-    const onAbort = () => {
-      clearTimeout(timer);
-      reject(signal.reason);
-    };
-    const timer = setTimeout(() => {
-      signal.removeEventListener("abort", onAbort);
-      resolve();
-    }, ms);
-    signal.addEventListener("abort", onAbort, { once: true });
-  });
-
 /**
  * Redirects cannot silently move a local request across the network boundary.
- * A refused connection or a 429/502/503/504 is retried up to twice: both
- * come before any byte of the reply, and a model call has no side effects,
- * so a repeat cannot double anything. Once a response is handed back, its
- * body is the caller's and is never replayed.
+ * A refused connection or a 429/502/503/504 is retried (see withRetries); the
+ * body of a request must be replayable, as the string bodies sent here are.
  */
 function guardedFetch(signal: AbortSignal, timeoutMs: number): typeof fetch {
   return Object.assign(
@@ -244,43 +204,32 @@ function guardedFetch(signal: AbortSignal, timeoutMs: number): typeof fetch {
       const caller = init?.signal
         ? AbortSignal.any([signal, init.signal])
         : signal;
-      const retries = maxProviderRetries;
-      for (let attempt = 0; ; attempt++) {
-        const controller = new AbortController();
-        const headersTimer = setTimeout(
-          () => controller.abort(streamIdleError(timeoutMs)),
-          timeoutMs,
-        );
-        let response: Response;
-        try {
-          response = await fetch(url, {
-            ...init,
-            redirect: "error",
-            signal: AbortSignal.any([caller, controller.signal]),
-          });
-        } catch (error) {
-          clearTimeout(headersTimer);
-          // Only a refused or reset connection; a timeout or a cancel is final
-          // (their errors are not tunnelLost, and pause throws once cancelled).
-          if (attempt < retries && tunnelLost(error)) {
-            await pause(providerRetryDelayMs(undefined, attempt) ?? 0, caller);
-            continue;
+      // The attempt that answered owns the body's idle watchdog.
+      let controller = new AbortController();
+      const response = await withRetries(
+        async () => {
+          const attempt = new AbortController();
+          controller = attempt;
+          const headersTimer = setTimeout(
+            () => attempt.abort(streamIdleError(timeoutMs)),
+            timeoutMs,
+          );
+          try {
+            return await fetch(url, {
+              ...init,
+              redirect: "error",
+              signal: AbortSignal.any([caller, attempt.signal]),
+            });
+          } catch (error) {
+            throw attempt.signal.reason ?? error;
+          } finally {
+            clearTimeout(headersTimer);
           }
-          throw controller.signal.reason ?? error;
-        }
-        clearTimeout(headersTimer);
-        const delay = providerRetryDelayMs(response, attempt);
-        if (
-          attempt < retries &&
-          retryableStatuses.has(response.status) &&
-          delay !== undefined
-        ) {
-          await response.body?.cancel().catch(() => undefined);
-          await pause(delay, caller);
-          continue;
-        }
-        return wrapBodyWithIdleTimeout(response, timeoutMs, controller);
-      }
+        },
+        caller,
+        init?.body,
+      );
+      return wrapBodyWithIdleTimeout(response, timeoutMs, controller);
     },
     { preconnect: fetch.preconnect },
   );
@@ -555,22 +504,6 @@ async function* openAILocalChat(
     outputTokens: usage?.completion_tokens ?? 0,
     ...(finishReason ? { finishReason: finishReason.slice(0, 64) } : {}),
   });
-}
-
-/** A connection that was refused, reset or cut before the reply ended. */
-function tunnelLost(error: unknown): boolean {
-  const { code, message } = (error ?? {}) as {
-    code?: unknown;
-    message?: unknown;
-  };
-  return (
-    /^(ConnectionRefused|ConnectionClosed|ECONNREFUSED|ECONNRESET|EPIPE)$/.test(
-      String(code ?? ""),
-    ) ||
-    /Unable to connect|socket connection was closed|Did not receive done|stream ended before completion/.test(
-      String(message ?? ""),
-    )
-  );
 }
 
 /** Transport only: tool calls are data, never authority to execute. */

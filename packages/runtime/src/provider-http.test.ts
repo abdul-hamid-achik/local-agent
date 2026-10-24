@@ -1,6 +1,6 @@
 import type { Tool } from "ollama";
 import { describe, expect, test, vi } from "vitest";
-import { admitOpenAILocalModel } from "#runtime/admission";
+import { admitOpenAILocalModel, getJSON } from "#runtime/admission";
 import { resolveProvider } from "#runtime/config";
 import {
   chat,
@@ -8,6 +8,7 @@ import {
   providerRetryDelayMs,
   type RunEvent,
 } from "#runtime/index";
+import { withRetries } from "#runtime/retry";
 
 const localProvider = (baseURL: string) =>
   resolveProvider({
@@ -686,5 +687,87 @@ describe("provider request retries", () => {
     expect(after("soon")).toBeGreaterThan(0);
     expect(after()).toBeGreaterThan(0);
     expect(after()).toBeLessThan(10_000);
+  });
+});
+
+describe("metadata reads and replayable bodies", () => {
+  const busyOnce = (then: () => Response) => {
+    let requests = 0;
+    const server = serve(() =>
+      ++requests === 1
+        ? new Response("loading", {
+            status: 503,
+            headers: { "retry-after": "0" },
+          })
+        : then(),
+    );
+    return { server, count: () => requests };
+  };
+
+  test("admission's /models read waits out a 503 instead of failing", async () => {
+    const { server, count } = busyOnce(() =>
+      Response.json({ data: [{ id: "fixture-model" }] }),
+    );
+    try {
+      expect(
+        await admitOpenAILocalModel(
+          localProvider(`${server.url.origin}/v1`),
+          new AbortController().signal,
+        ),
+      ).toEqual({ status: "validated", model: "fixture-model" });
+      expect(count()).toBe(2);
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test("an Ollama metadata read retries only when asked to", async () => {
+    const plain = busyOnce(() => Response.json({ ok: true }));
+    const patient = busyOnce(() => Response.json({ ok: true }));
+    const signal = new AbortController().signal;
+    try {
+      await expect(
+        getJSON(`${plain.server.url.origin}/api/show`, signal, {
+          method: "POST",
+        }),
+      ).rejects.toThrow(/\(503\)/);
+      expect(plain.count()).toBe(1);
+      expect(
+        await getJSON(
+          `${patient.server.url.origin}/api/show`,
+          signal,
+          { method: "POST" },
+          true,
+        ),
+      ).toEqual({ ok: true });
+      expect(patient.count()).toBe(2);
+    } finally {
+      plain.server.stop(true);
+      patient.server.stop(true);
+    }
+  });
+
+  test("a request whose body cannot be sent again is never retried", async () => {
+    const busy = () =>
+      Promise.resolve(
+        new Response("busy", { status: 503, headers: { "retry-after": "0" } }),
+      );
+    for (const [body, sends] of [
+      ["{}", 3],
+      [new Uint8Array([1]), 3],
+      [new ReadableStream<Uint8Array>(), 1],
+    ] as const) {
+      let count = 0;
+      const response = await withRetries(
+        () => {
+          count++;
+          return busy();
+        },
+        new AbortController().signal,
+        body,
+      );
+      expect(response.status).toBe(503);
+      expect(count).toBe(sends);
+    }
   });
 });

@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { type Provider, ProviderSchema } from "#runtime/config";
+import { withRetries } from "#runtime/retry";
 
 type FailureKind = "transport" | "metadata" | "policy";
 
@@ -174,13 +175,21 @@ async function readCapped(response: Response, what: string) {
   return bytes;
 }
 
-/** GET or POST JSON metadata, redirects refused and the body capped at 1 MiB. */
+/**
+ * GET or POST JSON metadata, redirects refused and the body capped at 1 MiB.
+ * `retry` waits out a refused connection or a 503 "model loading" (see
+ * withRetries); liveness probes leave it off, as they report the first answer.
+ */
 export async function getJSON(
   url: string,
   signal: AbortSignal,
   init?: RequestInit,
+  retry = false,
 ): Promise<unknown> {
-  const response = await fetch(url, { ...init, signal, redirect: "error" });
+  const send = () => fetch(url, { ...init, signal, redirect: "error" });
+  const response = retry
+    ? await withRetries(send, signal, init?.body)
+    : await send();
   if (!response.ok)
     throw new Error(`Ollama metadata request failed (${response.status})`);
   return JSON.parse(
@@ -205,9 +214,12 @@ export async function admitOllamaModel(
   let show: ShowModel;
   const metadataSignal = AbortSignal.any([signal, AbortSignal.timeout(10_000)]);
   try {
-    const rawTags = await getJSON(`${base}/api/tags`, metadataSignal, {
-      method: "GET",
-    });
+    const rawTags = await getJSON(
+      `${base}/api/tags`,
+      metadataSignal,
+      { method: "GET" },
+      true,
+    );
     const tags = TagsSchema.parse(rawTags);
     const wanted = canonicalModel(config.model);
     entry = tags.models.find(
@@ -240,11 +252,16 @@ export async function admitOllamaModel(
           : {}),
       };
     }
-    const rawShow = await getJSON(`${base}/api/show`, metadataSignal, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ model: config.model, verbose: false }),
-    });
+    const rawShow = await getJSON(
+      `${base}/api/show`,
+      metadataSignal,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: config.model, verbose: false }),
+      },
+      true,
+    );
     show = ShowSchema.parse(rawShow);
   } catch (error) {
     if (
@@ -362,14 +379,18 @@ export async function admitOpenAILocalModel(
     throw new Error("admitOpenAILocalModel requires an openai_local provider");
   const metadataSignal = AbortSignal.any([signal, AbortSignal.timeout(15_000)]);
   try {
-    const response = await fetch(`${config.base_url}/models`, {
-      method: "GET",
-      signal: metadataSignal,
-      redirect: "error",
-      ...(config.api_key
-        ? { headers: { authorization: `Bearer ${config.api_key}` } }
-        : {}),
-    });
+    const response = await withRetries(
+      () =>
+        fetch(`${config.base_url}/models`, {
+          method: "GET",
+          signal: metadataSignal,
+          redirect: "error",
+          ...(config.api_key
+            ? { headers: { authorization: `Bearer ${config.api_key}` } }
+            : {}),
+        }),
+      metadataSignal,
+    );
     if (response.status === 404)
       return {
         status: "unverified",
