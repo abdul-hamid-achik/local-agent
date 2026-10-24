@@ -19,7 +19,7 @@
             │  /mcp show connected MCP servers and their tools     │            
             │  /goal [OBJECTIVE|stop] run turns toward an object…  │            
             │  Keys                                                │            
-╭───────────│  enter send                                          │───────────╮
-│ Message th│  shift/alt+enter new line                            │           │
-╰───────────│  shift-drag select text (mouse reporting is on)      │───────────╯
+╭───────────│  enter send · shift/alt+enter new line               │───────────╮
+│ Message th│  shift-drag select text (mouse reporting is on)      │           │
+╰───────────│  y allow                                             │───────────╯
  build · las╰──────────────────────────────────────────────────────╯            

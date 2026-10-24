@@ -70,6 +70,7 @@ import {
   liveToolView,
   type MessageView,
   NO_CARD,
+  onHold,
   type ToolReceipt,
   tableWidth,
   ViewBuilder,
@@ -149,6 +150,7 @@ import {
   PROVIDER_NO_ANSWER_STATUS,
   panelState,
   providerLines,
+  QUESTION_CARD_STATUS,
   QUESTION_CHOOSE_STATUS,
   QUESTION_EMPTY_STATUS,
   QUESTION_NO_MATCH_STATUS,
@@ -868,7 +870,7 @@ export class TuimarkClient {
 
   /** The ambient status line: mode, MCP state and the last turn (same idle and busy). */
   private idleText(): string {
-    return idleStatus(
+    const status = idleStatus(
       this.options.mcp?.length ?? 0,
       this.intent,
       {
@@ -877,6 +879,9 @@ export class TuimarkClient {
       },
       this.lastTurn,
     );
+    // A send queued while the turn runs stays a fact of the bar after the
+    // "Queued: …" message has given way to a verdict or a rule's note.
+    return this.queued !== undefined ? `${status} · 1 queued` : status;
   }
 
   /**
@@ -3013,7 +3018,7 @@ export class TuimarkClient {
     const label = what === "reply" ? "the last reply" : "the last code block";
     if (copied.ok) {
       await status(
-        `Copied ${label} (${charCount(text.length)} chars) with ${copied.tool}`,
+        `Copied ${label} (${charCount(Array.from(text).length)} chars) with ${copied.tool}`,
       );
       return;
     }
@@ -3258,11 +3263,7 @@ export class TuimarkClient {
         // The card goes in the same write as the dialog, so the two never disagree.
         this.liveTool = {
           ...this.liveTool,
-          card: {
-            ...this.liveTool.card,
-            status: "waiting for approval",
-            running: true,
-          },
+          card: onHold(this.liveTool.card, "waiting for approval"),
         };
         this.dirty = false;
         writes.unshift({ path: "live", value: this.liveTool });
@@ -3362,11 +3363,7 @@ export class TuimarkClient {
       if (this.liveTool) {
         this.liveTool = {
           ...this.liveTool,
-          card: {
-            ...this.liveTool.card,
-            status: "waiting for your answer",
-            running: true,
-          },
+          card: onHold(this.liveTool.card, QUESTION_CARD_STATUS),
         };
         this.dirty = false;
         writes.unshift({ path: "live", value: this.liveTool });

@@ -391,11 +391,7 @@
       <scroll id="help_keys" class="k-help-scroll" focusable="true">
         <row class="la-helpcmd">
           <text class="la-helpcmd-key">enter</text>
-          <text class="la-helpcmd-desc">send</text>
-        </row>
-        <row class="la-helpcmd">
-          <text class="la-helpcmd-key">shift/alt+enter</text>
-          <text class="la-helpcmd-desc">new line</text>
+          <text class="la-helpcmd-desc">send · shift/alt+enter new line</text>
         </row>
         <row class="la-helpcmd">
           <text class="la-helpcmd-key">{help.select_key}</text>

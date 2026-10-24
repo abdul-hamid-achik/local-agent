@@ -746,9 +746,13 @@ test("a question opens above the composer: the arrows choose, enter answers, the
   expect(store(ui).placeholder).toBe(QUESTION_PLACEHOLDER_CHOICE);
   expect(store(ui).live.card).toMatchObject({
     title: "Question",
-    status: "waiting for your answer",
-    running: true,
+    // The head says the turn waits; the card does not repeat it, and
+    // nothing on it spins beside the head's still glyph.
+    status: "asked, answer below",
+    running: false,
+    mark: "?",
   });
+  expect(store(ui).head).toMatchObject({ still: true, spin: false });
   const q = store(ui).question;
   // A single choice starts with none chosen.
   expect(q.rows.map((row) => [row.label, row.detail, row.mark])).toEqual([
@@ -6485,4 +6489,51 @@ test("/copy takes the newest reply, skipping a step that only called a tool", as
   await client.idle();
   await ui.fire("send", "/copy");
   expect(clip.copied).toEqual(["second answer"]);
+});
+
+test("the approval card stands still while the dialog is open: the head's glyph is the one indication", async () => {
+  const { ui, client } = setup(withApproval);
+  await ui.fire("send", "edit");
+  await untilApproval(ui);
+  expect(store(ui).live.card).toMatchObject({
+    status: "waiting for approval",
+    running: false,
+    mark: "?",
+  });
+  expect(store(ui).head).toMatchObject({ still: true, spin: false });
+  await ui.fire("dialog_cancel");
+  await client.idle();
+});
+
+test("a send queued while the turn runs stays a fact of the status bar", async () => {
+  let release: () => void = () => {};
+  const gate = new Promise<void>((r) => {
+    release = r;
+  });
+  const { ui, client } = setup(async function* (ctx) {
+    // Only the first turn asks; the queued one that follows just ends.
+    if (ctx.messages.at(-1)?.content !== "edit") return;
+    yield* withApproval(ctx);
+    await gate;
+  });
+  await ui.fire("send", "edit");
+  await untilApproval(ui);
+  await ui.fire("send", "and then the tests");
+  // The approval owns the bar; once it is answered the verdict and then the
+  // ambient status come back, and the ambient one still says a send waits.
+  await ui.fire("dialog_confirm");
+  await until(() => store(ui).status === "build · 1 queued");
+  release();
+  await client.idle();
+});
+
+test("the copy count is characters, not UTF-16 units", async () => {
+  const clip = fakeClipboard();
+  const { ui, client } = setup(reply("😀😀😀"), { copy: clip.copy });
+  await ui.fire("send", "hi");
+  await client.idle();
+  await ui.fire("send", "/copy");
+  expect(store(ui).status).toBe(
+    "Copied the last reply (3 chars) with fakeclip",
+  );
 });

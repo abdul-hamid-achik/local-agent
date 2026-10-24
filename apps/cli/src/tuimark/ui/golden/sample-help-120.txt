@@ -19,13 +19,13 @@
 │ │   import { sleep } from './u│  /mcp show connected MCP servers and their tools     │                             │ ┃
 │ │ - export const get = (url) =│  /goal [OBJECTIVE|stop] run turns toward an object…  │                             │ ┃
 │ │ + export const get = (url) =│  Keys                                                │                             │ ┃
-│ ╰─────────────────────────────│  enter send                                          │─────────────────────────────╯ ┃
-│                               │  shift/alt+enter new line                            │                               ┃
-│ Assistant                     │  shift-drag select text (mouse reporting is on)      │                               ┃
-│ Done. The helper now retries t│  a session                                           │                               ┃
-│                               │  ! always                                            │                               ┃
-└───────────────────────────────│  pgup/pgdn scroll                                    │───────────────────────────────┘
-╭───────────────────────────────│  home/end top/end                                    │───────────────────────────────╮
-│ Message the model             │  ^P commands                                         │                               │
-╰───────────────────────────────│  esc cancel                                          │───────────────────────────────╯
+│ ╰─────────────────────────────│  enter send · shift/alt+enter new line               │─────────────────────────────╯ ┃
+│                               │  shift-drag select text (mouse reporting is on)      │                               ┃
+│ Assistant                     │  a session                                           │                               ┃
+│ Done. The helper now retries t│  ! always                                            │                               ┃
+│                               │  pgup/pgdn scroll                                    │                               ┃
+└───────────────────────────────│  home/end top/end                                    │───────────────────────────────┘
+╭───────────────────────────────│  ^P commands                                         │───────────────────────────────╮
+│ Message the model             │  esc cancel                                          │                               │
+╰───────────────────────────────│  ^Y copy                                             │───────────────────────────────╯
  build · last 1m 06s · 32 tok/s ╰──────────────────────────────────────────────────────╯                                

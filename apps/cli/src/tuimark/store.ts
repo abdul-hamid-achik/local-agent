@@ -548,6 +548,8 @@ export function questionChoices(
   return question.kind === "single" ? question.options : [];
 }
 
+/** The ask_user card while its question is open (the question box is below the log). */
+export const QUESTION_CARD_STATUS = "asked, answer below";
 /** While the question is not armed yet: only esc works. */
 export const QUESTION_WAIT_STATUS = "Question for you · esc skip";
 /** Once enter answers it. */

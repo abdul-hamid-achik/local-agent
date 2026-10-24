@@ -3,7 +3,7 @@
 Assistant ⠿  waiting for your answer · 12s                                      
                                                                                 
 ╭─ Question ───────────────────────────────────────────────────────────────────╮
-│ ⠋  waiting for your answer                                                   │
+│ ? asked, answer below                                                        │
 │ Which store should the cache use?                                            │
 ╰──────────────────────────────────────────────────────────────────────────────╯
                                                                                 

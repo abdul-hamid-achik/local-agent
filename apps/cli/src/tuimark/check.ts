@@ -718,9 +718,8 @@ const plays: Expect[] = [
   { sample: "sample-palette", input: "esc", actions: ["palette_close"] },
   {
     sample: "sample-help",
-    // Every command is a row of the help, and the keys follow them (the
-    // list is scrollable; this height shows it down to the history key).
-    rows: 34,
+    // Every command is a row of the help, and the keys follow them.
+    rows: 31,
     input: "",
     actions: [],
     screen: [

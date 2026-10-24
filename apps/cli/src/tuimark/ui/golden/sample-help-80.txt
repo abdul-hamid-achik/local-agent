@@ -19,13 +19,13 @@
 │ │   import│  /mcp show connected MCP servers and their tools     │         │ ┃
 │ │ - export│  /goal [OBJECTIVE|stop] run turns toward an object…  │         │ ┃
 │ │ + export│  Keys                                                │         │ ┃
-│ ╰─────────│  enter send                                          │─────────╯ ┃
-│           │  shift/alt+enter new line                            │           ┃
-│ Assistant │  shift-drag select text (mouse reporting is on)      │           ┃
-│ Done. The │  a session                                           │           ┃
-│           │  ! always                                            │           ┃
-└───────────│  pgup/pgdn scroll                                    │───────────┘
-╭───────────│  home/end top/end                                    │───────────╮
-│ Message th│  ^P commands                                         │           │
-╰───────────│  esc cancel                                          │───────────╯
+│ ╰─────────│  enter send · shift/alt+enter new line               │─────────╯ ┃
+│           │  shift-drag select text (mouse reporting is on)      │           ┃
+│ Assistant │  a session                                           │           ┃
+│ Done. The │  ! always                                            │           ┃
+│           │  pgup/pgdn scroll                                    │           ┃
+└───────────│  home/end top/end                                    │───────────┘
+╭───────────│  ^P commands                                         │───────────╮
+│ Message th│  esc cancel                                          │           │
+╰───────────│  ^Y copy                                             │───────────╯
  build · las╰──────────────────────────────────────────────────────╯            

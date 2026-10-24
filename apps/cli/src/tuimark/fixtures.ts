@@ -7,6 +7,7 @@ import {
   type Block,
   liveToolView,
   type MessageView,
+  onHold,
   tableWidth,
   thinkingView,
   ViewBuilder,
@@ -25,6 +26,7 @@ import {
   mcpLines,
   PLACEHOLDER_BUSY,
   panelState,
+  QUESTION_CARD_STATUS,
   QUESTION_PLACEHOLDER_CHOICE,
   QUESTION_PLACEHOLDER_TEXT,
   QUESTION_STATUS,
@@ -427,10 +429,7 @@ function questionStore(question: Question, sel = -1): Store {
     ],
   });
   const live = liveToolView(builder.takeCall(), "ask_user", "requested");
-  store.live = {
-    ...live,
-    card: { ...live.card, status: "waiting for your answer", running: true },
-  };
+  store.live = { ...live, card: onHold(live.card, QUESTION_CARD_STATUS) };
   store.question = questionState(question, sel);
   store.busy = true;
   store.head = headState("answer", 12);

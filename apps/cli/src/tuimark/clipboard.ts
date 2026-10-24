@@ -124,7 +124,7 @@ export async function copyToClipboard(
     : { ok: false, reason: "none" };
 }
 
-/** `1234` as `1,234`, whatever the machine's locale. */
+/** `1234` as `1,234`, whatever the machine's locale. Count characters, not UTF-16 units. */
 export function charCount(n: number): string {
   return n.toLocaleString("en-US");
 }

@@ -1653,6 +1653,16 @@ function toolCard(
   };
 }
 
+/**
+ * A tool card whose call waits on the person (an approval, a question): no
+ * spinner, since the live message's head already says the turn waits and
+ * nothing may keep animating beside its still glyph; an amber "?" and
+ * border instead. The status is the card's own word, not the head's.
+ */
+export function onHold(card: Card, status: string): Card {
+  return { ...card, status, running: false, mark: "?", warn: true };
+}
+
 // ------------------------------------------------------------------------ views
 
 export interface MessageView {
