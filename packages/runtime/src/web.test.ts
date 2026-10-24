@@ -1182,3 +1182,60 @@ test("srcset candidates keep commas inside their URLs", async () => {
     await run.cleanup();
   }
 });
+const CHALLENGE_PAGE = `<!DOCTYPE html><html><head><title>Just a moment...</title></head><body><noscript>Enable JavaScript and cookies to continue</noscript></body></html>`;
+
+test("only the page's own challenge markers count as a bot challenge", async () => {
+  const article = (head: string) =>
+    `<html><head>${head}</head><body><h1>How Cloudflare works</h1><p>The interstitial says "Just a moment..." while it sets cf-browser-verification cookies.</p><noscript>Enable JavaScript and cookies to continue</noscript></body></html>`;
+  stubFetch((url) => {
+    if (url.endsWith("/challenge"))
+      return new Response(CHALLENGE_PAGE, {
+        status: 403,
+        headers: { "content-type": "text/html; charset=utf-8" },
+      });
+    if (url.endsWith("/challenge-200")) return htmlPage(CHALLENGE_PAGE);
+    if (url.endsWith("/article"))
+      return htmlPage(
+        article("<title>How Cloudflare's Just a moment... page works</title>"),
+      );
+    // A plain 403 that merely quotes the phrase far down the page.
+    if (url.endsWith("/forbidden"))
+      return new Response(
+        `<html><head><title>Forbidden</title></head><body>${"x".repeat(20_000)}<p>Enable JavaScript and cookies to continue</p></body></html>`,
+        { status: 403, headers: { "content-type": "text/html" } },
+      );
+    if (url.endsWith("/markers"))
+      return new Response(
+        `<html><head><title>Checking</title></head><body><div class="cf-browser-verification"></div></body></html>`,
+        { status: 503, headers: { "content-type": "text/html" } },
+      );
+    return undefined;
+  });
+  const run = await session(
+    ["challenge", "challenge-200", "article", "forbidden", "markers"].map(
+      (name) => ({
+        name: "fetch",
+        arguments: { url: `http://cf.example/${name}` },
+      }),
+    ),
+  );
+  try {
+    expect(run.results.map((result) => result.status)).toEqual([
+      "failed",
+      "failed",
+      "succeeded",
+      "failed",
+      "failed",
+    ]);
+    expect(run.output(0)).toContain("behind a bot challenge");
+    expect(run.output(1)).toContain("behind a bot challenge");
+    expect(run.output(2)).toContain("The interstitial says");
+    expect(run.output(3)).toContain("HTTP 403");
+    expect(run.output(3)).not.toContain("bot challenge");
+    // No title to go by, but a 503 with the interstitial markers up top.
+    expect(run.output(4)).toContain("behind a bot challenge");
+  } finally {
+    restoreFetch();
+    await run.cleanup();
+  }
+});

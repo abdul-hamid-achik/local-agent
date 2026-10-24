@@ -430,11 +430,24 @@ const NAV_PATHS = new Set([
   "/search",
 ]);
 
-/** Pages that answer with a bot challenge instead of content. The marker
- *  must be page-fatal: `challenge-platform` alone is injected into ordinary
- *  pages by Bot Fight Mode and would reject valid content. */
-const BOT_CHALLENGE =
-  /Just a moment\.\.\.|cf-browser-verification|Enable JavaScript and cookies to continue/i;
+/** Markers of a bot-challenge page, looked for only in the first bytes of a
+ *  403/503 body. They must be page-fatal: `challenge-platform` alone is
+ *  injected into ordinary pages by Bot Fight Mode and would reject valid
+ *  content. */
+const BOT_CHALLENGE_MARKERS =
+  /cf-browser-verification|Enable JavaScript and cookies to continue/i;
+const BOT_CHALLENGE_HEAD_CHARS = 8 * 1024;
+
+/** Pages that answer with a bot challenge instead of content. The decision is
+ *  the page's own title ("Just a moment..." is Cloudflare's interstitial), or
+ *  the markers near the top of a 403/503. The phrases deeper in a page, or in
+ *  a `<noscript>`, are content: an article about Cloudflare must still read. */
+function isBotChallenge(html: string, status: number): boolean {
+  const head = html.slice(0, BOT_CHALLENGE_HEAD_CHARS);
+  const title = /<title[^>]*>([^<]*)<\/title>/i.exec(head)?.[1];
+  if (title?.trim().toLowerCase() === "just a moment...") return true;
+  return (status === 403 || status === 503) && BOT_CHALLENGE_MARKERS.test(head);
+}
 
 /** URL or alt words that mark decorative image chrome. */
 const IMAGE_CHROME = /(logo|icon|sprite|avatar|favicon|emoji|badge)/i;
@@ -2187,7 +2200,7 @@ async function* agentTurn(
               (type === "text/html" || type.endsWith("+html"))
             ) {
               const peek = (await readCapped(response, 64 * 1024)).text;
-              if (BOT_CHALLENGE.test(peek))
+              if (isBotChallenge(peek, response.status))
                 throw new Error(
                   `fetch: ${finalUrl} is behind a bot challenge (Cloudflare-style, HTTP ${response.status}). Plain HTTP cannot pass it; if a browser MCP is configured, use its navigation tool instead (e.g. browser__browser_navigate), or open the URL in your own browser.`,
                 );
@@ -2236,7 +2249,7 @@ async function* agentTurn(
             );
             const isHtml =
               contentType === "text/html" || contentType.endsWith("+html");
-            if (isHtml && BOT_CHALLENGE.test(text))
+            if (isHtml && isBotChallenge(text, response.status))
               throw new Error(
                 `fetch: ${finalUrl} is behind a bot challenge (Cloudflare-style). Plain HTTP cannot pass it; if a browser MCP is configured, use its navigation tool instead (e.g. browser__browser_navigate), or open the URL in your own browser.`,
               );
