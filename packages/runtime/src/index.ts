@@ -108,10 +108,26 @@ export const ToolCallSchema = z.object({
   }),
 });
 export type ToolCall = z.infer<typeof ToolCallSchema>;
+/** The most characters a message's content (or its thinking) can hold. */
+export const MAX_MESSAGE_CHARS = 1_000_000;
+
+/**
+ * Why a client refuses a send of `length` characters, for the person, or
+ * undefined when it fits in a message. Past the limit the message fails
+ * here, and kept in a client's history it would fail every later turn, so
+ * it never leaves the composer.
+ */
+export function tooLongToSend(
+  length: number,
+  lead = "Not sent",
+): string | undefined {
+  if (length <= MAX_MESSAGE_CHARS) return undefined;
+  return `${lead}: ${length.toLocaleString("en-US")} characters, and a message holds ${MAX_MESSAGE_CHARS.toLocaleString("en-US")} at most. Send it in parts, or save it to a file in the workspace and ask the model to read it`;
+}
 export const MessageSchema = z.object({
   role: z.enum(["system", "user", "assistant", "tool"]),
-  content: z.string().max(1_000_000),
-  thinking: z.string().max(1_000_000).optional(),
+  content: z.string().max(MAX_MESSAGE_CHARS),
+  thinking: z.string().max(MAX_MESSAGE_CHARS).optional(),
   /** Base64 images (no data URI prefix), Ollama's vision convention; they ride the message that produced them. */
   images: z.array(z.string().max(7_000_000)).max(4).optional(),
   tool_calls: z.array(ToolCallSchema).max(32).optional(),

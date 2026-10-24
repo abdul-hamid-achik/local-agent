@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   appendRule,
+  MAX_MESSAGE_CHARS,
   type McpConnection,
   Workspace,
 } from "@local-agent/runtime";
@@ -426,6 +427,62 @@ test.each([
     await terminal.waitForFrame((frame) => frame.includes(expected));
   },
 );
+
+test("a send past what a message holds stays in the composer", async () => {
+  let requests = 0;
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch() {
+      requests++;
+      return new Response("no", { status: 500 });
+    },
+  });
+  const root = await mkdtemp(join(tmpdir(), "local-agent-terminal-long-"));
+  const workspace = await Workspace.create(root);
+  const terminal = await createTestRenderer({
+    ...terminalOptions("fullscreen"),
+    width: 100,
+    height: 24,
+    kittyKeyboard: true,
+  });
+  const signal = new AbortController();
+  const app = createRenderer(createNodeOps(terminal.renderer)).createApp(
+    createTerminalRoot(
+      {
+        type: "ollama",
+        base_url: `http://127.0.0.1:${server.port}`,
+        model: "fixture",
+        context_size: 16384,
+      },
+      "fullscreen",
+      signal.signal,
+      workspace,
+      "build",
+    ),
+  );
+  app.provide(rendererInjectionKey, terminal.renderer);
+  app.provide(exitInjectionKey, () => terminal.renderer.destroy());
+  app.mount(terminal.renderer.root);
+  cleanups.push(async () => {
+    signal.abort();
+    app.unmount();
+    terminal.renderer.destroy();
+    workspace.close();
+    server.stop(true);
+    await rm(root, { recursive: true, force: true });
+  });
+
+  await terminal.flush();
+  await terminal.mockInput.pasteBracketedText(
+    "x".repeat(MAX_MESSAGE_CHARS + 1),
+  );
+  terminal.mockInput.pressEnter();
+  await terminal.waitForFrame((frame) =>
+    frame.includes("Not sent: 1,000,001 characters"),
+  );
+  expect(requests).toBe(0);
+});
 
 test("mode switch changes the Ollama tool catalog", async () => {
   const root = await mkdtemp(join(tmpdir(), "local-agent-terminal-tools-"));

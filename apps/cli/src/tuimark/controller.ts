@@ -51,6 +51,7 @@ import {
   type SessionContext,
   StepLimitError,
   sandboxUnavailable,
+  tooLongToSend,
   trustRules,
   trustStorePath,
   type Workspace,
@@ -2468,6 +2469,14 @@ export class TuimarkClient {
       return;
     }
     const raw = typeof ev.value === "string" ? ev.value : "";
+    // Past what a message holds, a send (an answer, a goal) is refused here
+    // with the draft kept: in the history it would fail every later turn.
+    // Checked without an await, so a send that fits starts in this tick.
+    const tooLong = this.tooLong(raw.length);
+    if (tooLong) {
+      await this.write([tooLong]);
+      return;
+    }
     // An open question takes the send: it is the answer, never a message,
     // a command or the queue. `/goal` and `/goal stop` alone stay commands.
     if (this.asking) {
@@ -2528,7 +2537,13 @@ export class TuimarkClient {
       // joins the draft history now; its view is only shown (inline:
       // committed) when it actually starts.
       const added = this.queued !== undefined;
-      this.queued = added ? `${this.queued}\n\n${raw}` : raw;
+      const next = added ? `${this.queued}\n\n${raw}` : raw;
+      const overflow = this.tooLong(next.length, added);
+      if (overflow) {
+        await this.write([overflow]);
+        return;
+      }
+      this.queued = next;
       this.remember(raw);
       const firstLine = clip(
         terminalText(raw).split("\n")[0]?.trim() ?? "",
@@ -2562,6 +2577,21 @@ export class TuimarkClient {
     }
     this.remember(raw);
     await this.beginTurn(raw);
+  }
+
+  /**
+   * The status that says why a send of `length` characters is refused (the
+   * draft is left as it is), or undefined when it fits. During a turn it
+   * gives way like a verdict.
+   */
+  private tooLong(length: number, queued = false): Write | undefined {
+    const refusal = tooLongToSend(
+      length,
+      queued ? "Not added to the queued message, together" : undefined,
+    );
+    if (!refusal) return undefined;
+    if (this.busy) this.flashed = true;
+    return { path: "status", value: refusal };
   }
 
   /**

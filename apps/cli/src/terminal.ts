@@ -5,6 +5,7 @@ import {
   type Provider,
   runAgent,
   type SessionContext,
+  tooLongToSend,
   type Workspace,
   workspaceRules,
 } from "@local-agent/runtime";
@@ -123,6 +124,13 @@ export function createTerminalRoot(
           return;
         }
         if (!draft.value.trim()) return;
+        // Past what a message holds the send would fail, and in the history
+        // every later turn with it: it stays in the composer.
+        const tooLong = tooLongToSend(draft.value.length);
+        if (tooLong) {
+          status.value = tooLong;
+          return;
+        }
         const prompt = draft.value;
         draft.value = "";
         await nextTick();

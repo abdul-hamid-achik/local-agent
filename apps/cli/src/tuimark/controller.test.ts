@@ -20,6 +20,7 @@ import type {
 } from "@local-agent/runtime";
 import {
   ConversationFullError,
+  MAX_MESSAGE_CHARS,
   MLX_WARNING,
   StepLimitError,
 } from "@local-agent/runtime";
@@ -352,6 +353,44 @@ test("a second send while one is queued is added to it, never in its place", asy
   expect(seen[1]?.messages.at(-1)).toBe(
     "user:first queued\n\nreplacement\nsecond line",
   );
+});
+
+test("a send past what a message holds stays in the composer, and so does one the queue cannot take", async () => {
+  let release: () => void = () => {};
+  const gate = new Promise<void>((r) => {
+    release = r;
+  });
+  const { ui, client, seen } = setup(async function* () {
+    await gate;
+    yield {
+      type: "message",
+      message: { role: "assistant", content: "done" },
+    };
+  });
+  const huge = "x".repeat(MAX_MESSAGE_CHARS + 1);
+  store(ui).draft = huge;
+  await ui.fire("send", huge);
+  expect(store(ui).status).toBe(
+    "Not sent: 1,000,001 characters, and a message holds 1,000,000 at most. Send it in parts, or save it to a file in the workspace and ask the model to read it",
+  );
+  expect(store(ui).draft).toBe(huge);
+  expect(seen).toHaveLength(0);
+  // The queue joins sends with a blank line, up to the limit exactly.
+  const most = "y".repeat(MAX_MESSAGE_CHARS - 3);
+  await ui.fire("send", "go");
+  await ui.fire("send", most);
+  await ui.fire("send", "z");
+  expect(store(ui).status).toBe("Added to the queued message: z");
+  store(ui).draft = "z";
+  await ui.fire("send", "z");
+  expect(store(ui).status).toMatch(
+    /^Not added to the queued message, together: 1,000,003 characters, /,
+  );
+  expect(store(ui).draft).toBe("z");
+  release();
+  await client.idle();
+  expect(seen).toHaveLength(2);
+  expect(seen[1]?.messages.at(-1)).toBe(`user:${most}\n\nz`);
 });
 
 test("a queued send given back as a turn ends is never overwritten by its prompt", async () => {
