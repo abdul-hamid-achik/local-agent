@@ -1,6 +1,6 @@
 === grid 80x12 ===
- Local Agent         qwen3-coder:30b  build          ctx 9.6k/32k  ████░░░░░░░░ 
-Assistant                                                                       
+ Local Agent         qwen3-coder:30b  build          ctx 9.6k/32k  ███▋░░░░░░░░ 
+Assistant ⠋                                                                     
 Here is the plan:                                                               
  ts                                                                             
  const retries = 3;                                                             
@@ -10,4 +10,4 @@ Here is the plan:
 ╔══════════════════════════════════════════════════════════════════════════════╗
 ║ Generating…                                                                  ║
 ╚══════════════════════════════════════════════════════════════════════════════╝
- ⠋  Generating…   ^P commands  esc cancel  ctrl+c quit  ↑/↓ history             
+ ⠋  Generating…             ▂▆▇▇█▇ ^P commands  esc cancel  ctrl+c quit         

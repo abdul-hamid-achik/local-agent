@@ -1,29 +1,29 @@
 === grid 120x30 ===
- Local Agent           Ollama / ╭─ Help ───────────────────────────────────────────────╮c3d  ctx 9.6k/32k  ████░░░░░░░░ 
+ Local Agent           Ollama / ╭─ Help ───────────────────────────────────────────────╮c3d  ctx 9.6k/32k  ███▋░░░░░░░░ 
 ┌───────────────────────────────│                                                      │───────────────────────────────┐
-│ You                           │  ? close help                                        │                               │
-│ Add a retry to the fetch helpe│  Commands                                            │                               │
-│                               │  /mode plan|build|chat plan reads only · build can…  │                               │
-│ Assistant                     │  /model [NAME] show or switch the Ollama model       │                               │
-│ Sure. I will wrap the call in │  /theme dark|light|auto set the session theme        │                               │
-│  ts                           │  /mouse on|off toggle mouse reporting (fullscreen)   │                               │
-│  export async function fetchRe│  /permissions [clear|trust] show, clear or trust g…  │                               │
-│    // exponential backoff     │  /sandbox on|off run commands confined (macOS), wi…  │                               │
-│    for (let attempt = 1; ; att│  /details show the last tool output in full          │                               │
-│      try { return await fetch(│  /status show the effective config (model, workspa…  │                               │
-│      catch (e) { if (attempt =│  /sessions switch to a saved session (needs --sess…  │                               │
-│    }                          │  /find TEXT search saved session messages (needs -…  │                               │
-│  }                            │  /export [json] write the conversation to a markdo…  │                               │
-│                               │  /mcp show connected MCP servers and their tools     │                               │
-│ ╭─ Tool · edit ───────────────│  /help show the commands and the keys                │─────────────────────────────╮ │
-│ │succeeded                    │                                                      │                             │ │
-│ │src/fetch.ts                 │  Keys                                                │                             │ │
-│ │Updated src/fetch.ts. Verific│  enter send                                          │                             │ │
-│ ╰─────────────────────────────│  shift/alt+enter new line                            │─────────────────────────────╯ │
-│                               │  a session                                           │                               │
-│ Assistant                     │  ! always                                            │                               │
-│ Done. The helper now retries t│  pgup/pgdn scroll                                    │                               │
-│                               │  home/end top/end                                    │                               │
+│ Assistant                     │  ? close help                                        │                               │
+│ Sure. I will wrap the call in │  Commands                                            │                               │
+│  ts                           │  /mode plan|build|chat plan reads only · build can…  │                               │
+│  export async function fetchRe│  /model [NAME] show or switch the Ollama model       │                               ┃
+│    // exponential backoff     │  /theme dark|light|auto set the session theme        │                               ┃
+│    for (let attempt = 1; ; att│  /mouse on|off toggle mouse reporting (fullscreen)   │                               ┃
+│      try { return await fetch(│  /permissions [clear|trust] show, clear or trust g…  │                               ┃
+│      catch (e) { if (attempt =│  /sandbox on|off run commands confined (macOS), wi…  │                               ┃
+│    }                          │  /details show the last tool output in full          │                               ┃
+│  }                            │  /status show the effective config (model, workspa…  │                               ┃
+│                               │  /sessions switch to a saved session (needs --sess…  │                               ┃
+│ ╭─ Edit ──────────────────────│  /find TEXT search saved session messages (needs -…  │─────────────────────────────╮ ┃
+│ │ ✓ succeeded                 │  /export [json] write the conversation to a markdo…  │                             │ ┃
+│ │ src/fetch.ts                │  /mcp show connected MCP servers and their tools     │                             │ ┃
+│ │ Updated src/fetch.ts. Verifi│  /help show the commands and the keys                │                             │ ┃
+│ │   import { sleep } from './u│                                                      │                             │ ┃
+│ │ - export const get = (url) =│  Keys                                                │                             │ ┃
+│ │ + export const get = (url) =│  enter send                                          │                             │ ┃
+│ ╰─────────────────────────────│  shift/alt+enter new line                            │─────────────────────────────╯ ┃
+│                               │  a session                                           │                               ┃
+│ Assistant                     │  ! always                                            │                               ┃
+│ Done. The helper now retries t│  pgup/pgdn scroll                                    │                               ┃
+│                               │  home/end top/end                                    │                               ┃
 └───────────────────────────────│  ^P commands                                         │───────────────────────────────┘
 ╭───────────────────────────────│  esc cancel                                          │───────────────────────────────╮
 │ Message the model             │  ↑/↓ history                                         │                               │

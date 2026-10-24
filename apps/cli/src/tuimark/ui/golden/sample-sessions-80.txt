@@ -1,29 +1,29 @@
 === grid 80x30 ===
- Local Agent         qwen3-coder:30b  build          ctx 9.6k/32k  ████░░░░░░░░ 
+ Local Agent         qwen3-coder:30b  build          ctx 9.6k/32k  ███▋░░░░░░░░ 
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│ You                                                                          │
-│ Add a retry to the fetch helper and show me the result.                      │
-│                                                                              │
 │ Assistant                                                                    │
 │ Sure. I will wrap the call in a bounded retry with backoff:                  │
 │  ts                                                                          │
-│  export async function fetchRetry(url, tries = 3) {                          │
-│    // exponential backoff                                                    │
-│ ╭─ Sessions ───────────────────────────────────────────────────────────────╮ │
-│ │                                                                          │ │
-│ │  ┌────────────────────────────────────────────────────────────────────┐  │ │
-│ │  │› a1b2c3d · 5 messages · current                                    │  │ │
-│ │  │  e4f5g6h · 12 messages                                             │  │ │
-│ │  │  i7j8k9l · 2 messages                                              │  │ │
-│ │  └────────────────────────────────────────────────────────────────────┘  │ │
-│ │  up/down choose · enter loads · pgup/pgdn scroll · esc close             │ │
-│ │                                                                          │ │
-│ ╰──────────────────────────────────────────────────────────────────────────╯ │
-│ ╰──────────────────────────────────────────────────────────────────────────╯ │
-│                                                                              │
-│ Assistant                                                                    │
-│ Done. The helper now retries three times.                                    │
-│                                                                              │
+│  export async function fetchRetry(url, tries = 3) {                          ┃
+│    // exponential backoff                                                    ┃
+│    for (let attempt = 1; ; attempt++) {                                      ┃
+│      try { return await fetch(url); }                                        ┃
+│      catch (e) { if (attempt === tries) throw e; }                           ┃
+│ ╭─ Sessions ───────────────────────────────────────────────────────────────╮ ┃
+│ │                                                                          │ ┃
+│ │  ┌────────────────────────────────────────────────────────────────────┐  │ ┃
+│ │  │› a1b2c3d · 5 messages · current                                    │  │ ┃
+│ │  │  e4f5g6h · 12 messages                                             │  │ ┃
+│ │  │  i7j8k9l · 2 messages                                              │  │ ┃
+│ │  └────────────────────────────────────────────────────────────────────┘  │ ┃
+│ │  up/down choose · enter loads · pgup/pgdn scroll · esc close             │ ┃
+│ │                                                                          │ ┃
+│ ╰──────────────────────────────────────────────────────────────────────────╯ ┃
+│ ╰──────────────────────────────────────────────────────────────────────────╯ ┃
+│                                                                              ┃
+│ Assistant                                                                    ┃
+│ Done. The helper now retries three times.                                    ┃
+│                                                                              ┃
 └──────────────────────────────────────────────────────────────────────────────┘
 ╭──────────────────────────────────────────────────────────────────────────────╮
 │ Message the model                                                            │

@@ -1,31 +1,31 @@
 === grid 120x30 ===
- Local Agent           Ollama / loopback  qwen3-coder:30b  build            session a1b2c3d  ctx 9.6k/32k  ████░░░░░░░░ 
+ Local Agent           Ollama / loopback  qwen3-coder:30b  build            session a1b2c3d  ctx 9.6k/32k  ███▋░░░░░░░░ 
 ┌──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│  ts                                                                                                                  │
-│  export async function fetchRetry(url, tries = 3) {                                                                  │
-│    // exponential ba╭─ Edit install.sh? ───────────────────────────────────────────────────────╮                     │
-│    for (let attempt │                                                                          │                     │
-│      try { return aw│  Apply this change to the workspace.                                     │                     │
-│      catch (e) { if │  ┌────────────────────────────────────────────────────────────────────┐  │                     ┃
-│    }                │  │--- a/install.sh                                                    ┃  │                     ┃
-│  }                  │  │+++ b/install.sh                                                    │  │                     ┃
-│                     │  │@@ -1,3 +1,250 @@                                                   │  │                     ┃
-│ ╭─ Tool · edit ─────│  │+echo step 0                                                        │  │───────────────────╮ ┃
-│ │succeeded          │  │+echo step 1                                                        │  │                   │ ┃
-│ │src/fetch.ts       │  │+echo step 2                                                        │  │                   │ ┃
-│ │Updated src/fetch.t│  │+echo step 3                                                        │  │                   │ ┃
+│    for (let attempt = 1; ; attempt++) {                                                                              │
+│      try { return await fetch(url); }                                                                                │
+│      catch (e) { if ╭─ Edit install.sh? ───────────────────────────────────────────────────────╮                     │
+│    }                │                                                                          │                     │
+│  }                  │  Apply this change to the workspace.                                     │                     │
+│                     │  ┌────────────────────────────────────────────────────────────────────┐  │                     │
+│ ╭─ Edit ────────────│  │--- a/install.sh                                                    ┃  │───────────────────╮ ┃
+│ │ ✓ succeeded       │  │+++ b/install.sh                                                    │  │                   │ ┃
+│ │ src/fetch.ts      │  │@@ -1,3 +1,250 @@                                                   │  │                   │ ┃
+│ │ Updated src/fetch.│  │+echo step 0                                                        │  │                   │ ┃
+│ │   import { sleep }│  │+echo step 1                                                        │  │                   │ ┃
+│ │ - export const get│  │+echo step 2                                                        │  │                   │ ┃
+│ │ + export const get│  │+echo step 3                                                        │  │                   │ ┃
 │ ╰───────────────────│  │+echo step 4                                                        │  │───────────────────╯ ┃
 │                     │  │+echo step 5                                                        │  │                     ┃
 │ Assistant           │  │+echo step 6                                                        │  │                     ┃
 │ Done. The helper now│  │+abcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefghijabcdefg│  │                     ┃
 │                     │  │+0123456789012345678901234567890123456789012345678901234567890123456│  │                     ┃
-│ ╭─ Tool · edit ─────│  └────────────────────────────────────────────────────────────────────┘  │───────────────────╮ ┃
-│ │⠋  waiting for appr│  a allow file changes this session                                       │                   │ ┃
-│ │src/fetch.ts       │                                                                          │                   │ ┃
+│ ╭─ Edit ────────────│  └────────────────────────────────────────────────────────────────────┘  │───────────────────╮ ┃
+│ │ ⠋  waiting for app│  a allow file changes this session                                       │                   │ ┃
+│ │ src/fetch.ts      │                                                                          │                   │ ┃
 │ ╰───────────────────│                                                     [ Deny ]  [ Allow ]  │───────────────────╯ ┃
 │                     │                                                                          │                     ┃
 └─────────────────────╰──────────────────────────────────────────────────────────────────────────╯─────────────────────┘
 ╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
 │ Generating…                                                                                                          │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
- ⠋  Waiting for approval · y allow · a session · ! always · n deny · Esc deny   a session  ! always  pgup/pgdn scroll   
+ ⠋  Waiting for approval · y allow · a session · ! always · n deny · Esc deny                    a session  ! always    

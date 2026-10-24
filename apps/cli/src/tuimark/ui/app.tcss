@@ -35,7 +35,8 @@
 @media (max-cols: 90) {
   .la-session { display: none; }
 }
-.la-ctxbar { width: 12; }
+/* Eighths: the meter moves by an eighth of a cell, not a whole one. */
+.la-ctxbar { width: 12; bar: eighths; }
 /* Ctx thresholds (store flags: warn at >=75%, danger at >=90%; danger wins). */
 .la-ctx.warn, .la-ctxbar.warn { color: $warn; }
 .la-ctx.danger, .la-ctxbar.danger { color: $danger; }
@@ -55,8 +56,14 @@
 .la-msg.user > .la-role { color: $user; }
 .la-msg.asst > .la-role { color: $accent; }
 .la-msg.notice > .la-role { color: $danger; }
+/* The reply being written: its label and a spinner (app.tui #live). */
+.la-live-head { height: 1; gap: 1; }
+.la-live-head > .la-role { width: auto; color: $accent; }
 .la-blocks { height: auto; layout: column; }
 .la-blocks > text { wrap: wrap; }
+/* Prose stops at a readable measure on a wide terminal; code blocks and
+ * tool output keep the whole width. */
+.la-blocks > text, .la-item { max-width: 100; }
 .la-head { bold: true; }
 .la-quote { color: $muted; italic: true; padding: 0 0 0 1; }
 .la-item { height: auto; layout: row; gap: 1; }
@@ -67,7 +74,8 @@
 .la-code { height: auto; layout: column; background: $panel; padding: 0 1; }
 .la-lang { color: $muted; dim: true; }
 .la-codetext, .la-out, .la-think { height: auto; }
-.la-think-head { color: $muted; dim: true; }
+.la-think-row { height: 1; gap: 1; }
+.la-think-head { width: auto; color: $muted; dim: true; }
 .la-think { padding: 0 0 0 2; color: $muted; italic: true; dim: true; }
 .la-thinkbox { height: auto; max-height: 3; width: 1fr; }
 #thinking { margin: 0 0 1 0; }
@@ -85,13 +93,20 @@ span.num { color: $num; }
 span.think { color: $muted; italic: true; dim: true; }
 span.com, span.note { color: $com; italic: true; }
 span.err { color: $danger; bold: true; }
+/* The change an edit made, on its card (blocks.ts changeRows). */
+span.add { color: $ok; }
+span.del { color: $danger; }
 
-.la-tool { height: auto; layout: column; border: rounded; border-color: $border; title-color: $tool; margin: 0 0 1 0; }
+.la-tool { height: auto; layout: column; border: rounded; border-color: $border; title-color: $tool; padding: 0 1; margin: 0 0 1 0; }
 .la-tool.run { border-color: $warn; }
 .la-tool.ok { border-color: $ok; }
 .la-tool.bad { border-color: $danger; }
 .la-tool.warn { border-color: $warn; }
 .la-tool-head { height: 1; gap: 1; }
+.la-tool-mark, .la-tool-status, .la-tool-took { width: auto; }
+.la-tool.ok > .la-tool-head > .la-tool-mark { color: $ok; bold: true; }
+.la-tool.bad > .la-tool-head > .la-tool-mark { color: $danger; bold: true; }
+.la-tool.warn > .la-tool-head > .la-tool-mark { color: $warn; bold: true; }
 
 /* One row to eight (max-height counts the border), then it scrolls and shows a thumb. */
 #composer { width: 1fr; max-height: 10; border: rounded; border-color: $border; padding: 0 1; scrollbar: auto; }
@@ -101,12 +116,13 @@ span.err { color: $danger; bold: true; }
 
 #status { gap: 1; padding: 0 1; }
 .la-statustext { width: auto; padding: 0 2 0 0; }
+.la-rate { width: 16; color: $accent; }
 .la-hints { width: 1fr; justify: end; }
 /* Narrow terminals: the context meter goes first (model and mode stay), and
  * the status text is capped so at least the first hint (^P commands) fits.
  * Hints drop as a suffix: the first that does not fit takes the rest. */
 @media (max-cols: 60) {
-  .la-ctx, .la-ctxbar, .la-grants { display: none; }
+  .la-ctx, .la-ctxbar, .la-grants, .la-rate { display: none; }
   .la-statustext { max-width: 50%; padding: 0; }
 }
 

@@ -10,9 +10,12 @@ Sure. I will wrap the call in a bounded retry with backoff:
      catch (e) { if (attempt === tries) throw e; }
    }
  }
-╭─ Tool · edit ────────────────────────────────────────────────────────────────╮
-│succeeded                                                                     │
-│src/fetch.ts                                                                  │
-│Updated src/fetch.ts. Verification has not been run.                          │
+╭─ Edit ───────────────────────────────────────────────────────────────────────╮
+│ ✓ succeeded · 0.4s                                                           │
+│ src/fetch.ts                                                                 │
+│ Updated src/fetch.ts. Verification has not been run.                         │
+│   import { sleep } from './util';                                            │
+│ - export const get = (url) => fetch(url);                                    │
+│ + export const get = (url) => fetchRetry(url);                               │
 ╰──────────────────────────────────────────────────────────────────────────────╯
 Done. The helper now retries three times.

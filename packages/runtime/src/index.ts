@@ -77,6 +77,8 @@ export {
   workspaceRules,
 } from "#runtime/permissions";
 export {
+  type ChangeLine,
+  changeLines,
   Workspace,
   type WorkspaceEditProposal,
   type WorkspaceWriteProposal,

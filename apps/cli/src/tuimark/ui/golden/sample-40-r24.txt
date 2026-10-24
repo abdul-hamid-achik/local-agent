@@ -1,17 +1,17 @@
 === grid 40x24 ===
  Local Agent    qwen3-coder:30b  build  
 ┌──────────────────────────────────────┐
-│  }                                   │
-│      catch (e) { if (attempt ===     │
-│  tries) throw e; }                   │
-│    }                                 │
-│  }                                   │
-│                                      │
-│ ╭─ Tool · edit ────────────────────╮ │
-│ │succeeded                         │ │
-│ │src/fetch.ts                      │ ┃
-│ │Updated src/fetch.ts. Verification│ ┃
-│ │has not been run.                 │ ┃
+│ ╭─ Edit ───────────────────────────╮ │
+│ │ ✓ succeeded · 0.4s               │ │
+│ │ src/fetch.ts                     │ │
+│ │ Updated src/fetch.ts.            │ │
+│ │ Verification has not been run.   │ │
+│ │   import { sleep } from          │ │
+│ │ './util';                        │ │
+│ │ - export const get = (url) =>    │ │
+│ │ fetch(url);                      │ │
+│ │ + export const get = (url) =>    │ │
+│ │ fetchRetry(url);                 │ ┃
 │ ╰──────────────────────────────────╯ ┃
 │                                      ┃
 │ Assistant                            ┃

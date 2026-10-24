@@ -16,10 +16,14 @@ import {
   IDLE_THINKING,
   type LiveView,
   type MessageView,
+  mcpParts,
   NO_CARD,
   type ThinkingView,
   type ToolReceipt,
 } from "#cli/tuimark/blocks";
+
+export { mcpParts };
+
 import {
   filterPalette,
   type HelpRow,
@@ -213,6 +217,13 @@ export interface Store {
   busy: boolean;
   status: string;
   /**
+   * The stream's pace while a turn runs: pieces of reply (or reasoning)
+   * that arrived in each second, the newest last, at most RATE_POINTS of
+   * them. The status bar draws it as a sparkline; the final speed is the
+   * status text's (tok/s from the model's own counts).
+   */
+  rate: number[];
+  /**
    * Scratch paths of the inline client (ui/inline.tui reads them only at
    * commit time): the view or blocks a `commit` is about to print into the
    * scrollback. Written right before the commit, cleared after its ack.
@@ -220,6 +231,9 @@ export interface Store {
   commit_buf: MessageView | null;
   commit_blocks: Block[];
 }
+
+/** The seconds of stream pace the status bar's sparkline shows. */
+export const RATE_POINTS = 16;
 
 /** The empty view a fresh store carries at `commit_buf`, before any commit. */
 export const EMPTY_COMMIT_VIEW: MessageView = Object.freeze({
@@ -413,6 +427,7 @@ export function initialStore(init: StoreInit): Store {
     status: idleStatus(init.mcpServers, init.intent, {
       connecting: init.mcpConnecting,
     }),
+    rate: [],
     commit_buf: EMPTY_COMMIT_VIEW,
     commit_blocks: [],
   };
@@ -617,15 +632,6 @@ export function mcpCallName(
   return proposal.inner && proposal.gateway
     ? `${proposal.inner} via ${proposal.gateway}`
     : proposal.name;
-}
-
-/** The server and tool of an MCP `SERVER__TOOL` name, or undefined without the separator. */
-export function mcpParts(
-  name: string,
-): { server: string; tool: string } | undefined {
-  const at = name.indexOf("__");
-  if (at <= 0 || at + 2 >= name.length) return undefined;
-  return { server: name.slice(0, at), tool: name.slice(at + 2) };
 }
 
 /** An argv word that is an option (`-x`, `--flag=value`, `--`), not `-` (stdin). */

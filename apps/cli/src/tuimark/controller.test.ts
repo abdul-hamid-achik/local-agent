@@ -467,6 +467,55 @@ test("approval: the dialog opens with the tool card, and allow resolves the prom
   expect(store(ui).live.active).toBe(false);
 });
 
+test("a tool that ran this turn says how long it took; a refused one does not", async () => {
+  let nowMs = 5_000;
+  const ran: Script = async function* () {
+    for (const [id, started] of [
+      ["r1", true],
+      ["r2", false],
+    ] as const) {
+      yield {
+        type: "message",
+        message: {
+          role: "assistant",
+          content: "",
+          tool_calls: [
+            {
+              id,
+              function: { name: "read", arguments: { path: `${id}.txt` } },
+            },
+          ],
+        },
+      };
+      yield { type: "tool_requested", id, name: "read" };
+      if (started) yield { type: "tool_start", id, name: "read" };
+      nowMs += 1_500;
+      yield {
+        type: "message",
+        message: {
+          role: "tool",
+          tool_name: "read",
+          tool_call_id: id,
+          content: JSON.stringify({
+            status: started ? "succeeded" : "denied",
+            output: "o",
+          }),
+        },
+      };
+    }
+  };
+  const { ui, client } = setup(ran, { now: () => nowMs });
+  await ui.fire("send", "read twice");
+  await client.idle();
+  const cards = store(ui)
+    .messages.filter((m: MessageView) => m.is_tool)
+    .map((m: MessageView) => [m.card.args, m.card.took]);
+  expect(cards).toEqual([
+    ["r1.txt", "1.5s"],
+    ["r2.txt", ""],
+  ]);
+});
+
 test("approval: deny, and esc (also dialog_cancel), keep the edit out", async () => {
   const { ui, client } = setup(withApproval);
   await ui.fire("send", "edit");
@@ -935,6 +984,61 @@ test("waiting becomes generating at the first event, with elapsed, and idle writ
   await new Promise((r) => setTimeout(r, 20));
   expect(ui.batches.length).toBe(batches);
   expect(store(ui).status).toBe(`build · ${IDLE_STATUS}`);
+});
+
+test("the stream's pace is sampled once a second, with the elapsed status", async () => {
+  let nowMs = 1_000_000;
+  let release: () => void = () => {};
+  const gate = new Promise<void>((r) => {
+    release = r;
+  });
+  let toEnd: () => void = () => {};
+  const end = new Promise<void>((r) => {
+    toEnd = r;
+  });
+  const { ui, client } = setup(
+    async function* () {
+      yield { type: "thinking", text: "hmm" };
+      for (const piece of ["a", "b", "c"]) yield { type: "text", text: piece };
+      await gate;
+      yield { type: "text", text: "d" };
+      await end;
+      yield {
+        type: "message",
+        message: { role: "assistant", content: "abcd" },
+      };
+    },
+    { now: () => nowMs },
+  );
+  await ui.fire("send", "go");
+  // A new turn starts with no samples.
+  expect(store(ui).rate).toEqual([]);
+  await until(() => store(ui).status.startsWith("Generating…"));
+  nowMs += 1_000;
+  await client.flush();
+  // Four pieces (reasoning counts) in the first second.
+  expect(store(ui).rate).toEqual([4]);
+  const batches = ui.batches.length;
+  // Within the same second nothing more is written.
+  await client.flush();
+  expect(ui.batches.length).toBe(batches);
+  release();
+  // The piece is counted when it arrives, whether or not a flush painted it.
+  await until(() => {
+    void client.flush();
+    return liveText(store(ui)).includes("d");
+  });
+  nowMs += 1_000;
+  await client.flush();
+  expect(store(ui).rate).toEqual([4, 1]);
+  // The sample rides the status write: one batch carries both.
+  const last = ui.batches.at(-1) ?? [];
+  expect(last.map((w: { path: string }) => w.path).sort()).toEqual([
+    "rate",
+    "status",
+  ]);
+  toEnd();
+  await client.idle();
 });
 
 test("an open approval owns the status line over the elapsed ticker", async () => {

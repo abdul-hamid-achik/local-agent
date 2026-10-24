@@ -6,6 +6,7 @@ import {
   clip,
   DETAILS_MAX_CHARS,
   DETAILS_TRUNCATED_TAIL,
+  formatTook,
   IDLE_LIVE,
   imageMime,
   inlineRuns,
@@ -29,6 +30,7 @@ import {
   startsOpenFence,
   tableRuns,
   tokenizeLine,
+  toolTitle,
   ViewBuilder,
 } from "#cli/tuimark/blocks";
 import { streamingView } from "#cli/tuimark/stream";
@@ -304,6 +306,167 @@ test("a call summary names the path, the command or the arguments", () => {
   expect(callSummary(call({ argv: ["bun", "test"] }))).toBe("bun test");
   expect(callSummary(call({ q: 1 }))).toBe('{"q":1}');
   expect(callSummary(undefined)).toBe("");
+  // A built-in tool's line is what the call is about, not its JSON.
+  const named = (name: string, args: Record<string, unknown>) =>
+    callSummary({ function: { name, arguments: args } });
+  expect(named("search", { pattern: "slugify", path: "src" })).toBe(
+    "slugify in src",
+  );
+  expect(named("search", { pattern: "slugify" })).toBe("slugify");
+  expect(named("web_search", { query: "bun workspaces" })).toBe(
+    "bun workspaces",
+  );
+  expect(named("fetch", { url: "https://bun.sh/docs" })).toBe(
+    "https://bun.sh/docs",
+  );
+  expect(named("task", { prompt: "find the leak\nthen report" })).toBe(
+    "find the leak",
+  );
+  expect(named("todo_write", { todos: [{}, {}] })).toBe("2 items");
+  expect(named("todo_write", { todos: [{}] })).toBe("1 item");
+  // A wrong-typed argument falls back to the generic line.
+  expect(named("fetch", { url: 3 })).toBe('{"url":3}');
+});
+
+test("a card names its tool as a reader says it", () => {
+  expect(toolTitle("run_command")).toBe("Command");
+  expect(toolTitle("web_search")).toBe("Web search");
+  expect(toolTitle("cortex__status")).toBe("MCP · cortex · status");
+  expect(toolTitle("custom")).toBe("custom");
+  expect(toolTitle("bad\u001b[31mname")).toBe("badname");
+});
+
+test("a call's duration reads as seconds, then minutes", () => {
+  expect(formatTook(0)).toBe("<0.1s");
+  expect(formatTook(99)).toBe("<0.1s");
+  expect(formatTook(100)).toBe("0.1s");
+  expect(formatTook(420)).toBe("0.4s");
+  expect(formatTook(9_949)).toBe("9.9s");
+  expect(formatTook(12_400)).toBe("12s");
+  expect(formatTook(125_000)).toBe("2m 05s");
+  expect(formatTook(-5)).toBe("<0.1s");
+});
+
+/** The card and the /details receipt of one call and its result. */
+function cardOf(
+  name: string,
+  args: Record<string, unknown>,
+  status: string,
+  output: string,
+) {
+  const builder = new ViewBuilder();
+  builder.fromMessage({
+    role: "assistant",
+    content: "",
+    tool_calls: [{ id: "c", function: { name, arguments: args } }],
+  });
+  const message: Message = {
+    role: "tool",
+    tool_name: name,
+    tool_call_id: "c",
+    content: JSON.stringify({ status, output }),
+  };
+  return {
+    card: builder.fromMessage(message)?.card,
+    receipt: builder.receiptOf(message),
+  };
+}
+
+test("a finished edit's card shows the change its own strings made", () => {
+  const { card, receipt } = cardOf(
+    "edit",
+    {
+      path: "src/a.ts",
+      old_string: "keep\nold line\nkeep too",
+      new_string: "keep\nnew line\nkeep too",
+    },
+    "succeeded",
+    "Updated src/a.ts. Verification has not been run.",
+  );
+  expect(card).toMatchObject({
+    title: "Edit",
+    mark: "✓",
+    took: "",
+    args: "src/a.ts",
+    args_path: true,
+    args_line: false,
+  });
+  expect(card?.out).toEqual([
+    "Updated src/a.ts. Verification has not been run.\n  keep\n",
+    { text: "- old line", class: "del" },
+    "\n",
+    { text: "+ new line", class: "add" },
+    "\n  keep too",
+  ]);
+  // /details holds the same rows, uncut.
+  expect(receipt?.output).toBe(
+    "Updated src/a.ts. Verification has not been run.\n  keep\n- old line\n+ new line\n  keep too",
+  );
+});
+
+test("an edit that did not land shows no change", () => {
+  for (const status of ["denied", "failed", "outcome_unknown"]) {
+    const { card, receipt } = cardOf(
+      "edit",
+      { path: "a", old_string: "x", new_string: "y" },
+      status,
+      "Edit denied by host",
+    );
+    expect(runsText(card?.out ?? [])).toBe("Edit denied by host");
+    expect(receipt?.output).toBe("Edit denied by host");
+  }
+  const denied = cardOf("edit", { path: "a" }, "denied", "no").card;
+  expect(denied).toMatchObject({ mark: "✗", bad: true });
+  const unknown = cardOf("edit", { path: "a" }, "outcome_unknown", "?").card;
+  expect(unknown).toMatchObject({ mark: "!", warn: true });
+});
+
+test("a created file shows its lines; a replaced one shows none", () => {
+  const created = cardOf(
+    "write",
+    { path: "new.txt", content: "one\ntwo\n" },
+    "succeeded",
+    "Created new.txt. Verification has not been run.",
+  );
+  expect(created.card?.out).toEqual([
+    "Created new.txt. Verification has not been run.\n",
+    { text: "+ one\n+ two", class: "add" },
+  ]);
+  const empty = cardOf(
+    "write",
+    { path: "empty.txt", content: "" },
+    "succeeded",
+    "Created empty.txt. Verification has not been run.",
+  );
+  expect(runsText(empty.card?.out ?? [])).toBe(
+    "Created empty.txt. Verification has not been run.",
+  );
+  // A replacement's old text is not in the call: no rows claim a diff.
+  const replaced = cardOf(
+    "write",
+    { path: "old.txt", content: "new body" },
+    "succeeded",
+    "Replaced old.txt. Verification has not been run.",
+  );
+  expect(runsText(replaced.card?.out ?? [])).toBe(
+    "Replaced old.txt. Verification has not been run.",
+  );
+});
+
+test("a long change is cut with the card, and /details keeps all of it", () => {
+  const before = Array.from({ length: 30 }, (_, i) => `old ${i}`).join("\n");
+  const after = Array.from({ length: 30 }, (_, i) => `new ${i}`).join("\n");
+  const { card, receipt } = cardOf(
+    "edit",
+    { path: "a", old_string: before, new_string: after },
+    "succeeded",
+    "Updated a.",
+  );
+  const shown = runsText(card?.out ?? []);
+  expect(shown).toContain("- old 0");
+  expect(shown).not.toContain("+ new 29");
+  expect(shown).toContain("… 53 more lines · /details for full output");
+  expect(receipt?.output).toContain("+ new 29");
 });
 
 const messages: Message[] = [

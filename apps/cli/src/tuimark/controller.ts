@@ -49,6 +49,7 @@ import {
   type Block,
   cleanText,
   clip,
+  formatTook,
   IDLE_LIVE,
   IDLE_THINKING,
   type LiveView,
@@ -108,6 +109,7 @@ import {
   PLACEHOLDER,
   PLACEHOLDER_BUSY,
   panelState,
+  RATE_POINTS,
   type SessionSummary,
   type Store,
   sessionRows,
@@ -414,6 +416,10 @@ export class TuimarkClient {
   private turnStartedAt = 0;
   /** The elapsed second last written, so the ticker writes about once a second. */
   private elapsedShown = -1;
+  /** Stream pieces (text or reasoning) since the last pace sample. */
+  private pieces = 0;
+  /** The turn's pace samples, one per elapsed second (the store's `rate`). */
+  private rate: number[] = [];
   /** Ollama's generation counters, summed over the steps of a turn (nanoseconds). */
   private evalCount = 0;
   private evalDuration = 0;
@@ -1618,7 +1624,14 @@ export class TuimarkClient {
     if (!this.busy || this.decide) return;
     const seconds = Math.floor((this.now() - this.turnStartedAt) / 1000);
     if (seconds === this.elapsedShown) return;
-    await this.write([{ path: "status", value: this.busyStatus() }]);
+    // The pace rides the same write: one sample per second, never a batch
+    // of its own.
+    this.rate = [...this.rate, this.pieces].slice(-RATE_POINTS);
+    this.pieces = 0;
+    await this.write([
+      { path: "status", value: this.busyStatus() },
+      { path: "rate", value: this.rate },
+    ]);
   }
 
   /** Flushes the live message if it changed and no flush is in flight. */
@@ -2409,6 +2422,8 @@ export class TuimarkClient {
     this.activity = WAITING_STATUS;
     this.turnStartedAt = this.now();
     this.elapsedShown = -1;
+    this.pieces = 0;
+    this.rate = [];
     this.cancelDroppedQueue = false;
     const message: Message = { role: "user", content: prompt };
     this.history.push(message);
@@ -2446,6 +2461,7 @@ export class TuimarkClient {
         { path: "empty", value: false },
         { path: "draft", value: "" },
         { path: "busy", value: true },
+        { path: "rate", value: this.rate },
         { path: "placeholder", value: PLACEHOLDER_BUSY },
         { path: "status", value: this.busyStatus() },
       ]);
@@ -2477,6 +2493,8 @@ export class TuimarkClient {
     let receivedMessage = false;
     let status = "";
     let toolName = "";
+    /** When the running tool call started (the `now` clock): its card's duration. */
+    let toolStartedAt: number | undefined;
     /** A failed turn's notice view, committed (inline) in the finally below. */
     let notice: MessageView | undefined;
     try {
@@ -2515,16 +2533,30 @@ export class TuimarkClient {
         switch (event.type) {
           case "thinking":
             this.noteActivity();
+            this.pieces++;
             if (!this.liveTool) this.stream.pushThinking(event.text);
             break;
           case "text":
             this.noteActivity();
+            this.pieces++;
             if (!this.liveTool) this.stream.pushText(event.text);
             break;
           case "message": {
             receivedMessage = true;
             this.history.push(event.message);
-            const view = this.builder.fromMessage(event.message);
+            let view = this.builder.fromMessage(event.message);
+            // A tool that ran this turn says how long it took (a resumed
+            // receipt cannot: the history keeps no timing).
+            if (view?.is_tool && toolStartedAt !== undefined) {
+              view = {
+                ...view,
+                card: {
+                  ...view.card,
+                  took: formatTook(this.now() - toolStartedAt),
+                },
+              };
+              toolStartedAt = undefined;
+            }
             if (view) this.transcript.push(view);
             // The fullest output the client receives is this message's
             // receipt, before the card view truncates it: keep it whole.
@@ -2560,6 +2592,7 @@ export class TuimarkClient {
           case "tool_requested":
             this.noteActivity();
             toolName = event.name;
+            toolStartedAt = undefined;
             // Inline, the text before the tool call is printed before the
             // stream is dropped for the tool card (and kept if refused).
             if (this.inline) await this.commitStreamTail();
@@ -2576,6 +2609,7 @@ export class TuimarkClient {
             break;
           case "tool_start":
             this.noteActivity();
+            toolStartedAt = this.now();
             if (this.liveTool) {
               this.liveTool = {
                 ...this.liveTool,

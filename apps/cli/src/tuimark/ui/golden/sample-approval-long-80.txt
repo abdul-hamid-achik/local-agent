@@ -1,12 +1,12 @@
 === grid 80x30 ===
- Local Agent         qwen3-coder:30b  build          ctx 9.6k/32k  ████░░░░░░░░ 
+ Local Agent         qwen3-coder:30b  build          ctx 9.6k/32k  ███▋░░░░░░░░ 
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│  ts                                                                          │
-│  export async function fetchRetry(url, tries = 3) {                          │
+│    for (let attempt = 1; ; attempt++) {                                      │
+│      try { return await fetch(url); }                                        │
 │ ╭─ Edit install.sh? ───────────────────────────────────────────────────────╮ │
 │ │                                                                          │ │
 │ │  Apply this change to the workspace.                                     │ │
-│ │  ┌────────────────────────────────────────────────────────────────────┐  │ ┃
+│ │  ┌────────────────────────────────────────────────────────────────────┐  │ │
 │ │  │--- a/install.sh                                                    ┃  │ ┃
 │ │  │+++ b/install.sh                                                    │  │ ┃
 │ │  │@@ -1,3 +1,250 @@                                                   │  │ ┃

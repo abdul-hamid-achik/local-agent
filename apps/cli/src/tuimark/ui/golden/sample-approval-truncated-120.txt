@@ -1,31 +1,31 @@
 === grid 120x30 ===
- Local Agent           Ollama / loopback  qwen3-coder:30b  build            session a1b2c3d  ctx 9.6k/32k  ████░░░░░░░░ 
+ Local Agent           Ollama / loopback  qwen3-coder:30b  build            session a1b2c3d  ctx 9.6k/32k  ███▋░░░░░░░░ 
 ┌──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│  ts                                                                                                                  │
-│  export async function fetchRetry(url, tries = 3) {                                                                  │
-│    // exponential ba╭─ Edit big.txt? ──────────────────────────────────────────────────────────╮                     │
-│    for (let attempt │                                                                          │                     │
-│      try { return aw│  Preview truncated. Deny unless you have read the whole change.          │                     │
-│      catch (e) { if │  ┌────────────────────────────────────────────────────────────────────┐  │                     ┃
-│    }                │  │+line 0                                                             ┃  │                     ┃
-│  }                  │  │+line 1                                                             │  │                     ┃
-│                     │  │+line 2                                                             │  │                     ┃
-│ ╭─ Tool · edit ─────│  │+line 3                                                             │  │───────────────────╮ ┃
-│ │succeeded          │  │+line 4                                                             │  │                   │ ┃
-│ │src/fetch.ts       │  │+line 5                                                             │  │                   │ ┃
-│ │Updated src/fetch.t│  │+line 6                                                             │  │                   │ ┃
+│    for (let attempt = 1; ; attempt++) {                                                                              │
+│      try { return await fetch(url); }                                                                                │
+│      catch (e) { if ╭─ Edit big.txt? ──────────────────────────────────────────────────────────╮                     │
+│    }                │                                                                          │                     │
+│  }                  │  Preview truncated. Deny unless you have read the whole change.          │                     │
+│                     │  ┌────────────────────────────────────────────────────────────────────┐  │                     │
+│ ╭─ Edit ────────────│  │+line 0                                                             ┃  │───────────────────╮ ┃
+│ │ ✓ succeeded       │  │+line 1                                                             │  │                   │ ┃
+│ │ src/fetch.ts      │  │+line 2                                                             │  │                   │ ┃
+│ │ Updated src/fetch.│  │+line 3                                                             │  │                   │ ┃
+│ │   import { sleep }│  │+line 4                                                             │  │                   │ ┃
+│ │ - export const get│  │+line 5                                                             │  │                   │ ┃
+│ │ + export const get│  │+line 6                                                             │  │                   │ ┃
 │ ╰───────────────────│  │+line 7                                                             │  │───────────────────╯ ┃
 │                     │  │+line 8                                                             │  │                     ┃
 │ Assistant           │  │+line 9                                                             │  │                     ┃
 │ Done. The helper now│  │+line 10                                                            │  │                     ┃
 │                     │  │+line 11                                                            │  │                     ┃
-│ ╭─ Tool · edit ─────│  └────────────────────────────────────────────────────────────────────┘  │───────────────────╮ ┃
-│ │⠋  waiting for appr│  preview truncated: session grant unavailable                            │                   │ ┃
-│ │src/fetch.ts       │                                                                          │                   │ ┃
+│ ╭─ Edit ────────────│  └────────────────────────────────────────────────────────────────────┘  │───────────────────╮ ┃
+│ │ ⠋  waiting for app│  preview truncated: session grant unavailable                            │                   │ ┃
+│ │ src/fetch.ts      │                                                                          │                   │ ┃
 │ ╰───────────────────│                                                     [ Deny ]  [ Allow ]  │───────────────────╯ ┃
 │                     │                                                                          │                     ┃
 └─────────────────────╰──────────────────────────────────────────────────────────────────────────╯─────────────────────┘
 ╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
 │ Generating…                                                                                                          │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
- ⠋  Preview truncated · y allow · n deny · Esc deny   a session  ! always  pgup/pgdn scroll  home/end top/end           
+ ⠋  Preview truncated · y allow · n deny · Esc deny                    a session  ! always  pgup/pgdn scroll            

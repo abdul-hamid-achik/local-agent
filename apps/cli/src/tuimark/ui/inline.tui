@@ -168,12 +168,15 @@
   </template>
 
   <template id="la-tool">
-    <box class="la-tool" class:ok="t.ok" class:bad="t.bad" class:warn="t.warn" class:run="t.running" title="Tool · {t.name}">
+    <box class="la-tool" class:ok="t.ok" class:bad="t.bad" class:warn="t.warn" class:run="t.running" title="{t.title}">
       <row class="la-tool-head">
         <progress indeterminate="true" if="t.running" class="la-spin"/>
+        <text if="!t.running" class="la-tool-mark">{t.mark}</text>
         <text class="la-tool-status">{t.status}</text>
+        <text if="t.took" class="la-muted la-tool-took">· {t.took}</text>
       </row>
-      <text if="t.args" class="la-muted" wrap="truncate">{t.args}</text>
+      <text if="t.args_path" class="la-muted" wrap="truncate-middle">{t.args}</text>
+      <text if="t.args_line" class="la-muted" wrap="truncate">{t.args}</text>
       <slot/>
     </box>
   </template>
@@ -225,17 +228,27 @@
           <text class="la-welcome-line" wrap="wrap">/help lists keys · ctrl+p opens commands · esc cancels</text>
         </col>
         <col id="live" if="live.active">
-          <use template="la-message" label="Assistant" class="asst" if="live.is_asst">
+          <!-- la-message's shape, with a spinner by the label while the reply
+               is written (a template's props are fixed text, and a printed or
+               history turn must never carry a spinner). -->
+          <col class="la-msg asst" if="live.is_asst">
+            <row class="la-live-head">
+              <text class="la-role">Assistant</text>
+              <progress indeterminate="true" class="la-spin"/>
+            </row>
             <use template="la-blocks" with="live.blocks as blocks"/>
             <use template="la-blocks" with="live.tail as blocks"/>
             <use template="la-media" with="live as lm"/>
-          </use>
+          </col>
           <use template="la-tool" if="live.is_tool" with="live.card as t">
             <text class="la-out" runs="live.card.out" wrap="pre-wrap"/>
           </use>
         </col>
         <col id="thinking" if="thinking.on">
-          <text class="la-think-head">Thinking…</text>
+          <row class="la-think-row">
+            <progress indeterminate="true" class="la-spin"/>
+            <text class="la-think-head">Thinking…</text>
+          </row>
           <scroll id="think" class="la-thinkbox" stick="bottom">
             <text class="la-think" runs="thinking.runs" wrap="pre-wrap"/>
           </scroll>
@@ -312,6 +325,9 @@
       <row id="status" class="k-statusbar">
         <progress indeterminate="true" if="busy" class="la-spin"/>
         <text class="la-statustext" wrap="truncate">{status}</text>
+        <!-- The stream's pace, a sample a second (the parent's rate): the
+             reply's shape while it arrives, not a number. -->
+        <sparkline if="busy" class="la-rate" bind="rate" min="0"/>
         <hints class="la-hints"/>
       </row>
     </col>

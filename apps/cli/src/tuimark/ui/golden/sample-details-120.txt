@@ -1,21 +1,21 @@
 === grid 120x30 ===
- Local Agent           Ollama / loopback  qwen3-coder:30b  build            session a1b2c3d  ctx 9.6k/32k  ████░░░░░░░░ 
+ Local Agent           Ollama / loopback  qwen3-coder:30b  build            session a1b2c3d  ctx 9.6k/32k  ███▋░░░░░░░░ 
 ┌──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
 │ You                                                                                                                  │
 │ Read the big file back to me.                                                                                        │
 │                                                                                                                      │
-│ ╭─ Tool · read ─────╭─ read · succeeded ───────────────────────────────────────────────────────╮───────────────────╮ │
-│ │succeeded          │                                                                          │                   │ │
-│ │src/big.txt        │  src/big.txt                                                             │                   │ │
-│ │output line 1      │  ╔════════════════════════════════════════════════════════════════════╗  │                   │ │
-│ │output line 2      │  ║output line 1                                                       █  │                   │ │
-│ │output line 3      │  ║output line 2                                                       █  │                   │ │
-│ │output line 4      │  ║output line 3                                                       █  │                   │ │
-│ │output line 5      │  ║output line 4                                                       █  │                   │ │
-│ │output line 6      │  ║output line 5                                                       █  │                   │ │
-│ │output line 7      │  ║output line 6                                                       █  │                   │ │
-│ │output line 8      │  ║output line 7                                                       █  │                   │ │
-│ │… 12 more lines · /│  ║output line 8                                                       ║  │                   │ │
+│ ╭─ Read ────────────╭─ read · succeeded ───────────────────────────────────────────────────────╮───────────────────╮ │
+│ │ ✓ succeeded       │                                                                          │                   │ │
+│ │ src/big.txt       │  src/big.txt                                                             │                   │ │
+│ │ output line 1     │  ╔════════════════════════════════════════════════════════════════════╗  │                   │ │
+│ │ output line 2     │  ║output line 1                                                       █  │                   │ │
+│ │ output line 3     │  ║output line 2                                                       █  │                   │ │
+│ │ output line 4     │  ║output line 3                                                       █  │                   │ │
+│ │ output line 5     │  ║output line 4                                                       █  │                   │ │
+│ │ output line 6     │  ║output line 5                                                       █  │                   │ │
+│ │ output line 7     │  ║output line 6                                                       █  │                   │ │
+│ │ output line 8     │  ║output line 7                                                       █  │                   │ │
+│ │ … 12 more lines · │  ║output line 8                                                       ║  │                   │ │
 │ ╰───────────────────│  ║output line 9                                                       ║  │───────────────────╯ │
 │                     │  ║output line 10                                                      ║  │                     │
 │ Assistant           │  ║output line 11                                                      ║  │                     │

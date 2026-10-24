@@ -1,29 +1,29 @@
 === grid 120x30 ===
- Local Agent           Ollama / loopback  qwen3-coder:30b  build            session a1b2c3d  ctx 9.6k/32k  ████░░░░░░░░ 
+ Local Agent           Ollama / loopback  qwen3-coder:30b  build            session a1b2c3d  ctx 9.6k/32k  ███▋░░░░░░░░ 
 ┌──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│ You                                                                                                                  │
-│ Add a retry to the fetch helper and show me the result.                                                              │
-│                                                                                                                      │
 │ Assistant                                                                                                            │
 │ Sure. I will wrap the call in a bounded retry with backoff:                                                          │
-│  ts                         ╭─ Commands ───────────────────────────────────────────────╮                             │
-│  export async function fetch│ ╔══════════════════════════════════════════════════════╗ │                             │
-│    // exponential backoff   │ ║ mode                                                 ║ │                             │
-│    for (let attempt = 1; ; a│ ╚══════════════════════════════════════════════════════╝ │                             │
-│      try { return await fetc│ Mode: plan (read only)                        /mode plan │                             │
-│      catch (e) { if (attempt│ Mode: build (read, edit, command)            /mode build │                             │
-│    }                        │ Mode: chat (conversational)                   /mode chat │                             │
-│  }                          │ Model: show current                               /model │                             │
-│                             │                                                          │                             │
-│ ╭─ Tool · edit ─────────────│                                                          │───────────────────────────╮ │
-│ │succeeded                  │                                                          │                           │ │
-│ │src/fetch.ts               │                                                          │                           │ │
-│ │Updated src/fetch.ts. Verif│                                                          │                           │ │
-│ ╰───────────────────────────│                                                          │───────────────────────────╯ │
-│                             │                                                          │                             │
-│ Assistant                   ╰──────────────────────────────────────────────────────────╯                             │
-│ Done. The helper now retries three times.                                                                            │
-│                                                                                                                      │
+│  ts                                                                                                                  │
+│  export async function fetchRetry(url, tries = 3) {                                                                  ┃
+│    // exponential backoff                                                                                            ┃
+│    for (let attempt = 1; ; a╭─ Commands ───────────────────────────────────────────────╮                             ┃
+│      try { return await fetc│ ╔══════════════════════════════════════════════════════╗ │                             ┃
+│      catch (e) { if (attempt│ ║ mode                                                 ║ │                             ┃
+│    }                        │ ╚══════════════════════════════════════════════════════╝ │                             ┃
+│  }                          │ Mode: plan (read only)                        /mode plan │                             ┃
+│                             │ Mode: build (read, edit, command)            /mode build │                             ┃
+│ ╭─ Edit ────────────────────│ Mode: chat (conversational)                   /mode chat │───────────────────────────╮ ┃
+│ │ ✓ succeeded               │ Model: show current                               /model │                           │ ┃
+│ │ src/fetch.ts              │                                                          │                           │ ┃
+│ │ Updated src/fetch.ts. Veri│                                                          │                           │ ┃
+│ │   import { sleep } from '.│                                                          │                           │ ┃
+│ │ - export const get = (url)│                                                          │                           │ ┃
+│ │ + export const get = (url)│                                                          │                           │ ┃
+│ ╰───────────────────────────│                                                          │───────────────────────────╯ ┃
+│                             │                                                          │                             ┃
+│ Assistant                   ╰──────────────────────────────────────────────────────────╯                             ┃
+│ Done. The helper now retries three times.                                                                            ┃
+│                                                                                                                      ┃
 └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
 ╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
 │ Message the model                                                                                                    │

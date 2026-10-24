@@ -1,29 +1,29 @@
 === grid 80x30 ===
- Local Agent╭─ Help ───────────────────────────────────────────────╮███░░░░░░░░ 
+ Local Agent╭─ Help ───────────────────────────────────────────────╮██▋░░░░░░░░ 
 ┌───────────│                                                      │───────────┐
-│ You       │  ? close help                                        │           │
-│ Add a retr│  Commands                                            │           │
-│           │  /mode plan|build|chat plan reads only · build can…  │           │
-│ Assistant │  /model [NAME] show or switch the Ollama model       │           │
-│ Sure. I wi│  /theme dark|light|auto set the session theme        │           │
-│  ts       │  /mouse on|off toggle mouse reporting (fullscreen)   │           │
-│  export as│  /permissions [clear|trust] show, clear or trust g…  │           │
-│    // expo│  /sandbox on|off run commands confined (macOS), wi…  │           │
-│    for (le│  /details show the last tool output in full          │           │
-│      try {│  /status show the effective config (model, workspa…  │           │
-│      catch│  /sessions switch to a saved session (needs --sess…  │           │
-│    }      │  /find TEXT search saved session messages (needs -…  │           │
-│  }        │  /export [json] write the conversation to a markdo…  │           │
-│           │  /mcp show connected MCP servers and their tools     │           │
-│ ╭─ Tool · │  /help show the commands and the keys                │─────────╮ │
-│ │succeeded│                                                      │         │ │
-│ │src/fetch│  Keys                                                │         │ │
-│ │Updated s│  enter send                                          │         │ │
-│ ╰─────────│  shift/alt+enter new line                            │─────────╯ │
-│           │  a session                                           │           │
-│ Assistant │  ! always                                            │           │
-│ Done. The │  pgup/pgdn scroll                                    │           │
-│           │  home/end top/end                                    │           │
+│ Assistant │  ? close help                                        │           │
+│ Sure. I wi│  Commands                                            │           │
+│  ts       │  /mode plan|build|chat plan reads only · build can…  │           │
+│  export as│  /model [NAME] show or switch the Ollama model       │           ┃
+│    // expo│  /theme dark|light|auto set the session theme        │           ┃
+│    for (le│  /mouse on|off toggle mouse reporting (fullscreen)   │           ┃
+│      try {│  /permissions [clear|trust] show, clear or trust g…  │           ┃
+│      catch│  /sandbox on|off run commands confined (macOS), wi…  │           ┃
+│    }      │  /details show the last tool output in full          │           ┃
+│  }        │  /status show the effective config (model, workspa…  │           ┃
+│           │  /sessions switch to a saved session (needs --sess…  │           ┃
+│ ╭─ Edit ──│  /find TEXT search saved session messages (needs -…  │─────────╮ ┃
+│ │ ✓ succee│  /export [json] write the conversation to a markdo…  │         │ ┃
+│ │ src/fetc│  /mcp show connected MCP servers and their tools     │         │ ┃
+│ │ Updated │  /help show the commands and the keys                │         │ ┃
+│ │   import│                                                      │         │ ┃
+│ │ - export│  Keys                                                │         │ ┃
+│ │ + export│  enter send                                          │         │ ┃
+│ ╰─────────│  shift/alt+enter new line                            │─────────╯ ┃
+│           │  a session                                           │           ┃
+│ Assistant │  ! always                                            │           ┃
+│ Done. The │  pgup/pgdn scroll                                    │           ┃
+│           │  home/end top/end                                    │           ┃
 └───────────│  ^P commands                                         │───────────┘
 ╭───────────│  esc cancel                                          │───────────╮
 │ Message th│  ↑/↓ history                                         │           │

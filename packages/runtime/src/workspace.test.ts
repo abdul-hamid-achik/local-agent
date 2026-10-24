@@ -11,7 +11,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, test, vi } from "vitest";
-import { Workspace } from "#runtime/workspace";
+import { changeLines, Workspace } from "#runtime/workspace";
 
 const roots: string[] = [];
 const workspaces: Workspace[] = [];
@@ -643,4 +643,54 @@ test("search shows tabs as tabs and still escapes other control characters", asy
   expect(await workspace.search("hit", { path: "tabs.txt" })).toBe(
     "tabs.txt:1: \tindented hit??[0m",
   );
+});
+
+test("changeLines: the changed lines with one kept line around, a gap between hunks", () => {
+  const rows = (before: string, after: string) =>
+    changeLines(before, after).map((r) => `${r.kind}:${r.text}`);
+  expect(rows("a\nb\nc\nd\n", "a\nB\nc\nd\n")).toEqual([
+    "same:a",
+    "del:b",
+    "add:B",
+    "same:c",
+  ]);
+  expect(
+    rows("1\n2\n3\n4\n5\n6\n7\n8\n9", "1\nX\n3\n4\n5\n6\n7\nY\n9"),
+  ).toEqual([
+    "same:1",
+    "del:2",
+    "add:X",
+    "same:3",
+    "gap:…",
+    "same:7",
+    "del:8",
+    "add:Y",
+    "same:9",
+  ]);
+  // No trailing newline on either side: the patch's "\ No newline" marker is not a row.
+  expect(rows("before", "after")).toEqual(["del:before", "add:after"]);
+  // A carriage return is visible, as in the approval diff.
+  expect(rows("x\r\ny", "x\r\nz")).toEqual(["same:x␍", "del:y", "add:z"]);
+  expect(rows("same", "same")).toEqual([]);
+});
+
+test("changeLines: a change past the edit cap is every old line, then every new one", () => {
+  // 300 kept lines between 300 changed ones: a real diff would keep them,
+  // but 600 edits are past the cap, so the rows are the two texts whole.
+  const text = (word: string) =>
+    Array.from({ length: 300 }, (_, i) => `keep ${i}\n${word} ${i}`).join("\n");
+  const rows = changeLines(text("old"), `${text("new")}\n`);
+  expect(rows).toHaveLength(1200);
+  expect(rows.some((r) => r.kind === "same")).toBe(false);
+  expect(rows[0]).toEqual({ kind: "del", text: "keep 0" });
+  expect(rows[599]).toEqual({ kind: "del", text: "old 299" });
+  expect(rows[600]).toEqual({ kind: "add", text: "keep 0" });
+  expect(rows.at(-1)).toEqual({ kind: "add", text: "new 299" });
+  // Under the cap the same shape keeps its kept lines.
+  const small = (word: string) =>
+    Array.from({ length: 20 }, (_, i) => `keep ${i}\n${word} ${i}`).join("\n");
+  expect(
+    changeLines(small("old"), small("new")).some((r) => r.kind === "same"),
+  ).toBe(true);
+  expect(changeLines("", "")).toEqual([]);
 });

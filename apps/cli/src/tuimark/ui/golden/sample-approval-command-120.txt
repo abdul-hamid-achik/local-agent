@@ -1,31 +1,31 @@
 === grid 120x30 ===
- Local Agent           Ollama / loopback  qwen3-coder:30b  build            session a1b2c3d  ctx 9.6k/32k  ████░░░░░░░░ 
+ Local Agent           Ollama / loopback  qwen3-coder:30b  build            session a1b2c3d  ctx 9.6k/32k  ███▋░░░░░░░░ 
 ┌──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│  ts                                                                                                                  │
-│  export async function fetchRetry(url, tries = 3) {                                                                  │
-│    // exponential backoff                                                                                            │
 │    for (let attempt = 1; ; attempt++) {                                                                              │
 │      try { return await fetch(url); }                                                                                │
-│      catch (e) { if (attempt === tries) throw e; }                                                                   ┃
-│    }                                                                                                                 ┃
-│  }                  ╭─ Run command? ───────────────────────────────────────────────────────────╮                     ┃
-│                     │                                                                          │                     ┃
-│ ╭─ Tool · edit ─────│  Runs exactly as written: there is no shell.                             │───────────────────╮ ┃
-│ │succeeded          │  ┌────────────────────────────────────────────────────────────────────┐  │                   │ ┃
-│ │src/fetch.ts       │  │$ bun test tests/stats.test.ts -t 'mean of an empty list'           │  │                   │ ┃
-│ │Updated src/fetch.t│  │in the workspace · timeout 120s · runs with your permissions        │  │                   │ ┃
+│      catch (e) { if (attempt === tries) throw e; }                                                                   │
+│    }                                                                                                                 │
+│  }                                                                                                                   │
+│                                                                                                                      │
+│ ╭─ Edit ───────────────────────────────────────────────────────────────────────────────────────────────────────────╮ ┃
+│ │ ✓ succeeded       ╭─ Run command? ───────────────────────────────────────────────────────────╮                   │ ┃
+│ │ src/fetch.ts      │                                                                          │                   │ ┃
+│ │ Updated src/fetch.│  Runs exactly as written: there is no shell.                             │                   │ ┃
+│ │   import { sleep }│  ┌────────────────────────────────────────────────────────────────────┐  │                   │ ┃
+│ │ - export const get│  │$ bun test tests/stats.test.ts -t 'mean of an empty list'           │  │                   │ ┃
+│ │ + export const get│  │in the workspace · timeout 120s · runs with your permissions        │  │                   │ ┃
 │ ╰───────────────────│  └────────────────────────────────────────────────────────────────────┘  │───────────────────╯ ┃
 │                     │  a allow `bun test …` this session                                       │                     ┃
 │ Assistant           │                                                                          │                     ┃
 │ Done. The helper now│                                                     [ Deny ]  [ Allow ]  │                     ┃
 │                     │                                                                          │                     ┃
-│ ╭─ Tool · run_comman╰──────────────────────────────────────────────────────────────────────────╯───────────────────╮ ┃
-│ │⠋  waiting for approval                                                                                           │ ┃
-│ │bun test fetch                                                                                                    │ ┃
+│ ╭─ Command ─────────╰──────────────────────────────────────────────────────────────────────────╯───────────────────╮ ┃
+│ │ ⠋  waiting for approval                                                                                          │ ┃
+│ │ bun test fetch                                                                                                   │ ┃
 │ ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯ ┃
 │                                                                                                                      ┃
 └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
 ╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
 │ Generating…                                                                                                          │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
- ⠋  Waiting for approval · y allow · a session · ! always · n deny · Esc deny   a session  ! always  pgup/pgdn scroll   
+ ⠋  Waiting for approval · y allow · a session · ! always · n deny · Esc deny                    a session  ! always    

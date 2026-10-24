@@ -40,8 +40,13 @@
       ],
       "card": {
         "name": "",
+        "title": "",
         "status": "",
+        "mark": "",
+        "took": "",
         "args": "",
+        "args_path": false,
+        "args_line": false,
         "ok": false,
         "bad": false,
         "warn": false,
@@ -159,8 +164,13 @@
       ],
       "card": {
         "name": "",
+        "title": "",
         "status": "",
+        "mark": "",
+        "took": "",
         "args": "",
+        "args_path": false,
+        "args_line": false,
         "ok": false,
         "bad": false,
         "warn": false,
@@ -180,14 +190,28 @@
       "blocks": [],
       "card": {
         "name": "edit",
+        "title": "Edit",
         "status": "succeeded",
+        "mark": "✓",
+        "took": "",
         "args": "src/fetch.ts",
+        "args_path": true,
+        "args_line": false,
         "ok": true,
         "bad": false,
         "warn": false,
         "running": false,
         "out": [
-          "Updated src/fetch.ts. Verification has not been run."
+          "Updated src/fetch.ts. Verification has not been run.\n  import { sleep } from './util';\n",
+          {
+            "text": "- export const get = (url) => fetch(url);",
+            "class": "del"
+          },
+          "\n",
+          {
+            "text": "+ export const get = (url) => fetchRetry(url);",
+            "class": "add"
+          }
         ]
       },
       "links": [],
@@ -218,8 +242,13 @@
       ],
       "card": {
         "name": "",
+        "title": "",
         "status": "",
+        "mark": "",
+        "took": "",
         "args": "",
+        "args_path": false,
+        "args_line": false,
         "ok": false,
         "bad": false,
         "warn": false,
@@ -243,8 +272,13 @@
     "blocks": [],
     "card": {
       "name": "",
+      "title": "",
       "status": "",
+      "mark": "",
+      "took": "",
       "args": "",
+      "args_path": false,
+      "args_line": false,
       "ok": false,
       "bad": false,
       "warn": false,
@@ -484,6 +518,7 @@
   "placeholder": "Message the model",
   "busy": false,
   "status": "build · Ready · /help for keys",
+  "rate": [],
   "commit_buf": {
     "id": "commit",
     "is_user": false,
@@ -493,8 +528,13 @@
     "blocks": [],
     "card": {
       "name": "",
+      "title": "",
       "status": "",
+      "mark": "",
+      "took": "",
       "args": "",
+      "args_path": false,
+      "args_line": false,
       "ok": false,
       "bad": false,
       "warn": false,

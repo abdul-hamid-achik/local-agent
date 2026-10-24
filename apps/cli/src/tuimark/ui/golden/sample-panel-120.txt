@@ -1,29 +1,29 @@
 === grid 120x30 ===
- Local Agent     Ollama / loopback  qwen3-coder:30b  build     auto: files  session a1b2c3d  ctx 9.6k/32k  ████░░░░░░░░ 
+ Local Agent     Ollama / loopback  qwen3-coder:30b  build     auto: files  session a1b2c3d  ctx 9.6k/32k  ███▋░░░░░░░░ 
 ┌──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│ You                                                                                                                  │
-│ Add a retry to the fetch helper and show me the result.                                                              │
-│                                                                                                                      │
-│ Assistant           ╭─ Status ─────────────────────────────────────────────────────────────────╮                     │
-│ Sure. I will wrap th│                                                                          │                     │
-│  ts                 │  ┌────────────────────────────────────────────────────────────────────┐  │                     │
-│  export async functi│  │Model: qwen3-coder:30b                                              ┃  │                     │
-│    // exponential ba│  │Provider: Ollama / loopback                                         ┃  │                     │
-│    for (let attempt │  │Endpoint: http://127.0.0.1:11434/                                   ┃  │                     │
-│      try { return aw│  │Think: model default                                                ┃  │                     │
-│      catch (e) { if │  │Context: 9.6k/32k                                                   ┃  │                     │
-│    }                │  │Workspace: /home/me/project                                         ┃  │                     │
-│  }                  │  │Mode: build                                                         ┃  │                     │
-│                     │  │Session: a1b2c3d                                                    ┃  │                     │
-│ ╭─ Tool · edit ─────│  │Session db: /home/me/project/sessions.db                            ┃  │───────────────────╮ │
-│ │succeeded          │  │Theme: auto                                                         ┃  │                   │ │
-│ │src/fetch.ts       │  │Mouse: off                                                          │  │                   │ │
-│ │Updated src/fetch.t│  │Grants: files                                                       │  │                   │ │
-│ ╰───────────────────│  └────────────────────────────────────────────────────────────────────┘  │───────────────────╯ │
-│                     │  pgup/pgdn scroll · home/end top/bottom · esc or q close                 │                     │
-│ Assistant           │                                                                          │                     │
-│ Done. The helper now╰──────────────────────────────────────────────────────────────────────────╯                     │
-│                                                                                                                      │
+│ Assistant                                                                                                            │
+│ Sure. I will wrap the call in a bounded retry with backoff:                                                          │
+│  ts                                                                                                                  │
+│  export async functi╭─ Status ─────────────────────────────────────────────────────────────────╮                     ┃
+│    // exponential ba│                                                                          │                     ┃
+│    for (let attempt │  ┌────────────────────────────────────────────────────────────────────┐  │                     ┃
+│      try { return aw│  │Model: qwen3-coder:30b                                              ┃  │                     ┃
+│      catch (e) { if │  │Provider: Ollama / loopback                                         ┃  │                     ┃
+│    }                │  │Endpoint: http://127.0.0.1:11434/                                   ┃  │                     ┃
+│  }                  │  │Think: model default                                                ┃  │                     ┃
+│                     │  │Context: 9.6k/32k                                                   ┃  │                     ┃
+│ ╭─ Edit ────────────│  │Workspace: /home/me/project                                         ┃  │───────────────────╮ ┃
+│ │ ✓ succeeded       │  │Mode: build                                                         ┃  │                   │ ┃
+│ │ src/fetch.ts      │  │Session: a1b2c3d                                                    ┃  │                   │ ┃
+│ │ Updated src/fetch.│  │Session db: /home/me/project/sessions.db                            ┃  │                   │ ┃
+│ │   import { sleep }│  │Theme: auto                                                         ┃  │                   │ ┃
+│ │ - export const get│  │Mouse: off                                                          │  │                   │ ┃
+│ │ + export const get│  │Grants: files                                                       │  │                   │ ┃
+│ ╰───────────────────│  └────────────────────────────────────────────────────────────────────┘  │───────────────────╯ ┃
+│                     │  pgup/pgdn scroll · home/end top/bottom · esc or q close                 │                     ┃
+│ Assistant           │                                                                          │                     ┃
+│ Done. The helper now╰──────────────────────────────────────────────────────────────────────────╯                     ┃
+│                                                                                                                      ┃
 └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
 ╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
 │ Message the model                                                                                                    │

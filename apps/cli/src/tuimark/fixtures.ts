@@ -39,7 +39,13 @@ const EDIT_CALL = {
   id: "call-1",
   function: {
     name: "edit",
-    arguments: { path: "src/fetch.ts", old_string: "a", new_string: "b" },
+    arguments: {
+      path: "src/fetch.ts",
+      old_string:
+        "import { sleep } from './util';\nexport const get = (url) => fetch(url);",
+      new_string:
+        "import { sleep } from './util';\nexport const get = (url) => fetchRetry(url);",
+    },
   },
 };
 
@@ -78,6 +84,15 @@ const MARKDOWN = [
   "Use `fetchRetry` for **every** call, and a stray 2 * 3 * 4 or snake_case_name stays as typed.",
 ].join("\n");
 
+/** A path wider than any card: the card cuts it in the middle, keeping the file name. */
+export const LONG_PATH =
+  "packages/runtime/src/providers/ollama/streaming/backpressure/chunk_reassembly.ts";
+
+const READ_LONG_CALL = {
+  id: "call-3",
+  function: { name: "read", arguments: { path: LONG_PATH } },
+};
+
 const MARKDOWN_TOOL = {
   id: "call-2",
   function: {
@@ -108,6 +123,17 @@ const MESSAGES: Message[] = [
 const MARKDOWN_MESSAGES: Message[] = [
   { role: "user", content: "Explain the retry policy." },
   { role: "assistant", content: MARKDOWN },
+  { role: "assistant", content: "", tool_calls: [READ_LONG_CALL] },
+  {
+    role: "tool",
+    tool_name: "read",
+    tool_call_id: "call-3",
+    content: JSON.stringify({
+      status: "succeeded",
+      output:
+        "1: export function reassemble(chunks) {\n2:   return chunks.join('');",
+    }),
+  },
   { role: "assistant", content: "", tool_calls: [MARKDOWN_TOOL] },
   {
     role: "tool",
@@ -217,9 +243,20 @@ function base(messages: Message[] = MESSAGES): {
   return { store, builder };
 }
 
+/**
+ * A card's duration, as the controller stamps it on a call that ran this
+ * turn (a resumed receipt has none).
+ */
+function timed(store: Store, took: string): Store {
+  store.messages = store.messages.map((m) =>
+    m.is_tool ? { ...m, card: { ...m.card, took } } : m,
+  );
+  return store;
+}
+
 /** Three exchanges: text with code and a list, a finished tool card, a short reply. */
 export function idleSample(): Store {
-  return base().store;
+  return timed(base().store, "0.4s");
 }
 
 /** A fresh session: no messages yet, so the welcome shows. */
@@ -338,6 +375,8 @@ export function streamingSample(): Store {
   store.busy = true;
   store.placeholder = "Generating…";
   store.status = BUSY_STATUS_LINE;
+  // Eight seconds of pace: the wait for the first token, then the stream.
+  store.rate = [0, 0, 4, 11, 14, 13, 15, 14];
   return store;
 }
 

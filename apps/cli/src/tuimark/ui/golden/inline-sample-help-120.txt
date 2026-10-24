@@ -1,5 +1,5 @@
 === grid 120x23 ===
- Local Agent           Ollama / ╭─ Help ───────────────────────────────────────────────╮c3d  ctx 9.6k/32k  ████░░░░░░░░ 
+ Local Agent           Ollama / ╭─ Help ───────────────────────────────────────────────╮c3d  ctx 9.6k/32k  ███▋░░░░░░░░ 
                                 │                                                      │                                
                                 │  ? close help                                        │                                
                                 │  Commands                                            │                                

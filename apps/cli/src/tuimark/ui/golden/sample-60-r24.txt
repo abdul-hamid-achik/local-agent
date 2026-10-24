@@ -1,18 +1,18 @@
 === grid 60x24 ===
  Local Agent             qwen3-coder:30b  build             
 ┌──────────────────────────────────────────────────────────┐
-│  export async function fetchRetry(url, tries = 3) {      │
-│    // exponential backoff                                │
-│    for (let attempt = 1; ; attempt++) {                  │
 │      try { return await fetch(url); }                    │
 │      catch (e) { if (attempt === tries) throw e; }       │
-│    }                                                     ┃
-│  }                                                       ┃
-│                                                          ┃
-│ ╭─ Tool · edit ────────────────────────────────────────╮ ┃
-│ │succeeded                                             │ ┃
-│ │src/fetch.ts                                          │ ┃
-│ │Updated src/fetch.ts. Verification has not been run.  │ ┃
+│    }                                                     │
+│  }                                                       │
+│                                                          │
+│ ╭─ Edit ───────────────────────────────────────────────╮ │
+│ │ ✓ succeeded · 0.4s                                   │ │
+│ │ src/fetch.ts                                         │ ┃
+│ │ Updated src/fetch.ts. Verification has not been run. │ ┃
+│ │   import { sleep } from './util';                    │ ┃
+│ │ - export const get = (url) => fetch(url);            │ ┃
+│ │ + export const get = (url) => fetchRetry(url);       │ ┃
 │ ╰──────────────────────────────────────────────────────╯ ┃
 │                                                          ┃
 │ Assistant                                                ┃

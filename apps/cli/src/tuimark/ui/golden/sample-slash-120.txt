@@ -1,17 +1,17 @@
 === grid 120x30 ===
- Local Agent           Ollama / loopback  qwen3-coder:30b  build            session a1b2c3d  ctx 9.6k/32k  ████░░░░░░░░ 
+ Local Agent           Ollama / loopback  qwen3-coder:30b  build            session a1b2c3d  ctx 9.6k/32k  ███▋░░░░░░░░ 
 ┌──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│    // exponential backoff                                                                                            │
-│    for (let attempt = 1; ; attempt++) {                                                                              │
-│      try { return await fetch(url); }                                                                                │
 │      catch (e) { if (attempt === tries) throw e; }                                                                   │
 │    }                                                                                                                 │
-│  }                                                                                                                   ┃
-│                                                                                                                      ┃
-│ ╭─ Tool · edit ────────────────────────────────────────────────────────────────────────────────────────────────────╮ ┃
-│ │succeeded                                                                                                         │ ┃
-│ │src/fetch.ts                                                                                                      │ ┃
-│ │Updated src/fetch.ts. Verification has not been run.                                                              │ ┃
+│  }                                                                                                                   │
+│                                                                                                                      │
+│ ╭─ Edit ───────────────────────────────────────────────────────────────────────────────────────────────────────────╮ │
+│ │ ✓ succeeded                                                                                                      │ │
+│ │ src/fetch.ts                                                                                                     │ │
+│ │ Updated src/fetch.ts. Verification has not been run.                                                             │ ┃
+│ │   import { sleep } from './util';                                                                                │ ┃
+│ │ - export const get = (url) => fetch(url);                                                                        │ ┃
+│ │ + export const get = (url) => fetchRetry(url);                                                                   │ ┃
 │ ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯ ┃
 │                                                                                                                      ┃
 │ Assistant                                                                                                            ┃

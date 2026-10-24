@@ -21,7 +21,7 @@ import {
   resolve,
   sep,
 } from "node:path";
-import { createTwoFilesPatch } from "diff";
+import { createTwoFilesPatch, structuredPatch } from "diff";
 import { userConfigDir } from "#runtime/paths";
 import {
   DIRECTORY_FLAGS,
@@ -88,6 +88,58 @@ function approvalDiff(
   return createTwoFilesPatch(from, to, before, after, "", "", {
     context: 3,
   }).replaceAll("\r", "␍");
+}
+
+/** One row of a change summary: a removed, added or kept line, or a gap between hunks. */
+export type ChangeLine = Readonly<{
+  kind: "del" | "add" | "same" | "gap";
+  text: string;
+}>;
+
+/** Past this edit distance a change is shown as every old line, then every new one. */
+const CHANGE_MAX_EDIT = 400;
+
+/**
+ * The lines `before` → `after` changes, with `context` kept lines around each
+ * change and a gap row between hunks: what a transcript card shows of an edit,
+ * from the call's own strings (no file is read). A carriage return is shown as
+ * ␍, as in the approval diff.
+ */
+export function changeLines(
+  before: string,
+  after: string,
+  context = 1,
+): ChangeLine[] {
+  const shown = (line: string) => line.replaceAll("\r", "␍");
+  const patch = structuredPatch("", "", before, after, "", "", {
+    context,
+    maxEditLength: CHANGE_MAX_EDIT,
+  });
+  if (!patch) {
+    const lines = (text: string) =>
+      text === "" ? [] : text.replace(/\n$/u, "").split("\n");
+    return [
+      ...lines(before).map((text) => ({
+        kind: "del" as const,
+        text: shown(text),
+      })),
+      ...lines(after).map((text) => ({
+        kind: "add" as const,
+        text: shown(text),
+      })),
+    ];
+  }
+  const rows: ChangeLine[] = [];
+  for (const hunk of patch.hunks) {
+    if (rows.length > 0) rows.push({ kind: "gap", text: "…" });
+    for (const line of hunk.lines) {
+      // "\ No newline at end of file" says nothing a card needs.
+      if (line.startsWith("\\")) continue;
+      const kind = line[0] === "-" ? "del" : line[0] === "+" ? "add" : "same";
+      rows.push({ kind, text: shown(line.slice(1)) });
+    }
+  }
+  return rows;
 }
 
 /** What a file holds on disk: its text, and the BOM written ahead of it. */

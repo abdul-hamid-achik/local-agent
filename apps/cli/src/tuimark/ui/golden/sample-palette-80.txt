@@ -1,29 +1,29 @@
 === grid 80x30 ===
- Local Agent         qwen3-coder:30b  build          ctx 9.6k/32k  ████░░░░░░░░ 
+ Local Agent         qwen3-coder:30b  build          ctx 9.6k/32k  ███▋░░░░░░░░ 
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│ You                                                                          │
-│ Add a retry to the fetch helper and show me the result.                      │
-│                                                                              │
 │ Assistant                                                                    │
 │ Sure. I will wrap the call in a bounded retry with backoff:                  │
-│  ts     ╭─ Commands ───────────────────────────────────────────────╮         │
-│  export │ ╔══════════════════════════════════════════════════════╗ │         │
-│    // ex│ ║ mode                                                 ║ │         │
-│    for (│ ╚══════════════════════════════════════════════════════╝ │         │
-│      try│ Mode: plan (read only)                        /mode plan │         │
-│      cat│ Mode: build (read, edit, command)            /mode build │         │
-│    }    │ Mode: chat (conversational)                   /mode chat │         │
-│  }      │ Model: show current                               /model │         │
-│         │                                                          │         │
-│ ╭─ Tool │                                                          │───────╮ │
-│ │succeed│                                                          │       │ │
-│ │src/fet│                                                          │       │ │
-│ │Updated│                                                          │       │ │
-│ ╰───────│                                                          │───────╯ │
-│         │                                                          │         │
-│ Assistan╰──────────────────────────────────────────────────────────╯         │
-│ Done. The helper now retries three times.                                    │
-│                                                                              │
+│  ts                                                                          │
+│  export async function fetchRetry(url, tries = 3) {                          ┃
+│    // exponential backoff                                                    ┃
+│    for (╭─ Commands ───────────────────────────────────────────────╮         ┃
+│      try│ ╔══════════════════════════════════════════════════════╗ │         ┃
+│      cat│ ║ mode                                                 ║ │         ┃
+│    }    │ ╚══════════════════════════════════════════════════════╝ │         ┃
+│  }      │ Mode: plan (read only)                        /mode plan │         ┃
+│         │ Mode: build (read, edit, command)            /mode build │         ┃
+│ ╭─ Edit │ Mode: chat (conversational)                   /mode chat │───────╮ ┃
+│ │ ✓ succ│ Model: show current                               /model │       │ ┃
+│ │ src/fe│                                                          │       │ ┃
+│ │ Update│                                                          │       │ ┃
+│ │   impo│                                                          │       │ ┃
+│ │ - expo│                                                          │       │ ┃
+│ │ + expo│                                                          │       │ ┃
+│ ╰───────│                                                          │───────╯ ┃
+│         │                                                          │         ┃
+│ Assistan╰──────────────────────────────────────────────────────────╯         ┃
+│ Done. The helper now retries three times.                                    ┃
+│                                                                              ┃
 └──────────────────────────────────────────────────────────────────────────────┘
 ╭──────────────────────────────────────────────────────────────────────────────╮
 │ Message the model                                                            │

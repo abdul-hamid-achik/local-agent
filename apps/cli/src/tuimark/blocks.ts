@@ -16,7 +16,7 @@
 // Every flag is always present (true or false) because the markup has no
 // equality test and `if` / `class:NAME` on a missing member report B002 / B003.
 
-import type { Message, ToolCall } from "@local-agent/runtime";
+import { changeLines, type Message, type ToolCall } from "@local-agent/runtime";
 import { terminalText } from "#cli/text";
 
 // ---------------------------------------------------------------- text hygiene
@@ -903,8 +903,18 @@ export function parseStreaming(markdown: string, prefix = "l"): Block[] {
 
 export interface Card {
   name: string;
+  /** What the card's border names: the tool as a reader says it ("Edit", "Command"). */
+  title: string;
   status: string;
+  /** The finished state at a glance: ✓ succeeded, ✗ denied or failed, ! otherwise; "" while running. */
+  mark: string;
+  /** How long the call ran ("1.2s"); "" when unknown (a resumed session, a call that never ran). */
+  took: string;
   args: string;
+  /** There is an args line, a path or a URL: it is cut in the middle (both ends name it). */
+  args_path: boolean;
+  /** There is an args line of any other kind: it is cut at its end. */
+  args_line: boolean;
   ok: boolean;
   bad: boolean;
   warn: boolean;
@@ -915,14 +925,61 @@ export interface Card {
 
 export const NO_CARD: Card = Object.freeze({
   name: "",
+  title: "",
   status: "",
+  mark: "",
+  took: "",
   args: "",
+  args_path: false,
+  args_line: false,
   ok: false,
   bad: false,
   warn: false,
   running: false,
   out: [],
 }) as Card;
+
+/** The server and tool of an MCP `SERVER__TOOL` name, or undefined without the separator. */
+export function mcpParts(
+  name: string,
+): { server: string; tool: string } | undefined {
+  const at = name.indexOf("__");
+  if (at <= 0 || at + 2 >= name.length) return undefined;
+  return { server: name.slice(0, at), tool: name.slice(at + 2) };
+}
+
+const TOOL_TITLES: Record<string, string> = {
+  read: "Read",
+  read_image: "Image",
+  list: "List",
+  search: "Search",
+  fetch: "Fetch",
+  web_search: "Web search",
+  task: "Subagent",
+  todo_write: "Todo",
+  edit: "Edit",
+  write: "Write",
+  run_command: "Command",
+};
+
+/** A card's title: the built-in tool's word, `MCP · server · tool`, or the name as it came. */
+export function toolTitle(name: string): string {
+  const clean = clip(cleanText(name), 80);
+  const builtin = TOOL_TITLES[name];
+  if (builtin) return builtin;
+  const parts = mcpParts(clean);
+  return parts ? `MCP · ${parts.server} · ${parts.tool}` : clean;
+}
+
+/** A call's duration as a card shows it: <0.1s, 0.4s, 12s, 2m 05s. */
+export function formatTook(ms: number): string {
+  const seconds = Math.max(0, ms) / 1000;
+  if (seconds < 0.1) return "<0.1s";
+  if (seconds < 10) return `${seconds.toFixed(1)}s`;
+  if (seconds < 60) return `${Math.round(seconds)}s`;
+  const whole = Math.round(seconds);
+  return `${Math.floor(whole / 60)}m ${String(whole % 60).padStart(2, "0")}s`;
+}
 
 export type ToolState =
   | "requested"
@@ -950,12 +1007,99 @@ const OUT_COLS = 200;
 
 /** One line that says what a tool call is about: a path, a command, or the arguments. */
 export function callSummary(call: ToolCall | undefined): string {
-  if (!call) return "";
+  return callLine(call).text;
+}
+
+/** callSummary's line, and whether it is a path or a URL (cut in the middle on a card). */
+function callLine(call: ToolCall | undefined): { text: string; path: boolean } {
+  if (!call) return { text: "", path: false };
   const args = call.function.arguments;
-  if (typeof args.path === "string") return clip(cleanText(args.path), 160);
-  if (Array.isArray(args.argv))
-    return clip(cleanText(args.argv.map(String).join(" ")), 160);
-  return clip(cleanText(JSON.stringify(args)), 160);
+  const str = (value: unknown) =>
+    typeof value === "string" ? value : undefined;
+  const line = (text: string, path = false) => ({
+    text: clip(cleanText(text), 160),
+    path,
+  });
+  switch (call.function.name) {
+    case "search": {
+      const pattern = str(args.pattern);
+      const where = str(args.path);
+      if (pattern !== undefined)
+        return line(where ? `${pattern} in ${where}` : pattern);
+      break;
+    }
+    case "web_search": {
+      const query = str(args.query);
+      if (query !== undefined) return line(query);
+      break;
+    }
+    case "fetch": {
+      const url = str(args.url);
+      if (url !== undefined) return line(url, true);
+      break;
+    }
+    case "task": {
+      const prompt = str(args.prompt);
+      if (prompt !== undefined) return line(prompt.split("\n")[0] ?? "");
+      break;
+    }
+    case "todo_write":
+      if (Array.isArray(args.todos))
+        return line(
+          `${args.todos.length} item${args.todos.length === 1 ? "" : "s"}`,
+        );
+      break;
+  }
+  if (typeof args.path === "string") return line(args.path, true);
+  if (Array.isArray(args.argv)) return line(args.argv.map(String).join(" "));
+  return line(JSON.stringify(args));
+}
+
+/** A row of a card's output: its text and the span class that styles it. */
+type OutRow = { text: string; cls: string };
+
+/**
+ * What a finished edit or a created file changed, as rows after the receipt:
+ * the edit's own old and new strings, or the new file's lines. Only for a
+ * call that landed (a replaced file's old text is not in the call: no rows).
+ */
+function changeRows(
+  name: string,
+  call: ToolCall | undefined,
+  state: ToolState,
+  output: string,
+): OutRow[] {
+  if (!call || (state !== "succeeded" && state !== "unverified")) return [];
+  const args = call.function.arguments;
+  if (
+    name === "edit" &&
+    typeof args.old_string === "string" &&
+    typeof args.new_string === "string"
+  )
+    return changeLines(args.old_string, args.new_string).map((row) => {
+      const text = cleanText(row.text);
+      switch (row.kind) {
+        case "del":
+          return { text: `- ${text}`, cls: "del" };
+        case "add":
+          return { text: `+ ${text}`, cls: "add" };
+        case "gap":
+          return { text: "…", cls: "note" };
+        default:
+          return { text: `  ${text}`, cls: "" };
+      }
+    });
+  if (
+    name === "write" &&
+    typeof args.content === "string" &&
+    args.content !== "" &&
+    output.startsWith("Created ")
+  )
+    return args.content
+      .replace(/\n$/u, "")
+      .split("\n")
+      .map((text) => ({ text: `+ ${cleanText(text)}`, cls: "add" }));
+  return [];
 }
 
 /**
@@ -965,15 +1109,20 @@ export function callSummary(call: ToolCall | undefined): string {
 export function outputRuns(
   output: string,
   head?: { text: string; bad: boolean },
+  change: readonly OutRow[] = [],
 ): Run[] {
-  const all = cleanText(output).split("\n");
-  while (all.length > 0 && all[all.length - 1] === "") all.pop();
-  if (head) all.unshift(head.text);
+  const lines = cleanText(output).split("\n");
+  while (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
+  const all: OutRow[] = [
+    ...(head ? [{ text: head.text, cls: head.bad ? "err" : "note" }] : []),
+    ...lines.map((text) => ({ text, cls: "" })),
+    ...change,
+  ];
   const runs: Run[] = [];
-  all.slice(0, OUT_LINES).forEach((line, n) => {
-    if (n > 0) pushRun(runs, "\n");
-    const cls = head && n === 0 ? (head.bad ? "err" : "note") : "";
-    pushRun(runs, clip(line, OUT_COLS), cls);
+  all.slice(0, OUT_LINES).forEach((row, n) => {
+    // A line break between two rows of one class stays in their run.
+    if (n > 0) pushRun(runs, "\n", all[n - 1]?.cls === row.cls ? row.cls : "");
+    pushRun(runs, clip(row.text, OUT_COLS), row.cls);
   });
   if (all.length > OUT_LINES)
     pushRun(
@@ -1071,21 +1220,35 @@ export function capDetailsOutput(text: string): string {
 
 function toolCard(
   name: string,
-  args: string,
+  call: ToolCall | undefined,
   state: ToolState,
   output = "",
 ): Card {
   const parts = resultParts(name, output);
+  const line = callLine(call);
+  const bad = state === "denied" || state === "failed";
+  const running =
+    state === "running" || state === "requested" || state === "approval";
   return {
     name: clip(cleanText(name), 80),
+    title: toolTitle(name),
     status: STATE_LABEL[state],
-    args,
+    mark: running ? "" : state === "succeeded" ? "✓" : bad ? "✗" : "!",
+    took: "",
+    args: line.text,
+    args_path: line.text !== "" && line.path,
+    args_line: line.text !== "" && !line.path,
     ok: state === "succeeded",
-    bad: state === "denied" || state === "failed",
+    bad,
     warn: state === "outcome_unknown" || state === "unverified",
-    running:
-      state === "running" || state === "requested" || state === "approval",
-    out: output ? outputRuns(parts.body, parts.head) : [],
+    running,
+    out: output
+      ? outputRuns(
+          parts.body,
+          parts.head,
+          changeRows(name, call, state, output),
+        )
+      : [],
   };
 }
 
@@ -1191,7 +1354,7 @@ export function liveToolView(
   state: "requested" | "approval" | "running",
 ): LiveView {
   return {
-    ...view("live", "tool", [], toolCard(name, callSummary(call), state)),
+    ...view("live", "tool", [], toolCard(name, call, state)),
     active: true,
     tail: [],
   };
@@ -1234,7 +1397,7 @@ export class ViewBuilder {
       this.id(),
       "tool",
       [],
-      toolCard(name, callSummary(call), asToolState(status), output),
+      toolCard(name, call, asToolState(status), output),
       [],
       messageImages(message.images),
     );
@@ -1267,11 +1430,21 @@ export class ViewBuilder {
       ? this.calls.get(message.tool_call_id)
       : undefined;
     const { status, output } = parseReceipt(message.content);
+    const state = asToolState(status);
+    // The change the card starts to show, whole: the card's "/details for
+    // full output" promises every row it cut.
+    const change = changeRows(name, call, state, output)
+      .map((row) => row.text)
+      .join("\n");
     return {
       name: clip(cleanText(name), 80),
-      status: STATE_LABEL[asToolState(status)],
+      status: STATE_LABEL[state],
       args: callSummary(call),
-      output: capDetailsOutput(resultSummary(name, output)),
+      output: capDetailsOutput(
+        change
+          ? `${resultSummary(name, output)}\n${change}`
+          : resultSummary(name, output),
+      ),
     };
   }
 

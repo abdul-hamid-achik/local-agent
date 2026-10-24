@@ -1,13 +1,13 @@
 === grid 80x30 ===
- Local Agent         qwen3-coder:30b  build          ctx 9.6k/32k  ████░░░░░░░░ 
+ Local Agent         qwen3-coder:30b  build          ctx 9.6k/32k  ███▋░░░░░░░░ 
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│  ts                                                                          │
-│  export async function fetchRetry(url, tries = 3) {                          │
-│    // exponential backoff                                                    │
 │    for (let attempt = 1; ; attempt++) {                                      │
 │      try { return await fetch(url); }                                        │
-│      catch (e) { if (attempt === tries) throw e; }                           ┃
-│    }                                                                         ┃
+│      catch (e) { if (attempt === tries) throw e; }                           │
+│    }                                                                         │
+│  }                                                                           │
+│                                                                              │
+│ ╭─ Edit ───────────────────────────────────────────────────────────────────╮ ┃
 │ ╭─ Run command? ───────────────────────────────────────────────────────────╮ ┃
 │ │                                                                          │ ┃
 │ │  Runs exactly as written: there is no shell.                             │ ┃
@@ -20,8 +20,8 @@
 │ │                                                     [ Deny ]  [ Allow ]  │ ┃
 │ │                                                                          │ ┃
 │ ╰──────────────────────────────────────────────────────────────────────────╯ ┃
-│ │⠋  waiting for approval                                                   │ ┃
-│ │bun test fetch                                                            │ ┃
+│ │ ⠋  waiting for approval                                                  │ ┃
+│ │ bun test fetch                                                           │ ┃
 │ ╰──────────────────────────────────────────────────────────────────────────╯ ┃
 │                                                                              ┃
 └──────────────────────────────────────────────────────────────────────────────┘
