@@ -23,6 +23,11 @@ async function temp() {
 
 test("runs argv without a shell and scrubs provider credentials", async () => {
   const root = await temp();
+  // The credentials are really there to scrub (the environment is taken
+  // when the proposal is made): unset, the test could not fail.
+  const planted = ["OLLAMA_HOST", "OPENAI_API_KEY", "AWS_SECRET_ACCESS_KEY"];
+  const saved = planted.map((name) => process.env[name]);
+  for (const name of planted) process.env[name] = "planted";
   const proposal = await createCommandProposal(
     [
       process.execPath,
@@ -32,6 +37,12 @@ test("runs argv without a shell and scrubs provider credentials", async () => {
     ],
     root,
     2000,
+  ).finally(() =>
+    planted.forEach((name, index) => {
+      const value = saved[index];
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }),
   );
   expect(Object.isFrozen(proposal)).toBe(true);
   expect(Object.isFrozen(proposal.argv)).toBe(true);
@@ -45,9 +56,8 @@ test("runs argv without a shell and scrubs provider credentials", async () => {
   expect(result.cancelled).toBe(false);
   const output = JSON.parse(result.output) as { argv: string[]; env: string[] };
   expect(output.argv).toEqual(["literal;$(echo shell)"]);
-  expect(output.env).not.toContain("OLLAMA_HOST");
-  expect(output.env).not.toContain("OPENAI_API_KEY");
-  expect(output.env).not.toContain("AWS_SECRET_ACCESS_KEY");
+  for (const name of planted) expect(output.env).not.toContain(name);
+  expect(output.env).toContain("PATH");
   await expect(
     executeApprovedCommand(proposal, new AbortController().signal),
   ).rejects.toThrow("already consumed");

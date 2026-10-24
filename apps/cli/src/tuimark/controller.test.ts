@@ -427,9 +427,11 @@ const withApproval: Script = async function* ({ options }) {
   yield { type: "tool_result", id: "e1", name: "edit", status, output: "o" };
 };
 
+/** Waits for `ok`, about a second at most; a condition that never holds fails the test. */
 async function until(ok: () => boolean) {
   for (let i = 0; i < 200 && !ok(); i++)
     await new Promise((r) => setTimeout(r, 5));
+  if (!ok()) throw new Error(`until: still false after 1 s: ${ok}`);
 }
 
 /** The dialog is open and has armed itself (the status line offers "y allow"). */
