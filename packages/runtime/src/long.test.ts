@@ -544,6 +544,10 @@ test("in a batch, only a call whose own note does not fit is left started", asyn
     // The one that ended has its answer; the rest are not in the history.
     expect(kept.messages.at(-1)?.content).toContain("too large");
     expect(kept.messages.at(-2)?.role).toBe("assistant");
+    // Nor were they shown: the client saw the saved prefix and no more.
+    expect(
+      messageEvents(result.events).filter((m) => m.role === "tool"),
+    ).toEqual([kept.messages.at(-1)]);
   } finally {
     store.close();
   }

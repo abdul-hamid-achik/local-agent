@@ -2932,6 +2932,9 @@ async function* agentTurn(
       // client that builds its history from messages keeps the same one.
       let nextMessage = 0;
       const shownSoFar: Message[] = [];
+      // A call whose note does not fit either: the commits below stop at
+      // it, so neither it nor any call after it is shown as saved.
+      let full = false;
       try {
         while (remaining > 0 || completedIndices.length) {
           while (!completedIndices.length && remaining > 0) {
@@ -2950,7 +2953,11 @@ async function* agentTurn(
               output: oc.output,
             };
           }
-          while (nextMessage < contexts.length && outcomes[nextMessage]) {
+          while (
+            !full &&
+            nextMessage < contexts.length &&
+            outcomes[nextMessage]
+          ) {
             const oc = outcomes[nextMessage]!;
             // What commit will save: a result the state cannot hold goes
             // out as its note, as it will be in the history.
@@ -2961,6 +2968,10 @@ async function* agentTurn(
                   endedAs(oc),
                 )
               : oc.message;
+            if (!shown) {
+              full = true;
+              break;
+            }
             shownSoFar.push(shown);
             yield { type: "message", message: shown };
             nextMessage++;

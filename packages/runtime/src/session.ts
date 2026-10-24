@@ -419,8 +419,13 @@ export class SessionStore {
     try {
       encoded = encodeMessages(messages);
     } catch (error) {
+      // Only this call's own result is ever shortened.
       const result = messages.at(-1);
-      if (!(error instanceof ConversationFullError) || result?.role !== "tool")
+      if (
+        !(error instanceof ConversationFullError) ||
+        result?.role !== "tool" ||
+        result.tool_call_id !== event.canonicalCallId
+      )
         throw error;
       const note = shortenedResult(result, event.type);
       try {
@@ -863,21 +868,21 @@ export function shortenedResult(
       : {}),
     content: JSON.stringify({
       status,
-      output: `The output (${sizeNote(bytes)}) was too large for the session to keep, so it is not in this conversation; the status above stands. Ask for less, for example a narrower read or a filter.`,
+      output: `The output${result.images?.length ? " and its images" : ""} (${sizeNote(bytes)}) was too large for the session to keep, so it is not in this conversation; the status above stands. Ask for less, for example a narrower read or a filter.`,
     }),
   };
 }
 /**
  * What commitOutcome would save for `result` after `history`: the result
- * itself, its note when the state cannot hold it, and the result again
- * when not even the note fits (then commitOutcome throws). For a caller
- * that must show the result before it commits.
+ * itself, or its note when the state cannot hold it; undefined when not
+ * even the note fits (commitOutcome then throws and saves nothing). For a
+ * caller that must show the result before it commits.
  */
 export function resultThatFits(
   history: readonly SessionMessage[],
   result: SessionMessage,
   endedAs: EventType,
-): SessionMessage {
+): SessionMessage | undefined {
   for (const candidate of [result, shortenedResult(result, endedAs)])
     try {
       encodeMessages([...history, candidate]);
@@ -885,7 +890,7 @@ export function resultThatFits(
     } catch (error) {
       if (!(error instanceof ConversationFullError)) throw error;
     }
-  return result;
+  return undefined;
 }
 function decodeMessages(encoded: string): SessionMessage[] {
   if (Buffer.byteLength(encoded, "utf8") > MAX_STATE_BYTES)
@@ -1009,13 +1014,17 @@ function answers(
   events: readonly ExecutionEvent[],
   messages: readonly SessionMessage[],
 ): void {
+  // The call is one of the latest assistant message's, and its result is
+  // among the tool messages after it: an earlier turn's result for an id a
+  // provider used again answers nothing now.
+  const at = messages.findLastIndex((message) => message.role !== "tool");
+  const turn = messages[at];
+  const results = messages.slice(at + 1);
   for (const event of events)
     if (
-      !messages.some(
-        (message) =>
-          message.role === "tool" &&
-          message.tool_call_id === event.canonicalCallId,
-      )
+      turn?.role !== "assistant" ||
+      !turn.tool_calls?.some((call) => call.id === event.canonicalCallId) ||
+      !results.some((message) => message.tool_call_id === event.canonicalCallId)
     )
       throw new Error(
         `a terminal event needs its call's result in the history (${event.canonicalCallId})`,

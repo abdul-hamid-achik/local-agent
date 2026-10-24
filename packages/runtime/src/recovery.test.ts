@@ -440,8 +440,9 @@ test("recovery refuses an event or a conclusion of another session", async () =>
         workspaceId: mine.workspaceId,
         expectedRevision: mine.revision,
         events: [{ ...theirs, type: "cancelled" }],
+        // A history that answers their call: only the session is wrong.
         messages: [
-          ...mine.messages,
+          ...other.messages,
           { role: "tool", tool_name: "read", tool_call_id: "c2", content: "" },
         ],
       }),

@@ -24,6 +24,12 @@ async function fixture() {
   return { db, workspace };
 }
 
+/** The assistant message that made `event`'s call. */
+const asked: SessionMessage = {
+  role: "assistant",
+  content: "",
+  tool_calls: [{ id: "call-1", function: { name: "read", arguments: {} } }],
+};
 /** The result of `event`'s call, as a history holds it. */
 const answer = {
   role: "tool" as const,
@@ -31,6 +37,8 @@ const answer = {
   tool_name: "read",
   tool_call_id: "call-1",
 };
+/** A history that answers `event`'s call. */
+const answered: SessionMessage[] = [asked, answer];
 
 function event(
   sessionId: number,
@@ -233,14 +241,14 @@ test("enforces append-only lifecycle and projects effect hazards", async () => {
   store.commitOutcome(
     event(session.id, session.workspaceId, "outcome_unknown"),
     0,
-    [answer],
+    answered,
   );
   expect(store.listHazards(session.id, session.workspaceId)).toHaveLength(1);
   expect(() =>
     store.commitOutcome(
       event(session.id, session.workspaceId, "completed"),
       1,
-      [answer],
+      answered,
     ),
   ).toThrow("illegal");
   expect(() =>
@@ -282,14 +290,18 @@ test("rejects independent idempotency collisions and changed v2 ordinal identity
   ).toThrow("logical slot conflict");
   store.appendEvent({ ...requested, type: "started" });
   expect(() =>
-    store.commitOutcome({ ...requested, type: "completed", ordinal: 2 }, 0, [
-      answer,
-    ]),
+    store.commitOutcome(
+      { ...requested, type: "completed", ordinal: 2 },
+      0,
+      answered,
+    ),
   ).toThrow("identity conflict");
   expect(() =>
-    store.commitOutcome({ ...requested, type: "failed", kind: undefined }, 0, [
-      answer,
-    ]),
+    store.commitOutcome(
+      { ...requested, type: "failed", kind: undefined },
+      0,
+      answered,
+    ),
   ).toThrow("metadata");
   expect(() =>
     store.appendEvent({
@@ -325,7 +337,7 @@ test("commitOutcome rolls back its event when the state revision is stale", asyn
   store.appendEvent(event(session.id, session.workspaceId, "requested"));
   store.appendEvent(event(session.id, session.workspaceId, "started"));
   const completed = event(session.id, session.workspaceId, "completed");
-  expect(() => store.commitOutcome(completed, 1, [answer])).toThrow(
+  expect(() => store.commitOutcome(completed, 1, answered)).toThrow(
     "revision conflict",
   );
   expect(store.listHazards(session.id, session.workspaceId)).toHaveLength(1);
@@ -336,7 +348,7 @@ test("commitOutcome rolls back its event when the state revision is stale", asyn
       [],
     ),
   ).toThrow("terminal");
-  const saved = store.commitOutcome(completed, 0, [answer]);
+  const saved = store.commitOutcome(completed, 0, answered);
   expect(saved.revision).toBe(1);
   expect(store.listHazards(session.id, session.workspaceId)).toHaveLength(0);
   store.close();
@@ -352,8 +364,23 @@ test("a terminal event is written only with a history that answers its call", as
   expect(() => store.appendEvent(completed)).toThrow("written with its result");
   for (const messages of [
     [],
-    [{ role: "tool" as const, content: "done", tool_name: "read" }],
-    [{ ...answer, tool_call_id: "another-call" }],
+    [asked, { role: "tool" as const, content: "done", tool_name: "read" }],
+    [asked, { ...answer, tool_call_id: "another-call" }],
+    // A result with no call before it, or after a message that made another.
+    [answer],
+    [
+      {
+        ...asked,
+        tool_calls: [
+          { id: "call-2", function: { name: "read", arguments: {} } },
+        ],
+      },
+      answer,
+    ],
+    // An earlier turn's result, for an id the provider used again now.
+    [asked, answer, { role: "user" as const, content: "again" }, asked],
+    // The call's result, then a later reply: it answers an earlier turn.
+    [asked, answer, { role: "assistant" as const, content: "ok" }],
   ])
     expect(() => store.commitOutcome(completed, 0, messages)).toThrow(
       "needs its call's result",
@@ -370,7 +397,7 @@ test("a terminal event is written only with a history that answers its call", as
   );
   // Nothing was written: the call is still a hazard at revision 0.
   expect(store.listHazards(session.id, session.workspaceId)).toHaveLength(1);
-  expect(store.recover({ ...change, messages: [answer] }).revision).toBe(1);
+  expect(store.recover({ ...change, messages: answered }).revision).toBe(1);
   expect(store.listHazards(session.id, session.workspaceId)).toHaveLength(0);
   store.close();
 });
@@ -428,6 +455,7 @@ test("commitOutcome saves a short note in place of a result the state cannot hol
   });
   const history: SessionMessage[] = [
     ...earlier,
+    asked,
     { role: "tool", tool_name: "read", tool_call_id: "call-1", content },
   ];
   expect(stateOf(history)).toBeGreaterThan(MAX_STATE_BYTES);
@@ -458,7 +486,7 @@ test("commitOutcome saves a short note in place of a result the state cannot hol
   expect(parsed.output).toContain("(391 KiB)");
   expect(parsed.output).toContain("Ask for less");
   expect(parsed.output).not.toContain("yyyy");
-  expect(saved.messages.slice(0, -1)).toEqual(earlier);
+  expect(saved.messages.slice(0, -1)).toEqual([...earlier, asked]);
   // The ledger ends the call with the full receipt, and no hazard is left.
   expect(store.listHazards(session.id, session.workspaceId)).toHaveLength(0);
   const rows = ledgerRows(db);
@@ -475,6 +503,57 @@ test("commitOutcome saves a short note in place of a result the state cannot hol
   store.close();
 });
 
+test("a note for a result with images says the images counted", async () => {
+  const { db, workspace } = await fixture();
+  const store = await SessionStore.open(db);
+  const session = await store.createSession(workspace);
+  store.appendEvent(event(session.id, session.workspaceId, "requested"));
+  store.appendEvent(event(session.id, session.workspaceId, "started"));
+  const saved = store.commitOutcome(
+    event(session.id, session.workspaceId, "completed"),
+    session.revision,
+    [
+      ...bulk(MAX_STATE_BYTES - 200_000),
+      asked,
+      { ...answer, images: ["A".repeat(300_000)] },
+    ],
+  );
+  const note = saved.messages.at(-1);
+  expect(note?.images).toBeUndefined();
+  expect(note?.content).toContain("The output and its images (293 KiB)");
+  store.close();
+});
+
+test("only the event's own result is shortened, never another call's", async () => {
+  const { db, workspace } = await fixture();
+  const store = await SessionStore.open(db);
+  const session = await store.createSession(workspace);
+  store.appendEvent(event(session.id, session.workspaceId, "requested"));
+  store.appendEvent(event(session.id, session.workspaceId, "started"));
+  const both: SessionMessage = {
+    role: "assistant",
+    content: "",
+    tool_calls: [
+      { id: "call-1", function: { name: "read", arguments: {} } },
+      { id: "call-2", function: { name: "read", arguments: {} } },
+    ],
+  };
+  expect(() =>
+    store.commitOutcome(
+      event(session.id, session.workspaceId, "completed"),
+      session.revision,
+      [
+        ...bulk(MAX_STATE_BYTES - 200_000),
+        both,
+        answer,
+        { ...answer, tool_call_id: "call-2", content: "z".repeat(400_000) },
+      ],
+    ),
+  ).toThrow(ConversationFullError);
+  expect(store.listHazards(session.id, session.workspaceId)).toHaveLength(1);
+  store.close();
+});
+
 test("an overflowing commit still rolls its event back when the revision is stale", async () => {
   const { db, workspace } = await fixture();
   const store = await SessionStore.open(db);
@@ -483,6 +562,7 @@ test("an overflowing commit still rolls its event back when the revision is stal
   store.appendEvent(event(session.id, session.workspaceId, "started"));
   const history: SessionMessage[] = [
     ...bulk(MAX_STATE_BYTES - 200_000),
+    asked,
     {
       role: "tool",
       tool_name: "read",
@@ -516,7 +596,7 @@ test("a note that does not fit either writes nothing, and the call stays started
   const session = await store.createSession(workspace);
   store.appendEvent(event(session.id, session.workspaceId, "requested"));
   store.appendEvent(event(session.id, session.workspaceId, "started"));
-  const earlier = bulk(MAX_STATE_BYTES - 100);
+  const earlier = [...bulk(MAX_STATE_BYTES - 100 - stateOf([asked])), asked];
   // Room for a few dozen bytes: not for the result, nor for its note.
   expect(stateOf(earlier)).toBeLessThanOrEqual(MAX_STATE_BYTES - 40);
   const history: SessionMessage[] = [
@@ -563,6 +643,7 @@ test("a receipt past the ledger's bound is replaced by the note there, its hash 
     session.revision,
     [
       ...bulk(MAX_STATE_BYTES - 100_000),
+      asked,
       {
         role: "tool",
         tool_name: "read",
