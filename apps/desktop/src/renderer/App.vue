@@ -169,9 +169,10 @@ async function reconnect(): Promise<void> {
 
 onMounted(() => {
   void connect();
-  api.onSidecarExit(() => {
+  api.onSidecarExit((_code, message) => {
     store.connection = "error";
-    store.connectionError = "Sidecar exited. Restart it to continue.";
+    store.connectionError =
+      message ?? "Sidecar exited. Restart it to continue.";
   });
 });
 </script>

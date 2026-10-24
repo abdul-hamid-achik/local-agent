@@ -1,10 +1,12 @@
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
+import { TextFileGrants } from "#desktop/main/file-access";
+import { writePrivateFile } from "#desktop/main/private-file";
 import { SidecarClient } from "#desktop/main/sidecar-client";
 
-const MAX_TEXT_FILE_BYTES = 1_000_000;
+const textFiles = new TextFileGrants();
 
 type Settings = {
   repoRoot?: string;
@@ -17,7 +19,12 @@ function settingsPath(): string {
 
 function loadSettings(): Settings {
   try {
-    return JSON.parse(readFileSync(settingsPath(), "utf8")) as Settings;
+    const settings = JSON.parse(
+      readFileSync(settingsPath(), "utf8"),
+    ) as Settings;
+    // providerEnv holds API keys; an older file may have been written 0644.
+    chmodSync(settingsPath(), 0o600);
+    return settings;
   } catch {
     return {};
   }
@@ -25,7 +32,7 @@ function loadSettings(): Settings {
 
 function saveSettings(settings: Settings): void {
   try {
-    writeFileSync(settingsPath(), JSON.stringify(settings, null, 2));
+    writePrivateFile(settingsPath(), JSON.stringify(settings, null, 2));
   } catch (error) {
     console.error(`[main] cannot save settings: ${(error as Error).message}`);
   }
@@ -74,8 +81,8 @@ function startSidecar(): void {
   sidecar.onStream = (envelope) => {
     mainWindow?.webContents.send("desktop/stream", envelope);
   };
-  sidecar.onExit = (code) => {
-    mainWindow?.webContents.send("desktop/sidecar-exit", code);
+  sidecar.onExit = (code, message) => {
+    mainWindow?.webContents.send("desktop/sidecar-exit", code, message);
   };
   sidecar.start();
 }
@@ -127,7 +134,8 @@ function createWindow(): void {
 }
 
 ipcMain.handle("desktop/rpc", (_event, method: string, params?: unknown) => {
-  if (!sidecar?.running) throw new Error("Sidecar is not running");
+  // The client says why it is down (Bun missing, early exit, ...).
+  if (!sidecar) throw new Error("Sidecar is not running");
   return sidecar.invoke(method, params);
 });
 
@@ -167,23 +175,22 @@ ipcMain.handle(
         filters: options.filters,
       },
     );
-    return picked.filePaths[0];
+    const path = picked.filePaths[0];
+    if (path && options.kind === "file") textFiles.grant(path);
+    return path;
   },
 );
 
-ipcMain.handle("desktop/read-text-file", (_event, path: string) => {
-  const text = readFileSync(path, "utf8");
-  if (Buffer.byteLength(text) > MAX_TEXT_FILE_BYTES)
-    throw new Error("File exceeds 1 MB");
-  return text;
-});
+// Only files the user picked in the dialog (the MCP config) are readable or
+// writable from the renderer.
+ipcMain.handle("desktop/read-text-file", (_event, path: string) =>
+  textFiles.read(path),
+);
 
 ipcMain.handle(
   "desktop/write-text-file",
   (_event, path: string, text: string) => {
-    if (Buffer.byteLength(text) > MAX_TEXT_FILE_BYTES)
-      throw new Error("File exceeds 1 MB");
-    writeFileSync(path, text);
+    textFiles.write(path, text);
     return true;
   },
 );

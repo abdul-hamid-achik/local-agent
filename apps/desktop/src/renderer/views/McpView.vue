@@ -25,7 +25,8 @@
         <label>Config editor</label>
         <textarea v-model="editor" rows="8" class="mono" spellcheck="false" />
         <div class="row" style="margin-top: 8px">
-          <button class="small" :disabled="!store.mcpConfig.trim()" @click="saveFile">Save</button>
+          <button class="small" :disabled="!loadedPath" @click="saveFile">Save</button>
+          <span v-if="loadedPath" class="dim mono" :title="loadedPath">→ {{ loadedPath }}</span>
           <button class="small ghost" @click="insertExample">Insert example</button>
           <span class="spacer" />
           <label class="row attach">
@@ -34,7 +35,8 @@
           </label>
         </div>
         <div class="help">
-          Saving writes the file above. stdio entries start their commands on check —
+          Saving writes the file last loaded (Browse or Load); only files chosen with
+          Browse can be read or saved. stdio entries start their commands on check —
           use absolute command paths (inherited env, including PATH, is cleared).
           Remote HTTP requires <code>allowRemote: true</code>. Plan intent denies MCP
           calls, including read-only ones.
@@ -84,6 +86,8 @@ const editor = ref("");
 const status = ref<McpStatusView | undefined>();
 const error = ref("");
 const notice = ref("");
+// The file the editor text came from; Save writes here, whatever the input says.
+const loadedPath = ref("");
 
 function onAttachChange(): void {
   notice.value = store.mcpAttached
@@ -106,7 +110,9 @@ async function loadFile(): Promise<void> {
   error.value = "";
   notice.value = "";
   try {
-    editor.value = await api.readTextFile(store.mcpConfig.trim());
+    const path = store.mcpConfig.trim();
+    editor.value = await api.readTextFile(path);
+    loadedPath.value = path;
   } catch (error_) {
     error.value = errorMessage(error_);
   }
@@ -117,8 +123,8 @@ async function saveFile(): Promise<void> {
   notice.value = "";
   try {
     JSON.parse(editor.value);
-    await api.writeTextFile(store.mcpConfig.trim(), editor.value);
-    notice.value = `Saved ${store.mcpConfig.trim()}.`;
+    await api.writeTextFile(loadedPath.value, editor.value);
+    notice.value = `Saved ${loadedPath.value}.`;
   } catch (error_) {
     error.value = errorMessage(error_);
   }

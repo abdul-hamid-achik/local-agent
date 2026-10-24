@@ -15,7 +15,9 @@ export type DesktopBridge = {
   writeTextFile: (path: string, text: string) => Promise<boolean>;
   openExternal: (url: string) => Promise<void>;
   onStream: (callback: (envelope: StreamEnvelope) => void) => () => void;
-  onSidecarExit: (callback: (code: number | null) => void) => () => void;
+  onSidecarExit: (
+    callback: (code: number | null, message?: string) => void,
+  ) => () => void;
 };
 
 const bridge: DesktopBridge = {
@@ -36,7 +38,8 @@ const bridge: DesktopBridge = {
     return () => ipcRenderer.removeListener("desktop/stream", listener);
   },
   onSidecarExit: (callback) => {
-    const listener = (_event: unknown, code: number | null) => callback(code);
+    const listener = (_event: unknown, code: number | null, message?: string) =>
+      callback(code, message);
     ipcRenderer.on("desktop/sidecar-exit", listener);
     return () => ipcRenderer.removeListener("desktop/sidecar-exit", listener);
   },

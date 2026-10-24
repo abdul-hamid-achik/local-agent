@@ -155,7 +155,7 @@ export const api = {
   writeTextFile: (path: string, text: string) =>
     bridge().writeTextFile(path, text),
   openExternal: (url: string) => bridge().openExternal(url),
-  onSidecarExit: (callback: (code: number | null) => void) =>
+  onSidecarExit: (callback: (code: number | null, message?: string) => void) =>
     bridge().onSidecarExit(callback),
 };
 

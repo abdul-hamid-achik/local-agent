@@ -1,8 +1,13 @@
 /** Spawns the Bun sidecar and multiplexes NDJSON RPC + stream events. */
 import { type ChildProcess, spawn } from "node:child_process";
-import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import {
+  type BunResolution,
+  bunNotFoundMessage,
+  resolveBun,
+} from "#desktop/main/bun-path";
+import { LineDecoder } from "#desktop/main/ndjson";
 import {
   isRpcResponse,
   isStreamEnvelope,
@@ -11,19 +16,15 @@ import {
 } from "#desktop/shared/protocol";
 
 export type StreamHandler = (envelope: StreamEnvelope) => void;
-export type ExitHandler = (code: number | null) => void;
+/** `message` says why the sidecar went away. */
+export type ExitHandler = (code: number | null, message?: string) => void;
 
-function resolveBun(): string {
-  const candidates = [
-    "bun",
-    "/opt/homebrew/bin/bun",
-    join(homedir(), ".bun", "bin", "bun"),
-  ];
-  for (const candidate of candidates) {
-    if (candidate === "bun" || existsSync(candidate)) return candidate;
-  }
-  return "bun";
-}
+export type SidecarOptions = {
+  resolveBun?: () => BunResolution;
+  script?: string;
+};
+
+const STDERR_TAIL_CHARS = 2000;
 
 export class SidecarClient {
   private child: ChildProcess | undefined;
@@ -32,7 +33,10 @@ export class SidecarClient {
     number,
     { resolve: (value: unknown) => void; reject: (error: Error) => void }
   >();
-  private buffer = "";
+  private lines = new LineDecoder();
+  private stderrTail = "";
+  // Why the sidecar is down; every invoke rejects with it until start().
+  private failure: Error | undefined;
 
   onStream: StreamHandler = () => undefined;
   onExit: ExitHandler = () => undefined;
@@ -40,6 +44,7 @@ export class SidecarClient {
   constructor(
     private readonly repoRoot: string,
     private readonly extraEnv: Record<string, string> = {},
+    private readonly options: SidecarOptions = {},
   ) {}
 
   get running(): boolean {
@@ -48,9 +53,30 @@ export class SidecarClient {
 
   start(): void {
     if (this.running) return;
+    this.failure = undefined;
+    const resolution = (
+      this.options.resolveBun ??
+      (() => resolveBun({ env: process.env, home: homedir() }))
+    )();
+    if (!resolution.path) {
+      this.child = undefined;
+      this.fail(undefined, null, bunNotFoundMessage(resolution.tried));
+      return;
+    }
+    const bun = resolution.path;
     const child = spawn(
-      resolveBun(),
-      [join(this.repoRoot, "apps", "desktop", "src", "sidecar", "sidecar.ts")],
+      bun,
+      [
+        this.options.script ??
+          join(
+            this.repoRoot,
+            "apps",
+            "desktop",
+            "src",
+            "sidecar",
+            "sidecar.ts",
+          ),
+      ],
       {
         cwd: this.repoRoot,
         env: {
@@ -62,33 +88,48 @@ export class SidecarClient {
       },
     );
     this.child = child;
-    this.buffer = "";
-    child.stdout?.on("data", (chunk: Buffer) =>
-      this.handleData(chunk.toString("utf8")),
-    );
-    child.stderr?.on("data", (chunk: Buffer) => {
-      console.error(`[sidecar] ${chunk.toString("utf8").trimEnd()}`);
+    this.lines = new LineDecoder();
+    this.stderrTail = "";
+    child.stdout?.on("data", (chunk: Buffer) => {
+      for (const line of this.lines.push(chunk)) this.handleLine(line);
     });
+    child.stderr?.on("data", (chunk: Buffer) => {
+      const text = chunk.toString("utf8");
+      console.error(`[sidecar] ${text.trimEnd()}`);
+      this.stderrTail = (this.stderrTail + text).slice(-STDERR_TAIL_CHARS);
+    });
+    // A broken pipe on a dead child must not become an uncaught exception.
+    child.stdin?.on("error", () => undefined);
     child.on("exit", (code) => {
-      this.child = undefined;
-      for (const [, entry] of this.pending)
-        entry.reject(new Error("Sidecar exited"));
-      this.pending.clear();
-      this.onExit(code);
+      const detail = this.stderrTail.trim();
+      this.fail(
+        child,
+        code,
+        `Sidecar exited${code === null ? "" : ` with code ${code}`}${detail ? `: ${detail}` : "."}`,
+      );
     });
     child.on("error", (error) => {
-      console.error(`[sidecar] spawn failed: ${error.message}`);
+      this.fail(
+        child,
+        null,
+        `Could not start the sidecar with Bun at ${bun}: ${error.message}. Check that the file is a working Bun executable, then restart the sidecar.`,
+      );
     });
   }
 
   stop(): void {
-    this.child?.kill();
+    const child = this.child;
     this.child = undefined;
+    this.failure = new Error("Sidecar was stopped");
+    this.rejectPending(this.failure);
+    child?.kill();
   }
 
   invoke(method: string, params?: unknown): Promise<unknown> {
     if (!this.running)
-      return Promise.reject(new Error("Sidecar is not running"));
+      return Promise.reject(
+        this.failure ?? new Error("Sidecar is not running"),
+      );
     const id = this.nextId++;
     return new Promise((resolve, reject) => {
       this.pending.set(id, { resolve, reject });
@@ -103,23 +144,35 @@ export class SidecarClient {
     });
   }
 
-  private handleData(text: string): void {
-    this.buffer += text;
-    let newline = this.buffer.indexOf("\n");
-    while (newline >= 0) {
-      const line = this.buffer.slice(0, newline).trim();
-      this.buffer = this.buffer.slice(newline + 1);
-      newline = this.buffer.indexOf("\n");
-      if (!line) continue;
-      let frame: unknown;
-      try {
-        frame = JSON.parse(line) as unknown;
-      } catch {
-        continue;
-      }
-      if (isRpcResponse(frame)) this.handleResponse(frame);
-      else if (isStreamEnvelope(frame)) this.onStream(frame);
+  /** Ends the sidecar's life once: a stopped or replaced child reports nothing. */
+  private fail(
+    child: ChildProcess | undefined,
+    code: number | null,
+    message: string,
+  ): void {
+    if (child !== this.child) return;
+    this.child = undefined;
+    this.failure = new Error(message);
+    this.rejectPending(this.failure);
+    this.onExit(code, message);
+  }
+
+  private rejectPending(error: Error): void {
+    for (const [, entry] of this.pending) entry.reject(error);
+    this.pending.clear();
+  }
+
+  private handleLine(raw: string): void {
+    const line = raw.trim();
+    if (!line) return;
+    let frame: unknown;
+    try {
+      frame = JSON.parse(line) as unknown;
+    } catch {
+      return;
     }
+    if (isRpcResponse(frame)) this.handleResponse(frame);
+    else if (isStreamEnvelope(frame)) this.onStream(frame);
   }
 
   private handleResponse(frame: RpcResponse): void {
