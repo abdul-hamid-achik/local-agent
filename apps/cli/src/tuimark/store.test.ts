@@ -720,6 +720,7 @@ test("statusLines states only the facts it is handed", () => {
     theme: "dark",
     mouse: "on",
     grants: [],
+    sandbox: "off (unavailable: the command sandbox needs macOS (Seatbelt))",
     usedTokens: 1024,
     mcpServers: 0,
     mcpTools: 0,
@@ -736,6 +737,7 @@ test("statusLines states only the facts it is handed", () => {
     "Theme: dark",
     "Mouse: on",
     "Grants: none",
+    "Sandbox: off (unavailable: the command sandbox needs macOS (Seatbelt))",
     "MCP: 0 servers · 0 tools",
   ]);
   const withDb = statusLines({
@@ -752,12 +754,14 @@ test("statusLines states only the facts it is handed", () => {
     theme: "auto",
     mouse: "off",
     grants: ["files", "bun test"],
+    sandbox: "on",
     usedTokens: 0,
     mcpServers: 1,
     mcpTools: 3,
   });
   expect(withDb).toContain("Session: abc123");
   expect(withDb).toContain("Session db: /w/sessions.db");
+  expect(withDb).toContain("Sandbox: on");
   expect(withDb).toContain("Think: model default");
   expect(withDb).toContain("Grants: files · bun test");
 });

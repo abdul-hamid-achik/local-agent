@@ -1,7 +1,7 @@
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { SessionStore } from "@local-agent/runtime";
+import { SessionStore, trustRules } from "@local-agent/runtime";
 import { expect, test } from "vitest";
 
 test.each([
@@ -138,3 +138,160 @@ test.each([
     }
   },
 );
+
+/** One headless run against a loopback Ollama that makes `calls` in order. */
+async function headless(
+  root: string,
+  calls: { name: string; arguments: Record<string, unknown> }[],
+  flags: string[],
+) {
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    async fetch(request) {
+      const path = new URL(request.url).pathname;
+      if (path === "/api/tags")
+        return Response.json({ models: [{ name: "fixture", size: 1000 }] });
+      if (path === "/api/show")
+        return Response.json({
+          capabilities: ["completion", "tools"],
+          model_info: { "fixture.context_length": 16384 },
+        });
+      const body = (await request.json()) as { messages: { role: string }[] };
+      const call =
+        calls[
+          body.messages.filter((message) => message.role === "tool").length
+        ];
+      return new Response(
+        `${JSON.stringify({ message: { role: "assistant", content: call ? "" : "Finished", ...(call ? { tool_calls: [{ function: call }] } : {}) }, done: true })}\n`,
+      );
+    },
+  });
+  try {
+    const child = Bun.spawn(
+      [
+        process.execPath,
+        new URL("./main.ts", import.meta.url).pathname,
+        "--model",
+        "fixture",
+        "--workspace",
+        root,
+        "--prompt",
+        "go",
+        "--json",
+        ...flags,
+      ],
+      {
+        env: {
+          PATH: process.env.PATH ?? "",
+          OLLAMA_HOST: server.url.origin,
+          XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME ?? "",
+        },
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    );
+    const [stdout, stderr, code] = await Promise.all([
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+      child.exited,
+    ]);
+    const results = stdout
+      .trim()
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line))
+      .filter((event) => event.type === "tool_result") as {
+      status: string;
+      output: string;
+    }[];
+    return { stderr, code, results };
+  } finally {
+    await server.stop(true);
+  }
+}
+
+test("--sandbox-commands runs every command confined, refuses deny and ask rules, and never runs unconfined", async () => {
+  const root = await mkdtemp(join(tmpdir(), "local-agent-sandbox-flow-"));
+  try {
+    // (Rule words are separated by spaces.)
+    expect(process.execPath).not.toMatch(/\s/);
+    await Bun.write(
+      join(root, ".local-agent", "permissions.json"),
+      JSON.stringify({
+        version: 1,
+        rules: [
+          { effect: "ask", tool: "run_command", pattern: "git *" },
+          { effect: "deny", tool: "run_command", pattern: "rm *" },
+          {
+            effect: "allow",
+            tool: "run_command",
+            pattern: `${process.execPath} -e *`,
+          },
+        ],
+      }),
+    );
+    // Trusted in the test's private config home, never the user's.
+    await trustRules(root);
+    const run = await headless(
+      root,
+      [
+        // An allow rule only spares the question: it runs confined too.
+        {
+          name: "run_command",
+          arguments: {
+            argv: [process.execPath, "-e", "await Bun.write('in.txt', 'x')"],
+          },
+        },
+        { name: "run_command", arguments: { argv: ["git", "status"] } },
+        { name: "run_command", arguments: { argv: ["rm", "in.txt"] } },
+        // No rule: confined.
+        { name: "run_command", arguments: { argv: ["/bin/ls"] } },
+      ],
+      ["--sandbox-commands"],
+    );
+    if (process.platform !== "darwin") {
+      // Unattended, an unavailable sandbox stops the run before it starts.
+      expect(run.code).toBe(1);
+      expect(run.stderr).toContain(
+        "--sandbox-commands: the command sandbox needs macOS (Seatbelt)",
+      );
+      expect(run.results).toEqual([]);
+      expect(await Bun.file(join(root, "in.txt")).exists()).toBe(false);
+      return;
+    }
+    expect(run.stderr).toBe("");
+    expect(run.code).toBe(0);
+    expect(run.results.map((result) => result.status)).toEqual([
+      "succeeded",
+      "denied",
+      "denied",
+      "succeeded",
+    ]);
+    for (const index of [0, 3])
+      expect(JSON.parse(run.results[index]?.output ?? "{}")).toMatchObject({
+        sandboxed: true,
+        exitCode: 0,
+      });
+    expect(await Bun.file(join(root, "in.txt")).exists()).toBe(true);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("--sandbox-commands and --approve-commands cannot be combined", async () => {
+  const root = await mkdtemp(join(tmpdir(), "local-agent-sandbox-flags-"));
+  try {
+    const run = await headless(
+      root,
+      [],
+      ["--sandbox-commands", "--approve-commands"],
+    );
+    expect(run.code).toBe(1);
+    expect(run.stderr).toContain(
+      "Choose --approve-commands (commands run as you) or --sandbox-commands (confined), not both",
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});

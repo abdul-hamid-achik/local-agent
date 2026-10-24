@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { expect, test } from "vitest";
 import {
   type AgentEvent,
+  type Approval,
   type ApprovalRequest,
   batchOutputLimit,
   readLines,
@@ -11,6 +12,7 @@ import {
   toolOutputLimit,
 } from "#runtime/agent";
 import { resolveProvider } from "#runtime/config";
+import { sandboxUnavailable } from "#runtime/sandbox";
 import { Workspace } from "#runtime/workspace";
 
 type Call = { name: string; arguments: Record<string, unknown> };
@@ -21,15 +23,17 @@ type Body = {
 
 /** A loopback Ollama that answers each step with the next scripted tool call, then "Done". */
 async function session(
-  /** One call per step, or an array for a step that makes several. */
-  calls: (Call | Call[])[],
+  /** One call per step, or an array for a step that makes several; or the
+   * steps made from the fake provider's origin. */
+  steps: (Call | Call[])[] | ((origin: string) => (Call | Call[])[]),
   intent: "plan" | "build",
-  approve: (proposal: ApprovalRequest) => boolean,
+  approve: (proposal: ApprovalRequest) => Approval,
   options: {
     /** /api/show capabilities; the default stub is a text-only tool model. */
     capabilities?: string[];
     /** Seeds files into the workspace root before the run. */
     seed?: (root: string) => Promise<void>;
+    sandboxUnavailable?: (root: string) => string | undefined;
   } = {},
 ) {
   const capabilities = options.capabilities ?? ["completion", "tools"];
@@ -38,6 +42,7 @@ async function session(
   await writeFile(join(root, "src", "stats.ts"), "export const mean = 1;\n");
   await options.seed?.(root);
   const bodies: Body[] = [];
+  let calls: (Call | Call[])[] = [];
   const server = Bun.serve({
     hostname: "127.0.0.1",
     port: 0,
@@ -60,6 +65,7 @@ async function session(
       );
     },
   });
+  calls = typeof steps === "function" ? steps(server.url.origin) : steps;
   const proposals: ApprovalRequest[] = [];
   const events: AgentEvent[] = [];
   try {
@@ -75,6 +81,9 @@ async function session(
           proposals.push(proposal);
           return approve(proposal);
         },
+        ...(options.sandboxUnavailable
+          ? { sandboxUnavailable: options.sandboxUnavailable }
+          : {}),
       },
     ))
       events.push(event);
@@ -544,6 +553,93 @@ test("a refused call repeated in the same turn is not asked again", async () => 
     expect(run.results[1]?.output).toMatch(
       /^This exact edit call was already refused in this turn/,
     );
+  } finally {
+    await run.cleanup();
+  }
+});
+
+const bunCall = (script: string) => ({
+  name: "run_command",
+  arguments: { argv: [process.execPath, "-e", script] },
+});
+
+test.runIf(sandboxUnavailable(tmpdir()) === undefined)(
+  "a sandbox approval runs a command confined and refuses any other effect",
+  async () => {
+    // Outside the workspace (its parent): writable only unconfined.
+    const outside = join(
+      tmpdir(),
+      `local-agent-outside-${process.pid}-${Date.now()}`,
+    );
+    const fetchTags = (origin: string, label: string) =>
+      bunCall(
+        `/* ${label} */ fetch(${JSON.stringify(`${origin}/api/tags`)}).then(() => process.exit(0), () => process.exit(3))`,
+      );
+    const run = await session(
+      (origin) => [
+        { name: "write", arguments: { path: "w.txt", content: "x" } },
+        bunCall(`require("node:fs").writeFileSync("in.txt", "x")`),
+        bunCall(
+          `require("node:fs").writeFileSync(${JSON.stringify(outside)}, "x")`,
+        ),
+        // No network at all: not even the provider's own port, which answers
+        // the same command run outside.
+        fetchTags(origin, "confined"),
+        fetchTags(origin, "outside"),
+      ],
+      "build",
+      (proposal) =>
+        proposal.kind === "command" &&
+        proposal.argv.join(" ").includes("outside */")
+          ? true
+          : "sandbox",
+    );
+    try {
+      expect(run.results[0]?.status).toBe("denied");
+      expect(await Bun.file(join(run.root, "w.txt")).exists()).toBe(false);
+      expect(run.results.slice(1).map((result) => result.status)).toEqual([
+        "succeeded",
+        "failed",
+        "failed",
+        "succeeded",
+      ]);
+      const [ran, wrote, fetched, control] = run.results.slice(1).map(
+        (result) =>
+          JSON.parse(result.output) as {
+            sandboxed?: boolean;
+            exitCode: number;
+            note?: string;
+          },
+      );
+      expect(ran).toMatchObject({ sandboxed: true, exitCode: 0 });
+      expect(ran?.note).toBeUndefined();
+      expect(await Bun.file(join(run.root, "in.txt")).exists()).toBe(true);
+      expect(wrote?.sandboxed).toBe(true);
+      expect(wrote?.note).toContain("ran in the command sandbox");
+      expect(await Bun.file(outside).exists()).toBe(false);
+      expect(fetched).toMatchObject({ sandboxed: true, exitCode: 3 });
+      expect(control?.exitCode).toBe(0);
+      expect(control?.sandboxed).toBeUndefined();
+    } finally {
+      await rm(outside, { force: true });
+      await run.cleanup();
+    }
+  },
+);
+
+test("a sandbox approval where the sandbox is unavailable runs nothing", async () => {
+  const run = await session(
+    [bunCall(`require("node:fs").writeFileSync("in.txt", "x")`)],
+    "build",
+    () => "sandbox",
+    { sandboxUnavailable: () => "the command sandbox needs macOS (Seatbelt)" },
+  );
+  try {
+    expect(run.results.map((result) => result.status)).toEqual(["denied"]);
+    expect(run.results[0]?.output).toBe(
+      "Command not run: the command sandbox is unavailable (the command sandbox needs macOS (Seatbelt)). Ask the user to approve it.",
+    );
+    expect(await Bun.file(join(run.root, "in.txt")).exists()).toBe(false);
   } finally {
     await run.cleanup();
   }

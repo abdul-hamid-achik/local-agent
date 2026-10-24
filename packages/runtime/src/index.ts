@@ -16,6 +16,7 @@ export {
 export {
   type AgentEvent,
   type AgentOptions,
+  type Approval,
   type ApprovalRequest,
   runAgent,
   type SessionContext,
@@ -497,4 +498,5 @@ export async function* chat(
 }
 
 export { inspectRecovery } from "#runtime/recovery";
+export { sandboxUnavailable } from "#runtime/sandbox";
 export { type Session, SessionStore } from "#runtime/session";

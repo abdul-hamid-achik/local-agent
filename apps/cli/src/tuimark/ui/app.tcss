@@ -27,6 +27,7 @@
 .la-sources { gap: 0; }
 .la-model { bold: true; width: auto; }
 .la-mode { color: $warn; width: auto; }
+.la-sandbox { color: $ok; width: auto; }
 .la-provider, .la-session, .la-ctx, .la-grants { width: auto; }
 @media (max-cols: 110) {
   .la-provider { display: none; }
@@ -126,6 +127,9 @@ span.err { color: $danger; bold: true; }
 /* The help overlay's own rows (the commands section and the composer's
  * enter keys under the hints). */
 .la-help-head { bold: true; color: $accent; margin: 1 0 0 0; }
+/* Under the close row, the first head needs no gap: the row it saves keeps
+ * every key in view at 30 rows. */
+.la-help-first { margin: 0; }
 .la-helpcmds { height: auto; layout: column; }
 .la-helpcmd { width: 1fr; height: 1; gap: 1; }
 .la-helpcmd-key { width: auto; bold: true; color: $accent; }

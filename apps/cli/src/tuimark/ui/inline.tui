@@ -205,6 +205,7 @@
         <text class="la-muted la-provider">{header.provider}</text>
         <text class="la-model">{header.model}</text>
         <text class="la-mode">{header.mode}</text>
+        <text if="header.sandbox_on" class="la-sandbox">sandbox</text>
         <spacer/>
         <text if="header.grants_on" class="la-muted la-grants">{header.grants}</text>
         <text class="la-muted la-session">{header.session}</text>
@@ -326,7 +327,7 @@
         <text class="k-help-key">?</text>
         <text class="k-help-label">close help</text>
       </row>
-      <text class="la-help-head">Commands</text>
+      <text class="la-help-head la-help-first">Commands</text>
       <col class="la-helpcmds" each="help.cmds as c" key="c.id">
         <row class="la-helpcmd">
           <text class="la-helpcmd-key">{c.cmd}</text>

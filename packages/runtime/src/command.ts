@@ -1,5 +1,10 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { realpath, stat } from "node:fs/promises";
+import {
+  type CommandSandbox,
+  sandboxedCommand,
+  sandboxUnavailable,
+} from "#runtime/sandbox";
 
 const MAX_OUTPUT_BYTES = 1 << 20;
 const MAX_TIMEOUT_MS = 2_147_483_647;
@@ -10,6 +15,7 @@ const DRAIN_GRACE_MS = 500;
 const TERMINATION_DEADLINE_MS = KILL_GRACE_MS + DRAIN_GRACE_MS;
 const ALLOWED_ENV = [
   "PATH",
+  "HOME",
   "TERM",
   "COLORTERM",
   "LANG",
@@ -115,6 +121,8 @@ export type CommandResult = Readonly<{
   cancelled: boolean;
   truncated: boolean;
   cleanupIncomplete: boolean;
+  /** Ran under the command sandbox (see sandbox.ts). */
+  sandboxed?: true;
 }>;
 
 type CwdIdentity = { dev: bigint; ino: bigint; birthtimeNs?: bigint };
@@ -270,10 +278,13 @@ async function validateProposal(
 /**
  * Executes a previously approved argv vector. No shell is involved unless the
  * approved argv explicitly names one, such as ["/bin/sh", "-c", "..."].
+ * With `sandbox` it runs confined (sandbox.ts) or not at all: a sandbox that
+ * is unavailable is an error, never a reason to run it as it is.
  */
 export async function executeApprovedCommand(
   proposal: ApprovedCommandProposal,
   signal: AbortSignal,
+  sandbox?: CommandSandbox,
 ): Promise<CommandResult> {
   if (typeof proposal !== "object" || proposal === null)
     throw new Error("Invalid approved command proposal");
@@ -286,6 +297,11 @@ export async function executeApprovedCommand(
     throw new Error("Approved command proposal was not issued by this host");
   proposalCwdIdentity.delete(proposal);
   proposalEnvironment.delete(proposal);
+  const unavailable = sandbox
+    ? sandboxUnavailable(proposal.cwd, sandbox.home)
+    : undefined;
+  if (unavailable)
+    throw new Error(`Command sandbox unavailable: ${unavailable}`);
   if (signal.aborted)
     return {
       output: "",
@@ -295,15 +311,23 @@ export async function executeApprovedCommand(
       cancelled: true,
       truncated: false,
       cleanupIncomplete: false,
+      ...(sandbox ? { sandboxed: true as const } : {}),
     };
 
-  const child = spawn(proposal.argv[0], proposal.argv.slice(1), {
-    cwd: proposal.cwd,
-    env: environment,
-    shell: false,
-    detached: true,
-    stdio: ["ignore", "pipe", "pipe"],
-  });
+  const confined = sandbox
+    ? sandboxedCommand(proposal.argv, proposal.cwd, environment, sandbox)
+    : undefined;
+  const child = spawn(
+    confined?.file ?? proposal.argv[0],
+    confined?.args ?? proposal.argv.slice(1),
+    {
+      cwd: proposal.cwd,
+      env: confined?.env ?? environment,
+      shell: false,
+      detached: true,
+      stdio: ["ignore", "pipe", "pipe"],
+    },
+  );
 
   const chunks: Buffer[] = [];
   const outputState = { bytes: 0, truncated: false };
@@ -405,6 +429,7 @@ export async function executeApprovedCommand(
         cancelled,
         truncated: outputState.truncated,
         cleanupIncomplete,
+        ...(sandbox ? { sandboxed: true as const } : {}),
       });
     };
     forceFinish = () => void finish(true);

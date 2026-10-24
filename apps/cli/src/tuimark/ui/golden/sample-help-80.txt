@@ -2,13 +2,13 @@
  Local Agent╭─ Help ───────────────────────────────────────────────╮███░░░░░░░░ 
 ┌───────────│                                                      │───────────┐
 │ You       │  ? close help                                        │           │
-│ Add a retr│                                                      │           │
-│           │  Commands                                            │           │
-│ Assistant │  /mode plan|build|chat plan reads only · build can…  │           │
-│ Sure. I wi│  /model [NAME] show or switch the Ollama model       │           │
-│  ts       │  /theme dark|light|auto set the session theme        │           │
-│  export as│  /mouse on|off toggle mouse reporting (fullscreen)   │           │
-│    // expo│  /permissions [clear|trust] show, clear or trust g…  │           │
+│ Add a retr│  Commands                                            │           │
+│           │  /mode plan|build|chat plan reads only · build can…  │           │
+│ Assistant │  /model [NAME] show or switch the Ollama model       │           │
+│ Sure. I wi│  /theme dark|light|auto set the session theme        │           │
+│  ts       │  /mouse on|off toggle mouse reporting (fullscreen)   │           │
+│  export as│  /permissions [clear|trust] show, clear or trust g…  │           │
+│    // expo│  /sandbox on|off run commands confined (macOS), wi…  │           │
 │    for (le│  /details show the last tool output in full          │           │
 │      try {│  /status show the effective config (model, workspa…  │           │
 │      catch│  /sessions switch to a saved session (needs --sess…  │           │

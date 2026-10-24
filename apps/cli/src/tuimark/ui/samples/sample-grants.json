@@ -10,7 +10,8 @@
     "ctx_warn": false,
     "ctx_danger": false,
     "grants": "auto: files · bun test",
-    "grants_on": true
+    "grants_on": true,
+    "sandbox_on": false
   },
   "empty": false,
   "mouse_on": true,
@@ -436,6 +437,11 @@
         "id": "/permissions",
         "cmd": "/permissions [clear|trust]",
         "desc": "show, clear or trust grants and rules"
+      },
+      {
+        "id": "/sandbox",
+        "cmd": "/sandbox on|off",
+        "desc": "run commands confined (macOS), without a card"
       },
       {
         "id": "/details",

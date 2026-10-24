@@ -17,7 +17,7 @@
 │                     │  │Session: a1b2c3d                                                    ┃  │                     │
 │ ╭─ Tool · edit ─────│  │Session db: /home/me/project/sessions.db                            ┃  │───────────────────╮ │
 │ │succeeded          │  │Theme: auto                                                         ┃  │                   │ │
-│ │src/fetch.ts       │  │Mouse: off                                                          ┃  │                   │ │
+│ │src/fetch.ts       │  │Mouse: off                                                          │  │                   │ │
 │ │Updated src/fetch.t│  │Grants: files                                                       │  │                   │ │
 │ ╰───────────────────│  └────────────────────────────────────────────────────────────────────┘  │───────────────────╯ │
 │                     │  pgup/pgdn scroll · home/end top/bottom · esc or q close                 │                     │

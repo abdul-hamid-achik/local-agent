@@ -79,6 +79,9 @@ export const APPROVAL_UNARMED_ALWAYS_STATUS =
 /** An `a` on a truncated preview: no grant is taken from an unread change. */
 export const APPROVAL_TRUNCATED_SESSION_STATUS =
   "Preview truncated: session grant unavailable";
+/** An `a` on a command card with the sandbox on: a card lets out only its own command. */
+export const APPROVAL_SANDBOX_SESSION_STATUS =
+  "Sandbox on: no session grant for commands; y runs this one outside the sandbox";
 /** A `!` on a truncated preview: no persistent rule comes from an unread change. */
 export const APPROVAL_TRUNCATED_ALWAYS_STATUS =
   "Preview truncated: always rule unavailable";
@@ -169,6 +172,8 @@ export interface Store {
     grants: string;
     /** Whether any session grant is active (the header shows `grants` only then). */
     grants_on: boolean;
+    /** Commands no rule decides run in the sandbox, without a card (`/sandbox`). */
+    sandbox_on: boolean;
   };
   /** True only before the first message: the welcome shows. Never true again. */
   empty: boolean;
@@ -360,6 +365,8 @@ export interface StoreInit {
   empty?: boolean;
   /** Inline presentation: its palette starts without the load-earlier row. */
   inline?: boolean;
+  /** Commands start sandboxed (`--sandbox-commands`, when available). */
+  sandbox?: boolean;
 }
 
 /** The last path segment of a workspace root ("" for "/" or ""). */
@@ -382,6 +389,7 @@ export function initialStore(init: StoreInit): Store {
       ctx_danger: false,
       grants: "",
       grants_on: false,
+      sandbox_on: init.sandbox ?? false,
     },
     empty:
       init.empty ??
@@ -709,8 +717,11 @@ export function grantCovers(
 export function grantHint(
   proposal: ApprovalRequest,
   truncated: boolean,
+  sandboxOn = false,
 ): string {
   if (truncated) return "preview truncated: session grant unavailable";
+  if (sandboxOn && proposal.kind === "command")
+    return "sandbox on: session grant unavailable";
   if (proposal.kind === "edit" || proposal.kind === "write")
     return "a allow file changes this session";
   const { label, exact } = grantFor(proposal);
@@ -724,12 +735,16 @@ export function grantsLabel(labels: readonly string[]): string {
   return labels.length === 0 ? "" : `auto: ${labels.join(" · ")}`;
 }
 
-/** What the approval dialog shows for a runtime proposal, wrapped for `cols` columns. */
+/**
+ * What the approval dialog shows for a runtime proposal, wrapped for `cols`
+ * columns. `sandboxOn`: a command's card says it runs outside the sandbox.
+ */
 export function approvalState(
   proposal: ApprovalRequest,
   cols = 80,
   root?: string,
   inline = false,
+  sandboxOn = false,
 ): ApprovalState {
   const width = inline ? previewWidthInline(cols) : previewWidth(cols);
   const preview = previewRows(approvalText(proposal, root), width);
@@ -738,7 +753,7 @@ export function approvalState(
     open: true,
     lines: preview.lines,
     truncated: preview.truncated,
-    grant_hint: grantHint(proposal, preview.truncated),
+    grant_hint: grantHint(proposal, preview.truncated, sandboxOn),
   };
   const body = (text: string) => (preview.truncated ? TRUNCATED_BODY : text);
   switch (proposal.kind) {
@@ -793,7 +808,13 @@ export function approvalState(
       return {
         ...base,
         title: "Run command?",
-        body: body("Runs exactly as written: there is no shell."),
+        // With the sandbox on, the card is the one way out of it, and what
+        // it runs may be what a sandboxed command wrote.
+        body: body(
+          sandboxOn
+            ? "Runs outside the sandbox, as you, exactly as written (no shell). It can run files that sandboxed commands changed."
+            : "Runs exactly as written: there is no shell.",
+        ),
         danger: true,
       };
   }
@@ -917,6 +938,8 @@ export interface StatusFacts {
   mouse: string;
   /** Session-grant labels, in grant order. */
   grants: readonly string[];
+  /** "on" or "off", with why it is unavailable when it is. */
+  sandbox: string;
   /** Tokens the header's meter shows used. */
   usedTokens: number;
   mcpServers: number;
@@ -944,6 +967,7 @@ export function statusLines(facts: StatusFacts): string[] {
     `Theme: ${facts.theme}`,
     `Mouse: ${facts.mouse}`,
     `Grants: ${facts.grants.length ? grantsLabel(facts.grants).slice("auto: ".length) : "none"}`,
+    `Sandbox: ${cleanText(facts.sandbox)}`,
     `MCP: ${facts.mcpServers} servers · ${facts.mcpTools} tools`,
   );
   return lines;

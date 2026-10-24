@@ -32,6 +32,8 @@ export interface CommandState {
   rules?: readonly string[];
   /** The model the provider currently uses (`/model` reports it). */
   model?: string;
+  /** Whether commands run in the sandbox (`/sandbox` reports it). */
+  sandbox?: boolean;
 }
 
 export interface CommandOutcome {
@@ -46,6 +48,11 @@ export interface CommandOutcome {
   theme?: Theme;
   /** Set when the command changed the mouse toggle: write it to `mouse_on`. */
   mouse?: boolean;
+  /**
+   * Set by `/sandbox on|off`. The controller checks the sandbox is
+   * available before turning it on, so it writes the real status itself.
+   */
+  sandbox?: boolean;
   /** Set by `/permissions clear`: revoke every session grant. */
   clearGrants?: boolean;
   /** Set by `/permissions clear rules`: empty the workspace's rule file. */
@@ -80,7 +87,7 @@ export interface CommandOutcome {
 }
 
 export const HELP_STATUS =
-  "/mode plan|build|chat · /model [NAME] · /theme dark|light|auto · /mouse on|off · /permissions [clear|trust] · /details · /status · /sessions · /find TEXT · /export [json] · /mcp · /help · Esc cancel · Ctrl+C exit";
+  "/mode plan|build|chat · /model [NAME] · /theme dark|light|auto · /mouse on|off · /permissions [clear|trust] · /sandbox on|off · /details · /status · /sessions · /find TEXT · /export [json] · /mcp · /help · Esc cancel · Ctrl+C exit";
 
 /** Inline has no mouse (the engine ignores it there): the controller refuses with this. */
 export const MOUSE_INLINE_STATUS = "Mouse is not available in inline mode";
@@ -133,6 +140,25 @@ export function runSlash(text: string, state: CommandState): CommandOutcome {
     return {
       status: `Mouse changed to ${requested}`,
       mouse: requested === "on",
+    };
+  }
+  const sandbox = command.match(/^\/sandbox(?:\s+(\S+))?\s*$/i);
+  if (sandbox) {
+    const requested = sandbox[1]?.toLowerCase();
+    if (!requested)
+      return {
+        status: state.sandbox
+          ? "Sandbox is on: commands run confined, without a card (an ask rule still shows one). Use /sandbox off"
+          : "Sandbox is off: commands ask. Use /sandbox on to run them confined, without a card",
+      };
+    if (requested !== "on" && requested !== "off")
+      return {
+        status: `Unknown sandbox setting: ${requested}. Use /sandbox on or /sandbox off`,
+        unknown: true,
+      };
+    return {
+      status: `Sandbox ${requested}`,
+      sandbox: requested === "on",
     };
   }
   const model = command.match(/^\/model(?:\s+(\S+))?\s*$/i);
@@ -277,6 +303,12 @@ export const SLASH_COMMANDS: readonly SlashCommand[] = [
     usage: "/permissions [clear|trust]",
     description: "show, clear or trust grants and rules",
     insert: "/permissions ",
+  },
+  {
+    name: "/sandbox",
+    usage: "/sandbox on|off",
+    description: "run commands confined (macOS), without a card",
+    insert: "/sandbox ",
   },
   {
     name: "/details",

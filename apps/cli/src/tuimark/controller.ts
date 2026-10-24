@@ -17,6 +17,7 @@ import { join } from "node:path";
 import {
   type AgentEvent,
   type AgentOptions,
+  type Approval,
   type ApprovalRequest,
   admitOllamaModel,
   appendRule,
@@ -36,6 +37,7 @@ import {
   proposeRule,
   runAgent,
   type SessionContext,
+  sandboxUnavailable,
   trustRules,
   trustStorePath,
   type Workspace,
@@ -73,6 +75,7 @@ import {
   transcriptMarkdown,
 } from "#cli/tuimark/export";
 import {
+  APPROVAL_SANDBOX_SESSION_STATUS,
   APPROVAL_STATUS,
   APPROVAL_TRUNCATED_ALWAYS_STATUS,
   APPROVAL_TRUNCATED_SESSION_STATUS,
@@ -195,6 +198,13 @@ export interface ClientOptions {
     provider: Provider,
     signal: AbortSignal,
   ) => Promise<OllamaAdmission>;
+  /**
+   * Commands start in the sandbox (`--sandbox-commands`): where it is
+   * unavailable they ask, and the status says why.
+   */
+  sandbox?: boolean;
+  /** Why the command sandbox is unavailable in a workspace. Default the runtime's check; tests replace. */
+  sandboxUnavailable?: (workspaceRoot: string) => string | undefined;
   /** Process-level abort (SIGINT, SIGTERM). */
   signal: AbortSignal;
   /** Replaces the runtime's agent loop (tests). */
@@ -337,6 +347,10 @@ export class TuimarkClient {
   private proposal?: ApprovalRequest;
   /** The open proposal's preview was truncated: `a` must not grant from it. */
   private proposalTruncated = false;
+  /** `/sandbox`: commands no rule decides run confined, without a card. */
+  private sandbox = false;
+  /** Why the sandbox was last found unavailable (`/status` says it). */
+  private sandboxWhy?: string;
   /**
    * Session grants (`a` on an approval), grant key -> label, in grant order.
    * Memory only: they die with the process and are never persisted. They
@@ -406,6 +420,10 @@ export class TuimarkClient {
   private reportedWriteError = false;
 
   constructor(private readonly options: ClientOptions) {
+    if (options.sandbox) {
+      this.sandboxWhy = this.sandboxProblem();
+      this.sandbox = this.sandboxWhy === undefined;
+    }
     this.run = options.run ?? runAgent;
     this.intent = options.intent;
     this.inline = options.presentation === "inline";
@@ -427,10 +445,17 @@ export class TuimarkClient {
     }
   }
 
+  /** Why commands cannot run in the sandbox here, or undefined when they can. */
+  private sandboxProblem(): string | undefined {
+    const root = this.options.workspace?.root;
+    if (!root) return "no workspace";
+    return (this.options.sandboxUnavailable ?? sandboxUnavailable)(root);
+  }
+
   /** The store the document starts with (the `data` of spawnHost). */
   initialStore(): Store {
     const { session, mcp = [] } = this.options;
-    return initialStore({
+    const store = initialStore({
       provider: this.provider,
       intent: this.intent,
       sessionId: session?.state.publicId,
@@ -444,7 +469,15 @@ export class TuimarkClient {
       transcript: this.inline
         ? { messages: [], earlier: { n: 0 } }
         : this.transcript.snapshot(),
+      sandbox: this.sandbox,
     });
+    // `--sandbox-commands` where the sandbox is unavailable: commands ask,
+    // and the first status says why.
+    if (this.sandboxWhy !== undefined)
+      store.status = oneLine(
+        `Sandbox unavailable: ${this.sandboxWhy} · commands ask`,
+      );
+    return store;
   }
 
   /** Registers the action handlers on a spawned host. */
@@ -496,6 +529,14 @@ export class TuimarkClient {
       if (this.proposalTruncated) {
         await this.write([
           { path: "status", value: APPROVAL_TRUNCATED_SESSION_STATUS },
+        ]);
+        return undefined;
+      }
+      // With the sandbox on, a card lets out only its own command: a grant
+      // would run later ones outside without a card.
+      if (this.sandbox && this.proposal?.kind === "command") {
+        await this.write([
+          { path: "status", value: APPROVAL_SANDBOX_SESSION_STATUS },
         ]);
         return undefined;
       }
@@ -783,6 +824,11 @@ export class TuimarkClient {
       theme: this.theme,
       mouse: this.inline ? "n/a (inline)" : this.mouse ? "on" : "off",
       grants: this.grantLabels(),
+      sandbox: this.sandbox
+        ? "on"
+        : this.sandboxWhy !== undefined
+          ? oneLine(`off (unavailable: ${this.sandboxWhy})`)
+          : "off",
       usedTokens: this.ctx.current,
       mcpServers: mcp.length,
       mcpTools: mcp.reduce((total, server) => total + server.tools.length, 0),
@@ -1166,6 +1212,7 @@ export class TuimarkClient {
       this.options.columns?.() ?? 80,
       this.options.workspace.root,
       this.inline,
+      this.sandbox,
     );
   }
 
@@ -2001,6 +2048,7 @@ export class TuimarkClient {
       theme: this.theme,
       mouse: this.mouse,
       grants: this.grantLabels(),
+      sandbox: this.sandbox,
       ...(rules !== undefined ? { rules } : {}),
     });
     // `/model` runs on controller state and can still be refused there (a
@@ -2063,6 +2111,21 @@ export class TuimarkClient {
     if (outcome.clearGrants) {
       this.grants.clear();
       writes.push(...this.grantsWrites());
+    }
+    if (outcome.sandbox !== undefined) {
+      const why = outcome.sandbox ? this.sandboxProblem() : undefined;
+      if (why !== undefined) this.sandboxWhy = why;
+      this.sandbox = outcome.sandbox && why === undefined;
+      writes[0] = {
+        path: "status",
+        value:
+          why !== undefined
+            ? oneLine(`Sandbox unavailable: ${why} · commands ask`)
+            : this.sandbox
+              ? "Sandbox on: commands run confined, without a card (no network, writes only in the workspace)"
+              : "Sandbox off: commands ask",
+      };
+      writes.push({ path: "header.sandbox_on", value: this.sandbox });
     }
     if (outcome.clearRules) {
       const root = this.options.workspace?.root;
@@ -2166,7 +2229,7 @@ export class TuimarkClient {
   private approve = async (
     proposal: ApprovalRequest,
     signal: AbortSignal,
-  ): Promise<boolean> => {
+  ): Promise<Approval> => {
     signal.throwIfAborted();
     // The workspace's permission file outranks everything interactive: a
     // deny rule refuses (even a session grant), an allow rule approves
@@ -2181,15 +2244,47 @@ export class TuimarkClient {
       this.noteActivity(oneLine(`denied by rule: ${verdict.rule?.pattern}`));
       return false;
     }
-    if (verdict.effect === "allow") {
+    // `/sandbox on`: a command runs confined unless a person approves it on
+    // a card. An allow rule or a session grant only spares the card: run
+    // outside, it could run what a sandboxed command wrote in the
+    // workspace. An ask rule still shows the card.
+    let sandboxLost = false;
+    if (
+      this.sandbox &&
+      proposal.kind === "command" &&
+      this.intent === "build" &&
+      !(verdict.effect === "ask" && verdict.rule)
+    ) {
+      const why = this.sandboxProblem();
+      if (why === undefined) {
+        this.noteActivity(oneLine(`sandboxed: ${proposal.argv.join(" ")}`));
+        return "sandbox";
+      }
+      // It stopped being available: off, and this command asks, whatever
+      // rule or grant would have spared the card.
+      this.sandbox = false;
+      this.sandboxWhy = why;
+      sandboxLost = true;
+      await this.write([
+        { path: "header.sandbox_on", value: false },
+        {
+          path: "status",
+          value: oneLine(`Sandbox unavailable: ${why} · commands ask`),
+        },
+      ]);
+    }
+    if (verdict.effect === "allow" && !sandboxLost) {
       this.noteActivity(oneLine(`allowed by rule: ${verdict.rule?.pattern}`));
       return true;
     }
     // Grants never bypass a non-build intent: the runtime refuses plan and
     // chat mutations before this callback runs, and this keeps it true here.
     const grant = grantFor(proposal);
+    // With the sandbox on, a command runs outside only from its own card.
     const grantedLabel =
-      this.intent === "build"
+      this.intent === "build" &&
+      !sandboxLost &&
+      !(this.sandbox && proposal.kind === "command")
         ? [...this.grants.entries()].find(([key, remembered]) =>
             grantCovers({ key, ...remembered }, proposal),
           )?.[1].label

@@ -4,6 +4,7 @@ import { join } from "node:path";
 import type {
   AgentEvent,
   AgentOptions,
+  Approval,
   ApprovalRequest,
   McpConnection,
   Message,
@@ -28,6 +29,7 @@ import {
 } from "#cli/tuimark/controller";
 import { FakeHost } from "#cli/tuimark/fake-host";
 import {
+  APPROVAL_SANDBOX_SESSION_STATUS,
   APPROVAL_STATUS,
   APPROVAL_TRUNCATED_SESSION_STATUS,
   APPROVAL_TRUNCATED_STATUS,
@@ -397,7 +399,7 @@ function editProposal(diff = "-x\n+y"): ApprovalRequest {
 }
 
 /** What `approve` resolved to, one entry per approval of the running test. */
-const decisions: boolean[] = [];
+const decisions: Approval[] = [];
 
 const withApproval: Script = async function* ({ options }) {
   yield {
@@ -1691,6 +1693,7 @@ test("typing / opens the command popup; it filters, moves and completes", async 
     "/theme",
     "/mouse",
     "/permissions",
+    "/sandbox",
     "/details",
     "/status",
     "/sessions",
@@ -1893,6 +1896,7 @@ test("the help overlay's store carries the slash commands", () => {
     "/theme dark|light|auto",
     "/mouse on|off",
     "/permissions [clear|trust]",
+    "/sandbox on|off",
     "/details",
     "/status",
     "/sessions",
@@ -3631,4 +3635,185 @@ test("esc after a compaction takes back the prompt, not the compaction note", as
   expect(text).toContain("Context compacted");
   expect(text).not.toContain("slow one");
   expect(store(ui).draft).toBe("slow one");
+});
+
+test("sandbox: on, every command runs confined without a card unless a deny or ask rule decides", async () => {
+  const root = await mkdtemp(join(tmpdir(), "la-sandbox-"));
+  await writeRules(root, [
+    { effect: "ask", tool: "run_command", pattern: "git *" },
+    { effect: "deny", tool: "run_command", pattern: "rm *" },
+    { effect: "allow", tool: "run_command", pattern: "npm test *" },
+  ]);
+  await trustRules(root);
+  const { ui, client } = setup(
+    turnsAsking([
+      [
+        commandProposal(["bun", "test"]),
+        commandProposal(["rm", "-rf", "x"]),
+        // An allow rule only spares the card: outside, the command could run
+        // what a sandboxed one wrote.
+        commandProposal(["npm", "test"]),
+      ],
+      [commandProposal(["git", "push", "origin"])],
+      [editProposal()],
+    ]),
+    {
+      workspace: { root } as Workspace,
+      sandbox: true,
+      sandboxUnavailable: () => undefined,
+    },
+  );
+  expect(store(ui).header.sandbox_on).toBe(true);
+  await ui.fire("send", "one");
+  await client.idle();
+  expect(decisions).toEqual(["sandbox", false, "sandbox"]);
+  expect(
+    ui.batches
+      .flat()
+      .some(
+        (w) =>
+          w.path === "status" &&
+          String(w.value).startsWith("sandboxed: bun test"),
+      ),
+  ).toBe(true);
+  // An ask rule wants a person, sandbox or not; so does an edit. The card
+  // says it runs outside, and lets out only its own command: no grant.
+  await ui.fire("send", "two");
+  await untilApproval(ui);
+  expect(store(ui).approval.body).toMatch(/^Runs outside the sandbox, as you/);
+  expect(store(ui).approval.grant_hint).toBe(
+    "sandbox on: session grant unavailable",
+  );
+  await ui.fire("dialog_session");
+  expect(store(ui).status).toBe(APPROVAL_SANDBOX_SESSION_STATUS);
+  expect(store(ui).approval.open).toBe(true);
+  await ui.fire("dialog_cancel");
+  await client.idle();
+  await ui.fire("send", "three");
+  await untilApproval(ui);
+  await ui.fire("dialog_cancel");
+  await client.idle();
+  expect(decisions).toEqual(["sandbox", false, "sandbox", false, false]);
+});
+
+test("sandbox: /sandbox turns it on only where it is available, and /status says so", async () => {
+  let why: string | undefined = "the command sandbox needs macOS (Seatbelt)";
+  const { ui, client } = setup(
+    turnsAsking([
+      [commandProposal(["bun", "test"])],
+      [commandProposal(["bun", "test"])],
+    ]),
+    { sandboxUnavailable: () => why, workspace: { root: "/w" } as Workspace },
+  );
+  await ui.fire("send", "/sandbox");
+  expect(store(ui).status).toBe(
+    "Sandbox is off: commands ask. Use /sandbox on to run them confined, without a card",
+  );
+  await ui.fire("send", "/sandbox on");
+  expect(store(ui).status).toBe(
+    "Sandbox unavailable: the command sandbox needs macOS (Seatbelt) · commands ask",
+  );
+  expect(store(ui).header.sandbox_on).toBe(false);
+  await ui.fire("send", "/status");
+  // (The panel wraps the line at its width.)
+  expect(
+    store(ui).panel.lines.some((line) =>
+      line.t.startsWith("Sandbox: off (unavailable: the command sandbox"),
+    ),
+  ).toBe(true);
+  await ui.fire("panel_close");
+  // Unavailable, a command still asks.
+  await ui.fire("send", "one");
+  await untilApproval(ui);
+  await ui.fire("dialog_cancel");
+  await client.idle();
+  why = undefined;
+  await ui.fire("send", "/sandbox on");
+  expect(store(ui).header.sandbox_on).toBe(true);
+  expect(store(ui).status).toMatch(/^Sandbox on: /);
+  await ui.fire("send", "two");
+  await client.idle();
+  expect(decisions).toEqual([false, "sandbox"]);
+  await ui.fire("send", "/sandbox off");
+  expect(store(ui).header.sandbox_on).toBe(false);
+  expect(store(ui).status).toBe("Sandbox off: commands ask");
+  await ui.fire("send", "/sandbox maybe");
+  expect(store(ui).status).toBe(
+    "Unknown sandbox setting: maybe. Use /sandbox on or /sandbox off",
+  );
+  expect(store(ui).header.sandbox_on).toBe(false);
+});
+
+test("sandbox: --sandbox-commands where it is unavailable starts off and says why", async () => {
+  const { ui, client } = setup(turnsAsking([[commandProposal(["ls"])]]), {
+    sandbox: true,
+    sandboxUnavailable: () => "the workspace contains your home folder",
+    workspace: { root: "/w" } as Workspace,
+  });
+  expect(store(ui).status).toBe(
+    "Sandbox unavailable: the workspace contains your home folder · commands ask",
+  );
+  expect(store(ui).header.sandbox_on).toBe(false);
+  await ui.fire("send", "one");
+  await untilApproval(ui);
+  await ui.fire("dialog_cancel");
+  await client.idle();
+  expect(decisions).toEqual([false]);
+});
+
+test("sandbox: a session grant made before runs its command confined once the sandbox is on", async () => {
+  const { ui, client } = setup(
+    turnsAsking([
+      [commandProposal(["bun", "test"])],
+      [commandProposal(["bun", "test", "a.ts"])],
+    ]),
+    {
+      sandboxUnavailable: () => undefined,
+      workspace: { root: "/w" } as Workspace,
+    },
+  );
+  await ui.fire("send", "one");
+  await untilApproval(ui);
+  await ui.fire("dialog_session");
+  await client.idle();
+  await ui.fire("send", "/sandbox on");
+  await ui.fire("send", "two");
+  await client.idle();
+  expect(decisions).toEqual([true, "sandbox"]);
+});
+
+test("sandbox: a sandbox that stops being available makes the next command ask, an allow rule's too", async () => {
+  const root = await mkdtemp(join(tmpdir(), "la-sandbox-"));
+  await writeRules(root, [
+    { effect: "allow", tool: "run_command", pattern: "bun test *" },
+  ]);
+  await trustRules(root);
+  let why: string | undefined;
+  const { ui, client } = setup(
+    turnsAsking([
+      [commandProposal(["bun", "test"])],
+      [commandProposal(["bun", "test"])],
+    ]),
+    {
+      sandbox: true,
+      sandboxUnavailable: () => why,
+      workspace: { root } as Workspace,
+    },
+  );
+  await ui.fire("send", "one");
+  await client.idle();
+  expect(decisions).toEqual(["sandbox"]);
+  why = "the workspace contains your home folder";
+  await ui.fire("send", "two");
+  await untilApproval(ui);
+  expect(store(ui).header.sandbox_on).toBe(false);
+  // (The card's own status follows it.)
+  expect(ui.batches.flat()).toContainEqual({
+    path: "status",
+    value:
+      "Sandbox unavailable: the workspace contains your home folder · commands ask",
+  });
+  await ui.fire("dialog_cancel");
+  await client.idle();
+  expect(decisions).toEqual(["sandbox", false]);
 });

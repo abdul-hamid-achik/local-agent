@@ -32,6 +32,7 @@ import {
 } from "#runtime/instructions";
 import { gatewayTarget, type McpConnection } from "#runtime/mcp";
 import { assertFetchTarget, type FetchPolicy, fetchPolicy } from "#runtime/net";
+import { sandboxUnavailable } from "#runtime/sandbox";
 import type { ExecutionEvent, Session, SessionStore } from "#runtime/session";
 import type {
   Workspace,
@@ -1278,11 +1279,28 @@ export type AgentEvent =
 
 export type SessionContext = { store: SessionStore; state: Session };
 
+export type Approval = boolean | "sandbox";
+
+/** Told to the model with a sandboxed command that failed. */
+const SANDBOX_NOTE =
+  "This ran in the command sandbox: no network at all (not even this machine: no downloads, no DNS, no test server of its own), no writes outside the workspace (nor to any .git folder, .gitattributes or .local-agent), no reads in the home folder beyond toolchains, their caches, ~/.gitconfig and ~/.tool-versions. A failure caused by that (Operation not permitted, a refused connection) fails the same way on a retry: tell the user, who can run it outside the sandbox.";
+
 export type AgentOptions = {
   workspace: Workspace;
   /** Plan and chat deny effects even if the approval callback would allow them. */
   intent?: Intent;
-  approve: (proposal: ApprovalRequest, signal: AbortSignal) => Promise<boolean>;
+  /**
+   * The host's decision on an effect: true runs it, false refuses it, and
+   * "sandbox" (commands only) runs a command confined by sandbox.ts. Any
+   * other proposal answered "sandbox" is refused, as is a command when the
+   * sandbox is unavailable: nothing meant for it runs outside it.
+   */
+  approve: (
+    proposal: ApprovalRequest,
+    signal: AbortSignal,
+  ) => Promise<Approval>;
+  /** Why commands cannot run in the sandbox. Default the runtime's check; tests replace. */
+  sandboxUnavailable?: (workspaceRoot: string) => string | undefined;
   signal: AbortSignal;
   session?: SessionContext;
   mcp?: readonly McpConnection[];
@@ -2043,16 +2061,29 @@ async function* agentTurn(
             record("approval_requested");
             const allowed = await options.approve(proposal, signal);
             signal.throwIfAborted();
-            if (allowed !== true) {
+            const sandboxed = allowed === "sandbox";
+            const unavailable = sandboxed
+              ? (options.sandboxUnavailable ?? sandboxUnavailable)(
+                  workspace.root,
+                )
+              : undefined;
+            if (allowed !== true && !sandboxed) {
               status = "denied";
               output =
                 "Command not approved. Do not repeat it unchanged: ask the user, or take another approach.";
+            } else if (unavailable) {
+              status = "denied";
+              output = `Command not run: the command sandbox is unavailable (${unavailable}). Ask the user to approve it.`;
             } else {
               record("approved");
               yield* emitStart();
               signal.throwIfAborted();
               effectAttempted = true;
-              const result = await executeApprovedCommand(proposal, signal);
+              const result = await executeApprovedCommand(
+                proposal,
+                signal,
+                sandboxed ? {} : undefined,
+              );
               uncertain =
                 result.timedOut || result.cancelled || result.cleanupIncomplete;
               status =
@@ -2064,6 +2095,9 @@ async function* agentTurn(
                 output: result.output.slice(0, outputLimit),
                 truncated:
                   result.truncated || result.output.length > outputLimit,
+                ...(sandboxed && status === "failed"
+                  ? { note: SANDBOX_NOTE }
+                  : {}),
               });
             }
           }

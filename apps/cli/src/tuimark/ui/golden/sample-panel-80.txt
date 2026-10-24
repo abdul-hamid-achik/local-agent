@@ -17,7 +17,7 @@
 │ │  │Session: a1b2c3d                                                    ┃  │ │
 │ │  │Session db: /home/me/project/sessions.db                            ┃  │ │
 │ │  │Theme: auto                                                         ┃  │ │
-│ │  │Mouse: off                                                          ┃  │ │
+│ │  │Mouse: off                                                          │  │ │
 │ │  │Grants: files                                                       │  │ │
 │ │  └────────────────────────────────────────────────────────────────────┘  │ │
 │ │  pgup/pgdn scroll · home/end top/bottom · esc or q close                 │ │

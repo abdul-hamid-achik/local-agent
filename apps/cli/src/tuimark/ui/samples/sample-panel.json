@@ -10,7 +10,8 @@
     "ctx_warn": false,
     "ctx_danger": false,
     "grants": "auto: files",
-    "grants_on": true
+    "grants_on": true,
+    "sandbox_on": false
   },
   "empty": false,
   "mouse_on": true,
@@ -368,6 +369,13 @@
       },
       {
         "n": 12,
+        "t": "Sandbox: off",
+        "add": false,
+        "del": false,
+        "note": false
+      },
+      {
+        "n": 13,
         "t": "MCP: 1 servers · 2 tools",
         "add": false,
         "del": false,
@@ -528,6 +536,11 @@
         "id": "/permissions",
         "cmd": "/permissions [clear|trust]",
         "desc": "show, clear or trust grants and rules"
+      },
+      {
+        "id": "/sandbox",
+        "cmd": "/sandbox on|off",
+        "desc": "run commands confined (macOS), without a card"
       },
       {
         "id": "/details",

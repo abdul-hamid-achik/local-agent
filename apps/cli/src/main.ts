@@ -15,6 +15,7 @@ import {
   runAgent,
   type SessionContext,
   SessionStore,
+  sandboxUnavailable,
   sessionProblem,
   Workspace,
   workspaceRules,
@@ -87,6 +88,7 @@ try {
       "approve-edits": { type: "boolean", default: false },
       "approve-commands": { type: "boolean", default: false },
       "approve-mcp": { type: "boolean", default: false },
+      "sandbox-commands": { type: "boolean", default: false },
       "mcp-config": { type: "string" },
       "no-mcp": { type: "boolean", default: false },
       "session-db": { type: "string" },
@@ -134,6 +136,13 @@ bun dev [--model MODEL (default: ${DEFAULT_OLLAMA_MODEL})] [--mode fullscreen|in
                        ${defaultMcpConfigPath()} when it exists)
   --no-mcp             Start without the default MCP servers
   --approve-mcp        Allow configured MCP tool calls in headless mode
+  --sandbox-commands   Run commands in the macOS sandbox, without asking: no
+                       network (not even this machine), writes only in the
+                       workspace, no reads in the home folder beyond
+                       toolchains. Deny rules still refuse; headless, ask
+                       rules refuse and allow rules run confined too, so no
+                       command runs outside it. Instead of --approve-commands;
+                       in Tuimark, /sandbox on at start
   --session-db PATH    Opt into experimental durable sessions in a separate database
   --resume HANDLE      Resume a completed session from --session-db
   --sessions           List sessions in this workspace without contacting a model
@@ -218,6 +227,10 @@ Interrupted tool outcomes require inspection; they are never automatically repla
       )
         throw new Error(
           "--approve-edits, --approve-commands and --approve-mcp are only available in headless mode",
+        );
+      if (values["sandbox-commands"] && values["approve-commands"])
+        throw new Error(
+          "Choose --approve-commands (commands run as you) or --sandbox-commands (confined), not both",
         );
       if (!headless && (!process.stdin.isTTY || !process.stdout.isTTY))
         throw new Error(
@@ -365,6 +378,19 @@ Interrupted tool outcomes require inspection; they are never automatically repla
               client = "vue";
             }
           }
+          if (values["sandbox-commands"]) {
+            if (!headless && client !== "tuimark")
+              throw new Error(
+                "--sandbox-commands needs headless mode or the Tuimark client",
+              );
+            // Unattended, nobody could answer instead: an unavailable
+            // sandbox stops the run before anything starts. Tuimark falls
+            // back to asking and says why.
+            const why = headless
+              ? sandboxUnavailable(workspace.root)
+              : undefined;
+            if (why) throw new Error(`--sandbox-commands: ${why}`);
+          }
           if (configs.length > 0) {
             const started = connectMcpServers(
               configs,
@@ -429,6 +455,16 @@ Interrupted tool outcomes require inspection; they are never automatically repla
                 compact: true,
                 approve: async (proposal) => {
                   const verdict = await fileRules.verdict(proposal);
+                  // --sandbox-commands: no command runs outside the sandbox.
+                  // A deny rule refuses; an ask rule wants a person, and
+                  // unattended there is none; an allow rule runs confined
+                  // too, since outside it could run what a sandboxed
+                  // command wrote in the workspace.
+                  if (proposal.kind === "command" && values["sandbox-commands"])
+                    return verdict.effect === "deny" ||
+                      (verdict.effect === "ask" && verdict.rule)
+                      ? false
+                      : "sandbox";
                   if (verdict.effect !== "ask")
                     return verdict.effect === "allow";
                   return proposal.kind === "edit" || proposal.kind === "write"
@@ -468,6 +504,7 @@ Interrupted tool outcomes require inspection; they are never automatically repla
                 mcpNames,
                 ...(mcpReady ? { mcpReady } : {}),
                 ...(bin ? { resolve: async () => bin } : {}),
+                ...(values["sandbox-commands"] ? { sandbox: true } : {}),
               },
             );
           } else {

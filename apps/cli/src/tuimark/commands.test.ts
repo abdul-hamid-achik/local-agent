@@ -203,6 +203,7 @@ test("the slash catalog lists exactly the commands the parser knows", () => {
     "/theme",
     "/mouse",
     "/permissions",
+    "/sandbox",
     "/details",
     "/status",
     "/sessions",
@@ -252,6 +253,7 @@ test("the slash catalog lists exactly the commands the parser knows", () => {
     "/theme dark|light|auto",
     "/mouse on|off",
     "/permissions [clear|trust]",
+    "/sandbox on|off",
     "/details",
     "/status",
     "/sessions",
@@ -284,6 +286,7 @@ test("/status, /sessions and /export ask the controller for their panels and fil
   expect(HELP_STATUS).toContain("/sessions");
   expect(HELP_STATUS).toContain("/export");
   expect(slashMatches("/s")?.map((c) => c.name)).toEqual([
+    "/sandbox",
     "/status",
     "/sessions",
   ]);

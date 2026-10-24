@@ -229,6 +229,8 @@ export interface LaunchDeps {
   mcpNames?: readonly string[];
   /** Servers still connecting (see ClientOptions.mcpReady). */
   mcpReady?: ClientOptions["mcpReady"];
+  /** `--sandbox-commands`: commands start in the sandbox (ClientOptions.sandbox). */
+  sandbox?: boolean;
   /** Replaces the store-built `/sessions` capability (tests). */
   sessions?: SessionsCapability;
   spawn?: typeof spawnHost;
@@ -289,6 +291,7 @@ export async function runTuimark(
     mcp,
     mcpNames: deps.mcpNames,
     ...(deps.mcpReady ? { mcpReady: deps.mcpReady } : {}),
+    ...(deps.sandbox ? { sandbox: true } : {}),
     signal,
     run: deps.run,
     columns: () => stdout.columns ?? readyColumns,

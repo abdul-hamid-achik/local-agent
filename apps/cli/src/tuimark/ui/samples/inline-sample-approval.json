@@ -10,7 +10,8 @@
     "ctx_warn": false,
     "ctx_danger": false,
     "grants": "",
-    "grants_on": false
+    "grants_on": false,
+    "sandbox_on": false
   },
   "empty": false,
   "mouse_on": true,
@@ -308,6 +309,11 @@
         "id": "/permissions",
         "cmd": "/permissions [clear|trust]",
         "desc": "show, clear or trust grants and rules"
+      },
+      {
+        "id": "/sandbox",
+        "cmd": "/sandbox on|off",
+        "desc": "run commands confined (macOS), without a card"
       },
       {
         "id": "/details",
