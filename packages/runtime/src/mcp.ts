@@ -46,6 +46,7 @@ export class McpStartError extends Error {
 export function lastStderrLine(text: string): string | undefined {
   const line = Bun.stripANSI(text)
     .split(/\r?\n/)
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: remove control characters from a server's stderr
     .map((part) => part.replace(/[\u0000-\u001f\u007f-\u009f]/g, "").trim())
     .filter(Boolean)
     .at(-1);
