@@ -54,3 +54,6 @@ apps/desktop/release/
 
 # Stale local tool caches
 .crush/
+
+# Playwright MCP run artifacts
+.playwright-mcp/
