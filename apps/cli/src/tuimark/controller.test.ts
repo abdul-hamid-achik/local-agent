@@ -13,6 +13,8 @@ import type {
   OllamaAdmission,
   Provider,
   Question,
+  RecoveryItem,
+  Session,
   SessionContext,
   Workspace,
 } from "@local-agent/runtime";
@@ -2251,6 +2253,7 @@ test("typing / opens the command popup; it filters, moves and completes", async 
     "/status",
     "/provider",
     "/sessions",
+    "/recover",
     "/find",
     "/export",
     "/mcp",
@@ -2456,6 +2459,7 @@ test("the help overlay's store carries the slash commands", () => {
     "/status",
     "/provider",
     "/sessions [new]",
+    "/recover [N outcome]",
     "/find TEXT",
     "/export [json]",
     "/mcp",
@@ -3062,6 +3066,195 @@ function capabilityFor(contexts: Record<string, SessionContext>) {
     },
   };
 }
+
+/** A session with `items` awaiting recovery; `reconcile` clears the one it records. */
+function recoverable(
+  session: SessionContext,
+  items: RecoveryItem[],
+  saved: (state: Session) => { state: Session; closed: number } = (state) => ({
+    state,
+    closed: 0,
+  }),
+) {
+  const recorded: unknown[] = [];
+  return {
+    recorded,
+    sessions: {
+      ...capabilityFor({ [session.state.publicId]: session }),
+      recovery: () => items,
+      reconcile: async (
+        _session: SessionContext,
+        executionId: string,
+        disposition: string,
+        note: string,
+      ) => {
+        recorded.push({ executionId, disposition, note });
+        items.splice(
+          items.findIndex((item) => item.executionId === executionId),
+          1,
+        );
+        return saved({ ...session.state, revision: 2 } as Session);
+      },
+    },
+  };
+}
+
+const unknownCall = (executionId: string, summary: string): RecoveryItem => ({
+  executionId,
+  toolName: "run_command",
+  state: "ran",
+  summary,
+  at: "2026-10-24T00:00:00.000Z",
+});
+
+test("/recover lists the calls whose outcome is unknown, and a turn waits until each is recorded", async () => {
+  const session = fakeSession("aaa111", [{ role: "user", content: "go" }]);
+  const items = [
+    unknownCall("e1", "make deploy"),
+    { ...unknownCall("e2", ""), toolName: "mcp_write", state: "unknown" },
+  ] satisfies RecoveryItem[];
+  const { sessions, recorded } = recoverable(session, items);
+  const { ui, client, seen } = setup(reply("done"), { session, sessions });
+  await ui.fire("send", "hello");
+  expect(seen).toHaveLength(0);
+  expect(store(ui).status).toBe(
+    "2 calls have an unknown outcome · /recover to review before continuing",
+  );
+  await ui.fire("send", "/recover");
+  expect(store(ui).panel.title).toBe("Recover");
+  const lines = store(ui).panel.lines.map((line) => line.t);
+  expect(lines).toContain(
+    "1. run_command make deploy · it started and has no result",
+  );
+  expect(lines).toContain("2. mcp_write · its result is unknown");
+  expect(store(ui).status).toBe(
+    "2 calls with an unknown outcome · /recover N applied|not-applied|undone",
+  );
+  await ui.fire("send", "/recover 3 applied");
+  expect(store(ui).status).toBe("No call 3 to recover: /recover lists 2");
+  expect(recorded).toEqual([]);
+  await ui.fire("send", "/recover 1 not-applied nothing changed");
+  await client.idle();
+  expect(recorded).toEqual([
+    {
+      executionId: "e1",
+      disposition: "effect_not_applied",
+      note: "nothing changed",
+    },
+  ]);
+  expect(store(ui).status).toBe(
+    "Recorded: run_command · it made no change · 1 left: /recover",
+  );
+  expect(store(ui).panel.open).toBe(false);
+  expect(session.state.revision).toBe(2);
+  await ui.fire("send", "hello");
+  expect(seen).toHaveLength(0);
+  expect(store(ui).status).toBe(
+    "1 call has an unknown outcome · /recover to review before continuing",
+  );
+  await ui.fire("send", "/recover 1 applied");
+  await client.idle();
+  expect(store(ui).status).toBe(
+    "Recorded: mcp_write · it ran and its change is in place",
+  );
+  await ui.fire("send", "/recover");
+  expect(store(ui).status).toBe(
+    "Nothing to recover: no call in this session has an unknown outcome",
+  );
+  await ui.fire("send", "hello");
+  await client.idle();
+  expect(seen).toHaveLength(1);
+});
+
+test("/recover reloads the conversation when a recorded call gets its result, and says why it cannot record", async () => {
+  const call: Message = {
+    role: "assistant",
+    content: "",
+    tool_calls: [
+      { id: "c1", function: { name: "run_command", arguments: {} } },
+    ],
+  };
+  const session = fakeSession("aaa111", [
+    { role: "user", content: "deploy it" },
+    call,
+  ]);
+  const { sessions } = recoverable(
+    session,
+    [unknownCall("e1", "make deploy")],
+    (state) => ({
+      state: {
+        ...state,
+        messages: [
+          ...state.messages,
+          {
+            role: "tool",
+            tool_name: "run_command",
+            tool_call_id: "c1",
+            content: JSON.stringify({ status: "failed", output: "checked" }),
+          },
+        ],
+      },
+      closed: 1,
+    }),
+  );
+  const { ui, client } = setup(reply("done"), { session, sessions });
+  await ui.fire("send", "/recover 1 undone");
+  await client.idle();
+  expect(store(ui).status).toBe(
+    "Recorded: run_command · its change was undone",
+  );
+  // The call now has its result, as the store saved it.
+  expect(store(ui).messages[1]?.card).toMatchObject({
+    name: "run_command",
+    status: "failed",
+    out: ["checked"],
+  });
+  // A refusal from the store is the status; nothing else changes.
+  const failing = {
+    ...recoverable(session, [unknownCall("e2", "rm -rf build")]).sessions,
+    reconcile: async () => {
+      throw new Error("No execution e2 awaits recovery in this session");
+    },
+  };
+  const other = setup(reply("done"), { session, sessions: failing });
+  await other.ui.fire("send", "/recover 1 applied");
+  await other.client.idle();
+  expect(store(other.ui).status).toBe(
+    "No execution e2 awaits recovery in this session",
+  );
+  // Without a session store there is nothing to recover from.
+  const bare = setup(reply("done"));
+  await bare.ui.fire("send", "/recover");
+  expect(store(bare.ui).status).toBe(
+    "Recovery needs --session-db PATH at startup",
+  );
+});
+
+test("/recover waits while a turn runs, and a failed turn names it when a call is left unknown", async () => {
+  const session = fakeSession("aaa111", []);
+  const items: RecoveryItem[] = [];
+  const { sessions } = recoverable(session, items);
+  let release: () => void = () => {};
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const { ui, client } = setup(
+    quiet(async () => {
+      await gate;
+      items.push(unknownCall("e1", "make deploy"));
+      throw new Error("The MCP server failed after the call was sent");
+    }),
+    { session, sessions },
+  );
+  await ui.fire("send", "deploy it");
+  await ui.fire("send", "/recover");
+  expect(store(ui).status).toBe(BUSY_STATUS);
+  release();
+  await client.idle();
+  expect(store(ui).status).toBe(
+    "The MCP server failed after the call was sent /recover reviews it.",
+  );
+});
 
 test("/status opens the panel with the config the client actually holds", async () => {
   const session = fakeSession("abc123", []);

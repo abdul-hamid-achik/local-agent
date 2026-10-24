@@ -7,7 +7,7 @@ import { z } from "zod";
 import { type Message, MessageSchema } from "#runtime/index";
 import { tryLockFile } from "#runtime/workspace_native";
 
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 const MAX_STATE_BYTES = 8 * 1024 * 1024;
 /** How long a write waits for another process's lock before SQLITE_BUSY. */
 const BUSY_TIMEOUT_MS = 5000;
@@ -64,6 +64,51 @@ export type ExecutionEvent = Readonly<{
   detail?: string;
 }>;
 
+/**
+ * The user's conclusion about an execution whose outcome is unknown, beside
+ * the ledger rather than in it (ADR-0006): one immutable row per execution,
+ * bound to the latest event it concluded about.
+ */
+const RECONCILIATIONS_DDL = `
+  CREATE TABLE execution_reconciliations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    workspace_id TEXT NOT NULL,
+    execution_id TEXT NOT NULL UNIQUE,
+    latest_event_id INTEGER NOT NULL,
+    latest_event_type TEXT NOT NULL CHECK (latest_event_type IN ('started','outcome_unknown')),
+    disposition TEXT NOT NULL CHECK (disposition IN ('effect_applied','effect_not_applied','effect_compensated')),
+    note TEXT NOT NULL DEFAULT '' CHECK (length(note) <= 1000),
+    actor TEXT NOT NULL,
+    evidence_json TEXT NOT NULL CHECK (length(evidence_json) <= 16384),
+    evidence_sha256 TEXT NOT NULL CHECK (length(evidence_sha256) = 64),
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+  );
+  CREATE TRIGGER execution_reconciliations_scope_guard BEFORE INSERT ON execution_reconciliations WHEN NOT EXISTS (SELECT 1 FROM execution_events WHERE id = NEW.latest_event_id AND session_id = NEW.session_id AND workspace_id = NEW.workspace_id AND execution_id = NEW.execution_id AND event_type = NEW.latest_event_type) BEGIN SELECT RAISE(ABORT, 'reconciliation does not match its execution'); END;
+  CREATE TRIGGER execution_reconciliations_no_update BEFORE UPDATE ON execution_reconciliations BEGIN SELECT RAISE(ABORT, 'reconciliations are append-only'); END;
+  CREATE TRIGGER execution_reconciliations_no_delete BEFORE DELETE ON execution_reconciliations BEGIN SELECT RAISE(ABORT, 'reconciliations are append-only'); END;
+`;
+/** The hazards' latest events, less those a reconciliation concluded. */
+const EFFECTIVE_HAZARDS =
+  "SELECT e.* FROM execution_events e JOIN (SELECT execution_id, MAX(id) id FROM execution_events WHERE session_id = ? AND workspace_id = ? GROUP BY execution_id) latest ON latest.id = e.id WHERE (e.event_type = 'outcome_unknown' OR (e.event_type = 'started' AND e.effect_class != 'read_only')) AND NOT EXISTS (SELECT 1 FROM execution_reconciliations r WHERE r.execution_id = e.execution_id AND r.latest_event_id = e.id) ORDER BY e.id";
+
+export type Disposition =
+  | "effect_applied"
+  | "effect_not_applied"
+  | "effect_compensated";
+export type Reconciliation = Readonly<{
+  sessionId: number;
+  workspaceId: string;
+  executionId: string;
+  latestEventId: number;
+  latestEventType: "started" | "outcome_unknown";
+  disposition: Disposition;
+  note: string;
+  actor: string;
+  evidenceJson: string;
+  evidenceSha256: string;
+}>;
+
 const alphabet = "0123456789abcdefghijklmnopqrstuvwxyz";
 
 /**
@@ -118,7 +163,7 @@ export class SessionStore {
           )
           .get();
         if (!meta) throw new Error("unsupported session database format");
-        if (meta.version !== 1 && meta.version !== SCHEMA_VERSION) {
+        if (![1, 2, SCHEMA_VERSION].includes(meta.version)) {
           throw new Error(`unsupported session schema version ${meta.version}`);
         }
       } catch (error) {
@@ -149,7 +194,7 @@ export class SessionStore {
           "SELECT version FROM schema_meta LIMIT 1",
         )
         .get();
-      if (row?.version === 1) {
+      if (row?.version === 1 || row?.version === 2) {
         db.transaction(() => {
           const locked = db
             .query<{ version: number }, []>(
@@ -157,15 +202,18 @@ export class SessionStore {
             )
             .get();
           if (!locked) throw new Error("unsupported session database format");
-          if (locked.version === 1) {
+          if (locked.version === 1)
             db.exec(`
               ALTER TABLE execution_events ADD COLUMN provider_call_id TEXT;
               ALTER TABLE execution_events ADD COLUMN iteration INTEGER;
               ALTER TABLE execution_events ADD COLUMN ordinal INTEGER;
               ALTER TABLE execution_events ADD COLUMN kind TEXT;
               CREATE UNIQUE INDEX execution_events_logical_slot ON execution_events(session_id, workspace_id, run_id, turn_id, iteration, ordinal) WHERE event_type = 'requested' AND iteration IS NOT NULL AND ordinal IS NOT NULL;
-              UPDATE schema_meta SET version = ${SCHEMA_VERSION};
             `);
+          if (locked.version === 1 || locked.version === 2) {
+            db.exec(
+              `${RECONCILIATIONS_DDL} UPDATE schema_meta SET version = ${SCHEMA_VERSION};`,
+            );
           } else if (locked.version !== SCHEMA_VERSION) {
             throw new Error(
               `unsupported session schema version ${locked.version}`,
@@ -239,6 +287,7 @@ export class SessionStore {
         CREATE TRIGGER execution_events_no_update BEFORE UPDATE ON execution_events BEGIN SELECT RAISE(ABORT, 'execution events are append-only'); END;
         CREATE TRIGGER execution_events_no_delete BEFORE DELETE ON execution_events BEGIN SELECT RAISE(ABORT, 'execution events are append-only'); END;
         CREATE INDEX execution_events_session ON execution_events(session_id, workspace_id, id);
+        ${RECONCILIATIONS_DDL}
         INSERT INTO schema_meta(version) VALUES (${SCHEMA_VERSION});
           `);
         }).immediate();
@@ -482,12 +531,124 @@ export class SessionStore {
       );
   }
 
+  /**
+   * Executions that block continuation: their latest event is
+   * `outcome_unknown`, or `started` and not read-only, and no
+   * reconciliation concluded about that event.
+   */
   listHazards(sessionId: number, workspaceId: string): EventRow[] {
     return this.db
+      .query<EventRow, [number, string]>(EFFECTIVE_HAZARDS)
+      .all(sessionId, workspaceId);
+  }
+
+  /** The latest event of each execution that has no terminal event yet. */
+  listOpenExecutions(sessionId: number, workspaceId: string): EventRow[] {
+    return this.db
       .query<EventRow, [number, string]>(
-        "SELECT e.* FROM execution_events e JOIN (SELECT execution_id, MAX(id) id FROM execution_events WHERE session_id = ? AND workspace_id = ? GROUP BY execution_id) latest ON latest.id = e.id WHERE e.event_type = 'outcome_unknown' OR (e.event_type = 'started' AND e.effect_class != 'read_only') ORDER BY e.id",
+        "SELECT e.* FROM execution_events e JOIN (SELECT execution_id, MAX(id) id FROM execution_events WHERE session_id = ? AND workspace_id = ? GROUP BY execution_id) latest ON latest.id = e.id WHERE e.event_type IN ('requested','approval_requested','approved','started') ORDER BY e.id",
       )
       .all(sessionId, workspaceId);
+  }
+
+  /** The reconciliation of an execution in this session, if any. */
+  reconciliationOf(
+    sessionId: number,
+    executionId: string,
+  ): ReconciliationRow | undefined {
+    return (
+      this.db
+        .query<ReconciliationRow, [number, string]>(
+          "SELECT * FROM execution_reconciliations WHERE session_id = ? AND execution_id = ?",
+        )
+        .get(sessionId, executionId) ?? undefined
+    );
+  }
+
+  /**
+   * Closes interrupted calls (ADR-0006): appends their terminal events,
+   * records a reconciliation when given, and saves the messages, in one
+   * transaction under the revision check. A reconciliation must still
+   * conclude about the execution's latest event, and that event must still
+   * be a hazard.
+   */
+  recover(change: {
+    sessionId: number;
+    workspaceId: string;
+    expectedRevision: number;
+    events: ExecutionEvent[];
+    messages?: SessionMessage[];
+    reconciliation?: Reconciliation;
+  }): Session {
+    for (const event of change.events)
+      if (!isTerminal(event.type))
+        throw new Error("recovery appends only terminal events");
+    const encoded =
+      change.messages === undefined
+        ? undefined
+        : encodeMessages(change.messages);
+    return this.db
+      .transaction(() => {
+        const settle = change.reconciliation;
+        if (settle) {
+          if (
+            settle.sessionId !== change.sessionId ||
+            settle.workspaceId !== change.workspaceId
+          )
+            throw new Error("reconciliation belongs to another session");
+          const hazard = this.db
+            .query<EventRow, [number, string]>(EFFECTIVE_HAZARDS)
+            .all(change.sessionId, change.workspaceId)
+            .find((row) => row.execution_id === settle.executionId);
+          if (
+            !hazard ||
+            hazard.id !== settle.latestEventId ||
+            hazard.event_type !== settle.latestEventType
+          )
+            throw new Error(
+              "that execution is not an open hazard at this event any more",
+            );
+          this.db
+            .query(
+              "INSERT INTO execution_reconciliations(session_id, workspace_id, execution_id, latest_event_id, latest_event_type, disposition, note, actor, evidence_json, evidence_sha256) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            )
+            .run(
+              settle.sessionId,
+              settle.workspaceId,
+              settle.executionId,
+              settle.latestEventId,
+              settle.latestEventType,
+              settle.disposition,
+              settle.note,
+              settle.actor,
+              settle.evidenceJson,
+              settle.evidenceSha256,
+            );
+        }
+        for (const event of change.events) {
+          if (
+            event.sessionId !== change.sessionId ||
+            event.workspaceId !== change.workspaceId
+          )
+            throw new Error("event belongs to another session");
+          this.appendEventUnsafe(event);
+        }
+        if (encoded !== undefined)
+          return this.saveStateUnsafe(
+            change.sessionId,
+            change.workspaceId,
+            change.expectedRevision,
+            encoded,
+          );
+        const row = this.db
+          .query<SessionRow, [number, string, number]>(
+            "SELECT * FROM sessions WHERE id = ? AND workspace_id = ? AND revision = ?",
+          )
+          .get(change.sessionId, change.workspaceId, change.expectedRevision);
+        if (!row) throw new Error("session state revision conflict");
+        return readSessionRow(row);
+      })
+      .immediate();
   }
 
   async acquireLease(
@@ -562,6 +723,22 @@ export type EventRow = {
   result_sha256: string;
   result_receipt: string;
   detail: string;
+  created_at: string;
+};
+
+export type ReconciliationRow = {
+  id: number;
+  session_id: number;
+  workspace_id: string;
+  execution_id: string;
+  latest_event_id: number;
+  latest_event_type: "started" | "outcome_unknown";
+  disposition: Disposition;
+  note: string;
+  actor: string;
+  evidence_json: string;
+  evidence_sha256: string;
+  created_at: string;
 };
 
 function readSessionRow(row: SessionRow): Session {

@@ -18,10 +18,12 @@ import {
   SessionStore,
   sandboxUnavailable,
   sessionProblem,
+  settleSession,
   Workspace,
   workspaceRules,
 } from "@local-agent/runtime";
 import { terminalText } from "@local-agent/vue-tui/text";
+import { recoverCommand } from "#cli/recover";
 import { terminalTrustIO, trustRulesCommand } from "#cli/trust-rules";
 import { interactiveClient, parseUi } from "#cli/ui-flag";
 
@@ -97,6 +99,10 @@ try {
       sessions: { type: "boolean" },
       "session-info": { type: "string" },
       "recovery-info": { type: "string" },
+      recover: { type: "string" },
+      resolve: { type: "string" },
+      note: { type: "string" },
+      apply: { type: "boolean", default: false },
       "mcp-status": { type: "boolean", default: false },
       "trust-rules": { type: "boolean", default: false },
     },
@@ -149,12 +155,16 @@ bun dev [--model MODEL (default: ${DEFAULT_OLLAMA_MODEL})] [--mode fullscreen|in
   --sessions           List sessions in this workspace without contacting a model
   --session-info ID    Inspect saved state and recovery hazards without running tools
   --recovery-info ID   Inspect recovery review tokens without transcript or raw receipts
+  --recover ID         List the session's calls whose outcome is unknown; with
+                       --resolve EXECUTION=applied|not-applied|undone [--note TEXT],
+                       show what would be recorded, and record it with --apply
   --mcp-status         Check the MCP config (--mcp-config or the default) and list tools
   --trust-rules        List the workspace's untrusted allow rules and trust them
                        after you type yes (the terminal form of /permissions trust)
 
 Chalupa profiles come from the environment supplied by chalupa exec.
-Interrupted tool outcomes require inspection; they are never automatically replayed.`);
+Interrupted tool outcomes require inspection; they are never automatically replayed.
+A resumed session first closes the calls it was interrupted before running.`);
   } else if (values["trust-rules"]) {
     using workspace = await Workspace.create(values.workspace);
     process.exitCode = await trustRulesCommand(
@@ -195,6 +205,7 @@ Interrupted tool outcomes require inspection; they are never automatically repla
         values.sessions,
         values["session-info"],
         values["recovery-info"],
+        values.recover,
       ].filter(Boolean).length > 1
     )
       throw new Error("Choose one session operation");
@@ -202,14 +213,28 @@ Interrupted tool outcomes require inspection; they are never automatically repla
       (values.resume ||
         values.sessions ||
         values["session-info"] ||
-        values["recovery-info"]) &&
+        values["recovery-info"] ||
+        values.recover) &&
       !values["session-db"]
     )
       throw new Error("Session operations require --session-db");
+    if (
+      values.recover === undefined &&
+      (values.resolve !== undefined ||
+        values.note !== undefined ||
+        values.apply)
+    )
+      throw new Error("--resolve, --note and --apply go with --recover ID");
+    if (
+      values.resolve === undefined &&
+      (values.note !== undefined || values.apply)
+    )
+      throw new Error("--note and --apply need --resolve EXECUTION=OUTCOME");
     const inspect =
       values.sessions ||
       values["session-info"] !== undefined ||
-      values["recovery-info"] !== undefined;
+      values["recovery-info"] !== undefined ||
+      values.recover !== undefined;
     const prompt = values.prompt ?? "";
     const headless =
       values.mode === "headless" || values.prompt !== undefined || values.json;
@@ -245,7 +270,18 @@ Interrupted tool outcomes require inspection; they are never automatically repla
     try {
       if (inspect) {
         if (!store) throw new Error("Session database is required");
-        if (values["recovery-info"] !== undefined) {
+        if (values.recover !== undefined) {
+          process.exitCode = await recoverCommand(
+            store,
+            workspace.root,
+            values.recover,
+            {
+              resolve: values.resolve,
+              note: values.note,
+              apply: values.apply,
+            },
+          );
+        } else if (values["recovery-info"] !== undefined) {
           console.log(
             JSON.stringify(
               await inspectRecovery(
@@ -292,14 +328,44 @@ Interrupted tool outcomes require inspection; they are never automatically repla
           context: values.context,
           think: values.think,
         });
-        // A resumed session that cannot continue is refused before the
-        // provider is asked anything.
-        const resumed =
-          store && values.resume
-            ? await store.loadSession(values.resume, workspace.root)
-            : undefined;
+        // A resumed session first closes the calls it was interrupted
+        // before running (ADR-0006); one that still cannot continue is
+        // refused before the provider is asked anything. The Tuimark
+        // client opens one whose only problem is an unknown outcome, for
+        // /recover.
+        let resumed:
+          | Awaited<ReturnType<SessionStore["loadSession"]>>
+          | undefined;
+        if (store && values.resume) {
+          const settled = await settleSession(
+            store,
+            values.resume,
+            workspace.root,
+          );
+          resumed = settled.state;
+          if (settled.closed)
+            process.stderr.write(
+              `note: closed ${settled.closed} tool call${settled.closed === 1 ? "" : "s"} the session stopped before finishing; none had changed anything, and the model is told\n`,
+            );
+        }
+        const hazard =
+          store &&
+          resumed &&
+          store.listHazards(resumed.id, resumed.workspaceId).length > 0;
+        const interactiveTuimark =
+          !headless &&
+          interactiveClient(
+            ui,
+            values.mode as "fullscreen" | "inline",
+            values.ui !== undefined,
+          ) === "tuimark";
         const problem = store && resumed && sessionProblem(store, resumed);
-        if (problem) throw new Error(problem);
+        if (problem && !(hazard && interactiveTuimark))
+          throw new Error(
+            hazard
+              ? `${problem}: local-agent --session-db ${values["session-db"]} --recover ${resumed?.publicId}`
+              : problem,
+          );
         // Without --context, the size comes from the model and this
         // machine's memory (planContext); a failed look leaves 16384. A
         // size the user set stays, with a warning when it does not fit.

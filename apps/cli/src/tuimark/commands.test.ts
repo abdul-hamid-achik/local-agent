@@ -208,6 +208,7 @@ test("the slash catalog lists exactly the commands the parser knows", () => {
     "/status",
     "/provider",
     "/sessions",
+    "/recover",
     "/find",
     "/export",
     "/mcp",
@@ -260,6 +261,7 @@ test("the slash catalog lists exactly the commands the parser knows", () => {
     "/status",
     "/provider",
     "/sessions [new]",
+    "/recover [N outcome]",
     "/find TEXT",
     "/export [json]",
     "/mcp",
@@ -352,4 +354,38 @@ test("the palette's key rows: quit everywhere, load-earlier fullscreen only", ()
   // The key rows stand for no slash command.
   expect(paletteCommand("quit")).toBeUndefined();
   expect(paletteCommand("load-earlier")).toBeUndefined();
+});
+
+test("/recover lists, or records a conclusion for one call; anything else is refused", () => {
+  expect(runSlash("/recover", state)).toEqual({
+    status: "Recovery",
+    recover: "list",
+  });
+  expect(
+    runSlash("/RECOVER 2 Not-Applied  checked git status ", state),
+  ).toEqual({
+    status: "Recording what you found…",
+    recover: {
+      index: 2,
+      conclusion: "not-applied",
+      note: "checked git status",
+    },
+  });
+  expect(runSlash("/recover 1 undone", state).recover).toEqual({
+    index: 1,
+    conclusion: "undone",
+    note: "",
+  });
+  for (const bad of [
+    "/recover 0 applied",
+    "/recover x applied",
+    "/recover 1",
+    "/recover 1 maybe",
+    "/recover 1.5 applied",
+  ])
+    expect(runSlash(bad, state), bad).toEqual({
+      status:
+        "Use /recover to list, or /recover N applied|not-applied|undone [note]",
+      unknown: true,
+    });
 });

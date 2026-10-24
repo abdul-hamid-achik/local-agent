@@ -33,4 +33,4 @@ screen.approving > #app > #liveregion { display: none; }
 .la-space-palette { height: 16; }
 /* The help grew a commands section over the kit's keys list (the keys
  * scroll takes what is left, so the commands always fit). */
-.la-space-help { height: 18; }
+.la-space-help { height: 19; }

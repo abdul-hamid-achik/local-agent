@@ -13,19 +13,19 @@
 │  }                            │  /status show the effective config (model, workspa…  │                               ┃
 │                               │  /provider ask the model's endpoint: answer time, …  │                               ┃
 │ ╭─ Edit ──────────────────────│  /sessions [new] switch to a saved session, or sta…  │─────────────────────────────╮ ┃
-│ │ ✓ succeeded                 │  /find TEXT search saved session messages (needs -…  │                             │ ┃
-│ │ src/fetch.ts                │  /export [json] write the conversation to a markdo…  │                             │ ┃
-│ │ Updated src/fetch.ts. Verifi│  /mcp show connected MCP servers and their tools     │                             │ ┃
-│ │   import { sleep } from './u│  /goal [OBJECTIVE|stop] run turns toward an object…  │                             │ ┃
-│ │ - export const get = (url) =│  Keys                                                │                             │ ┃
-│ │ + export const get = (url) =│  enter send                                          │                             │ ┃
-│ ╰─────────────────────────────│  shift/alt+enter new line                            │─────────────────────────────╯ ┃
-│                               │  a session                                           │                               ┃
-│ Assistant                     │  ! always                                            │                               ┃
-│ Done. The helper now retries t│  pgup/pgdn scroll                                    │                               ┃
-│                               │  home/end top/end                                    │                               ┃
-└───────────────────────────────│  ^P commands                                         │───────────────────────────────┘
-╭───────────────────────────────│  esc cancel                                          │───────────────────────────────╮
-│ Message the model             │  ↑/↓ history                                         │                               │
+│ │ ✓ succeeded                 │  /recover [N outcome] review calls whose outcome i…  │                             │ ┃
+│ │ src/fetch.ts                │  /find TEXT search saved session messages (needs -…  │                             │ ┃
+│ │ Updated src/fetch.ts. Verifi│  /export [json] write the conversation to a markdo…  │                             │ ┃
+│ │   import { sleep } from './u│  /mcp show connected MCP servers and their tools     │                             │ ┃
+│ │ - export const get = (url) =│  /goal [OBJECTIVE|stop] run turns toward an object…  │                             │ ┃
+│ │ + export const get = (url) =│  Keys                                                │                             │ ┃
+│ ╰─────────────────────────────│  enter send                                          │─────────────────────────────╯ ┃
+│                               │  shift/alt+enter new line                            │                               ┃
+│ Assistant                     │  a session                                           │                               ┃
+│ Done. The helper now retries t│  ! always                                            │                               ┃
+│                               │  pgup/pgdn scroll                                    │                               ┃
+└───────────────────────────────│  home/end top/end                                    │───────────────────────────────┘
+╭───────────────────────────────│  ^P commands                                         │───────────────────────────────╮
+│ Message the model             │  esc cancel                                          │                               │
 ╰───────────────────────────────│                                                      │───────────────────────────────╯
  build · Ready · /help for keys ╰──────────────────────────────────────────────────────╯                                

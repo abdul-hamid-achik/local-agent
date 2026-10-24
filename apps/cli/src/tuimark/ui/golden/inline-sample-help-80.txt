@@ -1,4 +1,4 @@
-=== grid 80x23 ===
+=== grid 80x24 ===
  Local Agent╭─ Help ───────────────────────────────────────────────╮██▋░░░░░░░░ 
             │                                                      │            
             │  ? close help                                        │            
@@ -13,6 +13,7 @@
             │  /status show the effective config (model, workspa…  │            
             │  /provider ask the model's endpoint: answer time, …  │            
             │  /sessions [new] switch to a saved session, or sta…  │            
+            │  /recover [N outcome] review calls whose outcome i…  │            
             │  /find TEXT search saved session messages (needs -…  │            
             │  /export [json] write the conversation to a markdo…  │            
             │  /mcp show connected MCP servers and their tools     │            

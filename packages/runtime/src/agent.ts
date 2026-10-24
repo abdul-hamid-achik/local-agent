@@ -1488,6 +1488,9 @@ export type SessionContext = { store: SessionStore; state: Session };
 export type Approval = boolean | "sandbox";
 
 /** Told to the model with a sandboxed command that failed. */
+/** A command stopped by its timeout or a cancel, its process group gone. */
+const STOPPED_NOTE =
+  "The command was stopped before it finished and may have made partial changes: check before running it again.";
 const SANDBOX_NOTE =
   "This ran in the command sandbox: no network at all (not even this machine: no downloads, no DNS, no test server of its own), no writes outside the workspace (nor to any .git folder, .gitattributes or .local-agent), no reads in the home folder beyond toolchains, their caches, ~/.gitconfig and ~/.tool-versions. A failure caused by that (Operation not permitted, a refused connection) fails the same way on a retry: tell the user, who can run it outside the sandbox.";
 
@@ -1642,8 +1645,15 @@ export function sessionProblem(
 ): string | undefined {
   if (store.listHazards(session.id, session.workspaceId).length)
     return "Session has an uncertain tool outcome; inspect recovery before continuing";
+  return historyProblem(session.messages);
+}
+
+/** Why a history's tool calls and results do not pair up, if they do not. */
+export function historyProblem(
+  messages: readonly Message[],
+): string | undefined {
   let pending: ToolCall[] = [];
-  for (const message of session.messages) {
+  for (const message of messages) {
     if (message.role !== "assistant" && message.tool_calls?.length)
       return "Session contains invalid tool calls; recovery is required";
     if (message.role === "tool") {
@@ -2470,20 +2480,24 @@ async function* agentTurn(
                 signal,
                 sandboxed ? {} : undefined,
               );
-              uncertain =
-                result.timedOut || result.cancelled || result.cleanupIncomplete;
+              // Stopped with its whole process group gone, a command has a
+              // receipt like any other ending (ADR-0006 §1); only a process
+              // that may still run leaves its outcome unknown.
+              uncertain = result.cleanupIncomplete;
               status =
                 result.exitCode === 0 && !result.timedOut && !result.cancelled
                   ? "succeeded"
                   : "failed";
+              const notes = [
+                ...(result.timedOut || result.cancelled ? [STOPPED_NOTE] : []),
+                ...(sandboxed && status === "failed" ? [SANDBOX_NOTE] : []),
+              ];
               output = JSON.stringify({
                 ...result,
                 output: result.output.slice(0, outputLimit),
                 truncated:
                   result.truncated || result.output.length > outputLimit,
-                ...(sandboxed && status === "failed"
-                  ? { note: SANDBOX_NOTE }
-                  : {}),
+                ...(notes.length ? { note: notes.join(" ") } : {}),
               });
             }
           }

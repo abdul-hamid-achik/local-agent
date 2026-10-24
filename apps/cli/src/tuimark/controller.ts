@@ -24,6 +24,7 @@ import {
   appendRule,
   ConversationFullError,
   clearRules,
+  type Disposition,
   evaluate,
   explicitContextNote,
   type GoalReport,
@@ -44,7 +45,9 @@ import {
   probeProvider,
   proposeRule,
   type Question,
+  type RecoveryItem,
   runAgent,
+  type Session,
   type SessionContext,
   StepLimitError,
   sandboxUnavailable,
@@ -71,6 +74,8 @@ import {
 } from "#cli/tuimark/blocks";
 import {
   BUSY_STATUS,
+  type CommandOutcome,
+  type Conclusion,
   filterPalette,
   type Intent,
   MOUSE_INLINE_STATUS,
@@ -168,9 +173,11 @@ type RunAgent = (
 
 /**
  * Saved-session discovery and loading, handed in by the launcher only
- * when the process runs with `--session-db`. `load` refuses (throws) a
- * session the runtime would refuse at its first turn — recovery hazards
- * and interrupted tool calls — with the runtime's own words.
+ * when the process runs with `--session-db`. `load` first closes the
+ * interrupted calls that never ran or only read, then refuses (throws) a
+ * session the runtime would refuse at its first turn, with the runtime's
+ * own words; one whose only problem is a call with an unknown outcome
+ * loads, for `/recover`.
  */
 export interface SessionsCapability {
   list(): Promise<SessionSummary[]>;
@@ -183,7 +190,30 @@ export interface SessionsCapability {
    * capability itself. Absent when the process has no session store.
    */
   search?(query: string): Promise<FindHit[]>;
+  /** `/recover`: the session's calls whose outcome is unknown, oldest first. */
+  recovery?(session: SessionContext): RecoveryItem[];
+  /**
+   * `/recover N …`: records what the user found about one of them, and
+   * returns the session as saved after it (`closed`: calls given a result).
+   */
+  reconcile?(
+    session: SessionContext,
+    executionId: string,
+    disposition: Disposition,
+    note: string,
+  ): Promise<{ state: Session; closed: number }>;
 }
+
+const DISPOSITIONS: Record<Conclusion, Disposition> = {
+  applied: "effect_applied",
+  "not-applied": "effect_not_applied",
+  undone: "effect_compensated",
+};
+const FOUND: Record<Conclusion, string> = {
+  applied: "it ran and its change is in place",
+  "not-applied": "it made no change",
+  undone: "its change was undone",
+};
 
 /** One `/find` result: the session it matched and a snippet around the match. */
 export interface FindHit {
@@ -2335,7 +2365,135 @@ export class TuimarkClient {
       await this.runCommand(command, true);
       return;
     }
+    // The runtime refuses a turn past an unknown outcome: say so here, the
+    // draft kept, rather than send it into that refusal.
+    const unknown = this.unknownOutcomes();
+    if (unknown) {
+      await this.write([
+        {
+          path: "status",
+          value: `${unknown} call${unknown === 1 ? " has" : "s have"} an unknown outcome · /recover to review before continuing`,
+        },
+      ]);
+      return;
+    }
     await this.beginTurn(raw);
+  }
+
+  /** How many calls of the saved session have an unknown outcome. */
+  private unknownOutcomes(): number {
+    const recovery = this.options.sessions?.recovery;
+    return recovery && this.session ? recovery(this.session).length : 0;
+  }
+
+  /**
+   * `/recover`: the session's calls whose outcome is unknown, in a panel;
+   * `/recover N …` records what the user found about the Nth (ADR-0006).
+   * Nothing runs again; refused while busy, like a session switch.
+   */
+  private async recover(
+    request: NonNullable<CommandOutcome["recover"]>,
+  ): Promise<void> {
+    if (this.switching || this.busy || this.proposal) {
+      await this.write([{ path: "status", value: BUSY_STATUS }]);
+      return;
+    }
+    const capability = this.options.sessions;
+    const session = this.session;
+    if (!capability?.recovery || !capability.reconcile || !session) {
+      await this.write([
+        {
+          path: "status",
+          value: "Recovery needs --session-db PATH at startup",
+        },
+      ]);
+      return;
+    }
+    const items = capability.recovery(session);
+    if (request === "list") {
+      if (!items.length) {
+        await this.write([
+          {
+            path: "status",
+            value:
+              "Nothing to recover: no call in this session has an unknown outcome",
+          },
+        ]);
+        return;
+      }
+      const rows = items.map(
+        (item, index) =>
+          `${index + 1}. ${item.toolName}${item.summary ? ` ${item.summary}` : ""} · ${item.state === "ran" ? "it started and has no result" : "its result is unknown"}`,
+      );
+      await this.openPanel(
+        "Recover",
+        "",
+        [
+          ...rows,
+          "",
+          "Check the workspace, then record what you found:",
+          "/recover N applied: it ran and its change is in place",
+          "/recover N not-applied: it made no change",
+          "/recover N undone: you undid its change",
+          "A note may follow. Nothing runs again.",
+        ].join("\n"),
+        `${items.length} call${items.length === 1 ? "" : "s"} with an unknown outcome · /recover N applied|not-applied|undone`,
+      );
+      return;
+    }
+    const item = items[request.index - 1];
+    if (!item) {
+      await this.write([
+        {
+          path: "status",
+          value: `No call ${request.index} to recover: /recover lists ${items.length}`,
+        },
+      ]);
+      return;
+    }
+    this.switching = true;
+    try {
+      let saved: { state: Session; closed: number };
+      try {
+        saved = await capability.reconcile(
+          session,
+          item.executionId,
+          DISPOSITIONS[request.conclusion],
+          request.note,
+        );
+      } catch (error) {
+        await this.write([
+          {
+            path: "status",
+            value: oneLine(
+              error instanceof Error ? error.message : "Unable to record it",
+            ),
+          },
+        ]);
+        return;
+      }
+      const left = capability.recovery({
+        ...session,
+        state: saved.state,
+      }).length;
+      const status = `Recorded: ${item.toolName} · ${FOUND[request.conclusion]}${left ? ` · ${left} left: /recover` : ""}`;
+      // A result given to a call that had none changes the history: the
+      // conversation is reloaded as saved, as a switch loads it.
+      if (saved.closed)
+        await this.adoptConversation(
+          { ...session, state: saved.state },
+          status,
+        );
+      else {
+        session.state = saved.state;
+        await this.write([
+          ...this.closePanelWrite(),
+          { path: "status", value: status },
+        ]);
+      }
+    } finally {
+      this.switching = false;
+    }
   }
 
   // ------------------------------------------------------------------ the history
@@ -2562,6 +2720,10 @@ export class TuimarkClient {
     }
     if (outcome.goal) {
       await this.runGoal(outcome.goal);
+      return;
+    }
+    if (outcome.recover) {
+      await this.recover(outcome.recover);
       return;
     }
     // Inline has no mouse, and its document never reads `mouse_on`: refuse
@@ -3402,7 +3564,9 @@ export class TuimarkClient {
           error instanceof ConversationFullError
             ? `${error.message} /sessions new starts a new one.`
             : error instanceof Error
-              ? error.message
+              ? this.unknownOutcomes()
+                ? `${error.message} /recover reviews it.`
+                : error.message
               : "Inference failed";
         status = oneLine(message);
         // The full error joins the transcript as a UI-local error notice:

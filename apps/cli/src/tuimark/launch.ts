@@ -10,14 +10,17 @@ import { existsSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import type {
-  McpConnection,
-  Provider,
-  Session,
-  SessionContext,
-  SessionStore,
-  ToolCall,
-  Workspace,
+import {
+  type McpConnection,
+  type Provider,
+  reconcileExecution,
+  recoveryItems,
+  type Session,
+  type SessionContext,
+  type SessionStore,
+  sessionProblem,
+  settleSession,
+  type Workspace,
 } from "@local-agent/runtime";
 import {
   type Host,
@@ -145,41 +148,6 @@ export async function findBinary(
 }
 
 /**
- * Why the runtime would refuse this session at its first turn, in its own
- * words (runAgent's resume checks), or undefined when it is clean. The
- * picker refuses at load with exactly these, so a switch never lands on
- * a session whose next turn cannot run.
- */
-export function sessionRefusal(
-  store: Pick<SessionStore, "listHazards">,
-  state: Session,
-): string | undefined {
-  if (store.listHazards(state.id, state.workspaceId).length)
-    return "Session has an uncertain tool outcome; inspect recovery before continuing";
-  let pending: ToolCall[] = [];
-  for (const message of state.messages) {
-    if (message.role !== "assistant" && message.tool_calls?.length)
-      return "Session contains invalid tool calls; recovery is required";
-    if (message.role === "tool") {
-      const expected = pending.shift();
-      if (
-        !expected ||
-        message.tool_name !== expected.function.name ||
-        message.tool_call_id !== expected.id
-      )
-        return "Session contains unmatched tool results; recovery is required";
-    } else {
-      if (pending.length)
-        return "Session contains interrupted tool calls; recovery is required";
-      if (message.tool_calls?.length) pending = message.tool_calls.slice();
-    }
-  }
-  if (pending.length)
-    return "Session contains interrupted tool calls; recovery is required";
-  return undefined;
-}
-
-/**
  * The controller's `/sessions` capability over an open session store:
  * the same `listSessions` / `loadSession` calls `--sessions` and
  * `--resume` make in main.ts, nothing more.
@@ -200,11 +168,22 @@ export function sessionCapability(
       return { store, state: await store.createSession(workspaceRoot) };
     },
     async load(handle) {
-      const state = await store.loadSession(handle, workspaceRoot);
-      const refusal = sessionRefusal(store, state);
+      // Calls that never ran or only read are closed first; a session whose
+      // only problem is an unknown outcome loads, for /recover.
+      const { state } = await settleSession(store, handle, workspaceRoot);
+      const refusal = store.listHazards(state.id, state.workspaceId).length
+        ? undefined
+        : sessionProblem(store, state);
       if (refusal) throw new Error(refusal);
       return { store, state };
     },
+    recovery: (session) => recoveryItems(session.store, session.state),
+    reconcile: (session, executionId, disposition, note) =>
+      reconcileExecution(session.store, session.state.publicId, workspaceRoot, {
+        executionId,
+        disposition,
+        note,
+      }),
     async search(query) {
       // Bounded by design: the newest 200 sessions, the first 20 that match.
       const sessions = (await store.listSessions(workspaceRoot)).slice(0, 200);

@@ -9,6 +9,9 @@ import { type GoalCommand, parseGoal } from "#cli/tuimark/goal";
 
 export type Intent = "plan" | "build" | "chat";
 
+/** What `/recover N …` records the user found: ADR-0006's dispositions. */
+export type Conclusion = "applied" | "not-applied" | "undone";
+
 /** The session theme, written to the host's reserved `@theme` path. */
 export type Theme = "dark" | "light" | "auto";
 
@@ -92,10 +95,15 @@ export interface CommandOutcome {
   find?: string;
   /** Set by `/goal …`: what it asked for (see goal.ts). The controller runs it. */
   goal?: GoalCommand;
+  /**
+   * Set by `/recover`: list the session's calls whose outcome is unknown
+   * ("list"), or record what the user found for the Nth (1-based).
+   */
+  recover?: "list" | { index: number; conclusion: Conclusion; note: string };
 }
 
 export const HELP_STATUS =
-  "/mode plan|build|chat · /model [NAME] · /theme dark|light|auto · /mouse on|off · /permissions [clear|trust] · /sandbox on|off · /details · /status · /sessions · /find TEXT · /export [json] · /mcp · /goal OBJECTIVE · /help · Esc cancel · Ctrl+C exit";
+  "/mode plan|build|chat · /model [NAME] · /theme dark|light|auto · /mouse on|off · /permissions [clear|trust] · /sandbox on|off · /details · /status · /sessions · /recover · /find TEXT · /export [json] · /mcp · /goal OBJECTIVE · /help · Esc cancel · Ctrl+C exit";
 
 /** Inline has no mouse (the engine ignores it there): the controller refuses with this. */
 export const MOUSE_INLINE_STATUS = "Mouse is not available in inline mode";
@@ -254,6 +262,31 @@ export function runSlash(text: string, state: CommandState): CommandOutcome {
     if (!query) return { status: "Search the saved sessions. Use /find TEXT" };
     return { status: `Searching sessions for ${query}…`, find: query };
   }
+  const recover = command.match(
+    /^\/recover(?:\s+(\S+)(?:\s+(\S+))?(?:\s+(.+?))?)?\s*$/i,
+  );
+  if (recover) {
+    if (recover[1] === undefined)
+      return { status: "Recovery", recover: "list" };
+    const index = Number(recover[1]);
+    const conclusion = recover[2]?.toLowerCase();
+    if (
+      !Number.isSafeInteger(index) ||
+      index < 1 ||
+      (conclusion !== "applied" &&
+        conclusion !== "not-applied" &&
+        conclusion !== "undone")
+    )
+      return {
+        status:
+          "Use /recover to list, or /recover N applied|not-applied|undone [note]",
+        unknown: true,
+      };
+    return {
+      status: "Recording what you found…",
+      recover: { index, conclusion, note: recover[3] ?? "" },
+    };
+  }
   const goal = command.match(/^\/goal(?:\s+([\s\S]*))?$/i);
   if (goal) {
     const parsed = parseGoal(goal[1] ?? "");
@@ -368,6 +401,12 @@ export const SLASH_COMMANDS: readonly SlashCommand[] = [
     usage: "/sessions [new]",
     description: "switch to a saved session, or start a new one",
     insert: "/sessions",
+  },
+  {
+    name: "/recover",
+    usage: "/recover [N outcome]",
+    description: "review calls whose outcome is unknown",
+    insert: "/recover",
   },
   {
     name: "/find",

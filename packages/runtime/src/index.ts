@@ -512,10 +512,19 @@ export async function* chat(
   }
 }
 
-export { inspectRecovery } from "#runtime/recovery";
+export {
+  inspectRecovery,
+  RECONCILE_NOTE_MAX,
+  type RecoveryItem,
+  reconcileExecution,
+  recoveryItems,
+  settleInterrupted,
+  settleSession,
+} from "#runtime/recovery";
 export { sandboxUnavailable } from "#runtime/sandbox";
 export {
   ConversationFullError,
+  type Disposition,
   type Session,
   SessionStore,
 } from "#runtime/session";

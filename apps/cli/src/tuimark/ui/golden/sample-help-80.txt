@@ -13,19 +13,19 @@
 │  }        │  /status show the effective config (model, workspa…  │           ┃
 │           │  /provider ask the model's endpoint: answer time, …  │           ┃
 │ ╭─ Edit ──│  /sessions [new] switch to a saved session, or sta…  │─────────╮ ┃
-│ │ ✓ succee│  /find TEXT search saved session messages (needs -…  │         │ ┃
-│ │ src/fetc│  /export [json] write the conversation to a markdo…  │         │ ┃
-│ │ Updated │  /mcp show connected MCP servers and their tools     │         │ ┃
-│ │   import│  /goal [OBJECTIVE|stop] run turns toward an object…  │         │ ┃
-│ │ - export│  Keys                                                │         │ ┃
-│ │ + export│  enter send                                          │         │ ┃
-│ ╰─────────│  shift/alt+enter new line                            │─────────╯ ┃
-│           │  a session                                           │           ┃
-│ Assistant │  ! always                                            │           ┃
-│ Done. The │  pgup/pgdn scroll                                    │           ┃
-│           │  home/end top/end                                    │           ┃
-└───────────│  ^P commands                                         │───────────┘
-╭───────────│  esc cancel                                          │───────────╮
-│ Message th│  ↑/↓ history                                         │           │
+│ │ ✓ succee│  /recover [N outcome] review calls whose outcome i…  │         │ ┃
+│ │ src/fetc│  /find TEXT search saved session messages (needs -…  │         │ ┃
+│ │ Updated │  /export [json] write the conversation to a markdo…  │         │ ┃
+│ │   import│  /mcp show connected MCP servers and their tools     │         │ ┃
+│ │ - export│  /goal [OBJECTIVE|stop] run turns toward an object…  │         │ ┃
+│ │ + export│  Keys                                                │         │ ┃
+│ ╰─────────│  enter send                                          │─────────╯ ┃
+│           │  shift/alt+enter new line                            │           ┃
+│ Assistant │  a session                                           │           ┃
+│ Done. The │  ! always                                            │           ┃
+│           │  pgup/pgdn scroll                                    │           ┃
+└───────────│  home/end top/end                                    │───────────┘
+╭───────────│  ^P commands                                         │───────────╮
+│ Message th│  esc cancel                                          │           │
 ╰───────────│                                                      │───────────╯
  build · Rea╰──────────────────────────────────────────────────────╯            

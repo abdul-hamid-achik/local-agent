@@ -555,6 +555,11 @@
         "desc": "switch to a saved session, or start a new one"
       },
       {
+        "id": "/recover",
+        "cmd": "/recover [N outcome]",
+        "desc": "review calls whose outcome is unknown"
+      },
+      {
         "id": "/find",
         "cmd": "/find TEXT",
         "desc": "search saved session messages (needs --session-db)"

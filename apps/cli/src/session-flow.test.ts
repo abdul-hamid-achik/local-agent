@@ -132,10 +132,71 @@ test("resumes completed state and inspects hazardous sessions without replaying 
     );
     expect(blocked.code).toBe(1);
     expect(blocked.stderr).toContain("uncertain tool outcome");
+    expect(blocked.stderr).toContain(`--recover ${state.publicId}`);
     expect(chats).toBe(1);
     expect(
       (await store.loadSession(state.publicId, root)).messages,
     ).toHaveLength(4);
+    // --recover lists it, shows a dry run, and records only with --apply.
+    const listed = await launch(["--recover", state.publicId]);
+    expect(listed.code).toBe(0);
+    expect(JSON.parse(listed.stdout).items).toEqual([
+      {
+        executionId: "interrupted-tool",
+        toolName: "run_command",
+        state: "ran",
+        summary: "",
+        at: expect.any(String),
+      },
+    ]);
+    const dry = await launch([
+      "--recover",
+      state.publicId,
+      "--resolve",
+      "interrupted-tool=not-applied",
+      "--note",
+      "nothing changed",
+    ]);
+    expect(dry.code).toBe(0);
+    expect(JSON.parse(dry.stdout)).toMatchObject({
+      dryRun: true,
+      disposition: "effect_not_applied",
+      note: "nothing changed",
+    });
+    expect(store.listHazards(state.id, state.workspaceId)).toHaveLength(1);
+    for (const bad of [
+      ["--resolve", "interrupted-tool=maybe"],
+      ["--resolve", "interrupted-tool=constructor"],
+      ["--resolve", "nope=applied"],
+      ["--resolve", "nope=applied", "--apply"],
+      ["--apply"],
+    ]) {
+      const refused = await launch(["--recover", state.publicId, ...bad]);
+      expect(refused.code, bad.join(" ")).toBe(1);
+    }
+    const stray = await launch(["--resume", state.publicId, "--apply"]);
+    expect(stray.code).toBe(1);
+    expect(stray.stderr).toContain("go with --recover ID");
+    const applied = await launch([
+      "--recover",
+      state.publicId,
+      "--resolve",
+      "interrupted-tool=not-applied",
+      "--apply",
+    ]);
+    expect(applied.code).toBe(0);
+    expect(JSON.parse(applied.stdout)).toMatchObject({
+      recorded: true,
+      executionId: "interrupted-tool",
+      closed: 0,
+      left: 0,
+    });
+    const unblocked = await launch(
+      ["--resume", state.publicId, "--prompt", "Retry", "--json"],
+      true,
+    );
+    expect(unblocked.code).toBe(0);
+    expect(chats).toBe(2);
     const call: Message = {
       role: "assistant",
       content: "",
@@ -151,7 +212,6 @@ test("resumes completed state and inspects hazardous sessions without replaying 
       [call, { ...receipt, tool_name: "edit" }],
       [call, { role: "user", content: "Interrupted" }, receipt],
       [{ ...call, role: "user" }, receipt],
-      [call],
       [
         {
           ...call,
@@ -184,6 +244,22 @@ test("resumes completed state and inspects hazardous sessions without replaying 
       );
     }
     expect(requests).toBe(previousRequests);
+    // A call the session stopped before running is closed at resume, and
+    // the turn goes on.
+    const lone = await store.createSession(root, [
+      { role: "user", content: "Remember this" },
+      { role: "assistant", content: "Remembered answer" },
+      { role: "user", content: "Read it" },
+      call,
+    ]);
+    const settled = await launch(
+      ["--resume", lone.publicId, "--prompt", "Continue", "--json"],
+      true,
+    );
+    expect(settled.stderr).toContain("note: closed 1 tool call");
+    expect(settled.code).toBe(0);
+    const closed = await store.loadSession(lone.publicId, root);
+    expect(closed.messages[4]?.content).toContain("Not run");
   } finally {
     await server.stop(true);
     store.close();

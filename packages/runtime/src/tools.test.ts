@@ -644,3 +644,35 @@ test("a sandbox approval where the sandbox is unavailable runs nothing", async (
     await run.cleanup();
   }
 });
+
+test("a command stopped by its timeout reports partial changes, and the turn goes on", async () => {
+  const run = await session(
+    [
+      {
+        name: "run_command",
+        arguments: {
+          argv: [process.execPath, "-e", "setTimeout(() => {}, 60_000)"],
+          timeout_ms: 300,
+        },
+      },
+    ],
+    "build",
+    () => true,
+  );
+  try {
+    expect(run.results.map((result) => result.status)).toEqual(["failed"]);
+    const result = JSON.parse(run.results[0]?.output ?? "{}") as {
+      timedOut: boolean;
+      cleanupIncomplete: boolean;
+      note?: string;
+    };
+    expect(result).toMatchObject({ timedOut: true, cleanupIncomplete: false });
+    expect(result.note).toBe(
+      "The command was stopped before it finished and may have made partial changes: check before running it again.",
+    );
+    // The model was asked again, with the result: no uncertain stop.
+    expect(run.bodies).toHaveLength(2);
+  } finally {
+    await run.cleanup();
+  }
+});

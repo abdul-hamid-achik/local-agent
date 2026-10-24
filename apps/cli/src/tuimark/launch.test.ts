@@ -369,7 +369,7 @@ test("findBinary returns the path, or the reason there is none, and never throws
 // ------------------------------------------------------- the sessions capability
 
 import { SessionStore } from "@local-agent/runtime";
-import { sessionCapability, sessionRefusal } from "#cli/tuimark/launch";
+import { sessionCapability } from "#cli/tuimark/launch";
 
 test("the capability lists and loads through the store main uses", async () => {
   const root = await mkdtemp(join(tmpdir(), "local-agent-capability-"));
@@ -396,47 +396,79 @@ test("the capability lists and loads through the store main uses", async () => {
   }
 });
 
-test("sessionRefusal mirrors runAgent's resume checks in its own words", () => {
-  const clean = { listHazards: () => [] };
-  const state = (messages: unknown[]) =>
-    ({ id: 1, workspaceId: "/w", messages }) as never;
-  expect(
-    sessionRefusal(clean as never, state([{ role: "user", content: "hi" }])),
-  ).toBeUndefined();
-  expect(
-    sessionRefusal(
-      { listHazards: () => [{}] } as never,
-      state([{ role: "user", content: "hi" }]),
-    ),
-  ).toBe(
-    "Session has an uncertain tool outcome; inspect recovery before continuing",
-  );
-  const interrupted = sessionRefusal(
-    clean as never,
-    state([
-      {
-        role: "assistant",
-        content: "",
-        tool_calls: [{ id: "c1", function: { name: "edit", arguments: {} } }],
-      },
-    ]),
-  );
-  expect(interrupted).toBe(
-    "Session contains interrupted tool calls; recovery is required",
-  );
-  const matched = sessionRefusal(
-    clean as never,
-    state([
-      {
-        role: "assistant",
-        content: "",
-        tool_calls: [{ id: "c1", function: { name: "edit", arguments: {} } }],
-      },
-      { role: "tool", content: "{}", tool_name: "edit", tool_call_id: "c1" },
-      { role: "assistant", content: "done" },
-    ]),
-  );
-  expect(matched).toBeUndefined();
+test("load closes calls that never ran, loads an unknown outcome for /recover, and refuses a broken history", async () => {
+  const root = await mkdtemp(join(tmpdir(), "local-agent-capability-"));
+  const store = await SessionStore.open(join(root, "sessions.db"));
+  const asked = (id: string, name: string) => ({
+    role: "assistant" as const,
+    content: "",
+    tool_calls: [{ id, function: { name, arguments: {} } }],
+  });
+  try {
+    const capability = sessionCapability(store, root);
+    // Interrupted before its call was recorded: closed as not run.
+    const never = await store.createSession(root, [
+      { role: "user", content: "go" },
+      asked("c1", "edit"),
+    ]);
+    const loaded = await capability.load(never.publicId);
+    expect(loaded.state.messages.at(-1)).toMatchObject({
+      role: "tool",
+      tool_call_id: "c1",
+    });
+    expect(loaded.state.messages.at(-1)?.content).toContain("Not run");
+    // Started and maybe applied: it loads, and /recover lists it.
+    const ran = await store.createSession(root, [
+      { role: "user", content: "go" },
+      asked("c2", "write"),
+    ]);
+    const base = {
+      sessionId: ran.id,
+      workspaceId: ran.workspaceId,
+      runId: "r",
+      turnId: "r",
+      executionId: "e2",
+      idempotencyKey: "e2",
+      canonicalCallId: "c2",
+      providerCallId: "",
+      iteration: 1,
+      ordinal: 1,
+      kind: "builtin" as const,
+      toolName: "write",
+      effectClass: "effectful" as const,
+      argumentsSha256: "0".repeat(64),
+    };
+    store.appendEvent({ ...base, type: "requested" });
+    store.appendEvent({ ...base, type: "started" });
+    const blocked = await capability.load(ran.publicId);
+    expect(capability.recovery?.(blocked)).toMatchObject([
+      { executionId: "e2", toolName: "write", state: "ran" },
+    ]);
+    const after = await capability.reconcile?.(
+      blocked,
+      "e2",
+      "effect_applied",
+      "file is there",
+    );
+    expect(after?.closed).toBe(1);
+    expect(after?.state.messages.at(-1)?.content).toContain(
+      "The user checked: it ran and its change is in place. Their note: file is there",
+    );
+    if (!after) throw new Error("reconcile is part of the capability");
+    expect(capability.recovery?.({ store, state: after.state })).toEqual([]);
+    // A history no settling explains is refused in the runtime's words.
+    const broken = await store.createSession(root, [
+      asked("c3", "read"),
+      { role: "user", content: "between" },
+      { role: "tool", content: "{}", tool_name: "read", tool_call_id: "c3" },
+    ]);
+    await expect(capability.load(broken.publicId)).rejects.toThrow(
+      "recovery is required",
+    );
+  } finally {
+    store.close();
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 // ----------------------------------------------------------------- --theme

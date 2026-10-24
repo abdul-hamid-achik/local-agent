@@ -148,8 +148,11 @@ a child and draws the whole screen from `apps/cli/src/tuimark/ui/app.tui`.
   `up`/`down` choose, `enter` loads that conversation whole and the next
   turn continues it (refused while a turn runs; the draft is kept and
   session grants — this process's trust — survive, as the confirming
-  status says; a session with an uncertain tool outcome or interrupted
-  tool calls is refused with the same words `--resume` would fail with).
+  status says). Calls the session stopped before they ran, or that only
+  read, are closed as it loads, and the model is told they did not finish.
+  A session with a call whose outcome is unknown loads, but a turn waits:
+  `/recover` lists those calls, and `/recover N applied|not-applied|undone
+  [note]` records what you found in the workspace. Nothing runs again.
   Without `--session-db` it says so. `/sessions new` starts over: a new
   saved session with `--session-db`, otherwise a new temporary conversation
   (refused while a turn runs; session grants survive, as the status says).
@@ -352,12 +355,23 @@ point it at the released Go client's database. With the same workspace and
 database, `--sessions` lists handles, `--resume HANDLE` restores a completed
 conversation, and `--session-info HANDLE` inspects saved messages and uncertain
 outcomes without contacting a provider. Interrupted effects are never replayed
-automatically; reconciliation and Go session migration are not implemented yet.
+automatically. A call that never started, or a read-only one, is closed when
+the session resumes. A command stopped by `esc` or its timeout is recorded as
+failed or cancelled once its process group is gone, and the model is told it
+may have made partial changes. A call whose outcome is still unknown blocks
+the session until you record what happened:
+`--recover HANDLE` lists those calls as JSON,
+`--recover HANDLE --resolve EXECUTION=applied|not-applied|undone [--note TEXT]`
+shows what would be recorded, and the same with `--apply` records it beside
+the ledger. The ledger itself is never rewritten. Go session migration is not
+implemented yet.
 `--recovery-info HANDLE` returns the session revision and exact hazardous event
-identifiers for review, omitting the transcript and raw receipts. Bun schema v1
-databases migrate to v2 with existing history preserved; new calls retain their
-canonical ID, provider ID when supplied, iteration and position within the response.
-Legacy records retain absent metadata rather than receiving invented identities.
+identifiers for review (the first 100, with the total), omitting the transcript
+and raw receipts. Bun schema v1 and v2 databases migrate to v3 with existing
+history preserved; an older local-agent refuses a v3 database. New calls retain
+their canonical ID, provider ID when supplied, iteration and position within
+the response. Legacy records retain absent metadata rather than receiving
+invented identities.
 
 `--mcp-status` checks the configured servers and prints connection status and
 tool names without contacting a model. It starts configured STDIO commands for

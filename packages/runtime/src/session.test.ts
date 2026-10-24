@@ -116,7 +116,7 @@ test("keeps sessions isolated by workspace", async () => {
   store.close();
 });
 
-test("migrates v1 execution history to v2 without inventing identity metadata", async () => {
+test("migrates v1 execution history to v3 without inventing identity metadata", async () => {
   const { db, workspace } = await fixture();
   await seedV1Database(db, await realpath(workspace));
   const store = await SessionStore.open(db);
@@ -162,7 +162,7 @@ test("migrates v1 execution history to v2 without inventing identity metadata", 
   expect(
     raw.query<{ version: number }, []>("SELECT version FROM schema_meta").get()
       ?.version,
-  ).toBe(2);
+  ).toBe(3);
   store.close();
 });
 
@@ -246,7 +246,7 @@ test("serializes concurrent v1 migration openers", async () => {
   expect(
     raw.query<{ version: number }, []>("SELECT version FROM schema_meta").get()
       ?.version,
-  ).toBe(2);
+  ).toBe(3);
   for (const store of opened) store.close();
 });
 
