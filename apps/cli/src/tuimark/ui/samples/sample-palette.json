@@ -412,8 +412,8 @@
       },
       {
         "id": "/sessions",
-        "cmd": "/sessions",
-        "desc": "switch to a saved session (needs --session-db)"
+        "cmd": "/sessions [new]",
+        "desc": "switch to a saved session, or start a new one"
       },
       {
         "id": "/find",

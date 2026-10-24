@@ -75,6 +75,8 @@ export interface CommandOutcome {
   mcpPanel?: boolean;
   /** Set by `/sessions`: open the session picker (or say why there is none). */
   sessions?: boolean;
+  /** Set by `/sessions new`: start a new conversation (a new saved session with --session-db). */
+  newSession?: boolean;
   /** Set by `/export`: write the transcript, markdown views or raw JSON. */
   exportTranscript?: boolean;
   /** The format `/export` asked for; "json" writes the raw messages array. */
@@ -218,6 +220,14 @@ export function runSlash(text: string, state: CommandState): CommandOutcome {
   if (command === "/provider")
     return { status: "Checking the provider…", providerPanel: true };
   if (command === "/sessions") return { status: "Sessions", sessions: true };
+  const sessionsMatch = command.match(/^\/sessions\s+(\S+)\s*$/i);
+  if (sessionsMatch)
+    return sessionsMatch[1]?.toLowerCase() === "new"
+      ? { status: "Starting a new session…", newSession: true }
+      : {
+          status: `Unknown sessions argument: ${sessionsMatch[1]}. Use /sessions or /sessions new`,
+          unknown: true,
+        };
   const exportMatch = command.match(/^\/export(?:\s+(\S+))?\s*$/i);
   if (exportMatch) {
     const requested = exportMatch[1]?.toLowerCase();
@@ -334,8 +344,8 @@ export const SLASH_COMMANDS: readonly SlashCommand[] = [
   },
   {
     name: "/sessions",
-    usage: "/sessions",
-    description: "switch to a saved session (needs --session-db)",
+    usage: "/sessions [new]",
+    description: "switch to a saved session, or start a new one",
     insert: "/sessions",
   },
   {
@@ -457,6 +467,11 @@ export const PALETTE: readonly PaletteItem[] = [
   { id: "model", label: "Model: show current", hint: "/model" },
   { id: "find", label: "Find in saved sessions", hint: "/find" },
   { id: "sessions", label: "Sessions: switch session", hint: "/sessions" },
+  {
+    id: "sessions-new",
+    label: "Sessions: start a new one",
+    hint: "/sessions new",
+  },
   { id: "export", label: "Export transcript to markdown", hint: "/export" },
   {
     id: "export-json",

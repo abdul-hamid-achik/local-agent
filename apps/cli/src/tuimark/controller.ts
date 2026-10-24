@@ -22,6 +22,7 @@ import {
   type ApprovalRequest,
   admitOllamaModel,
   appendRule,
+  ConversationFullError,
   clearRules,
   evaluate,
   explicitContextNote,
@@ -162,6 +163,8 @@ type RunAgent = (
 export interface SessionsCapability {
   list(): Promise<SessionSummary[]>;
   load(handle: string): Promise<SessionContext>;
+  /** `/sessions new`: a new, empty saved session in this workspace. */
+  create?(): Promise<SessionContext>;
   /**
    * `/find`: the workspace's saved sessions searched for `query`, one hit
    * per session (its handle and the first matching snippet), capped by the
@@ -1089,6 +1092,73 @@ export class TuimarkClient {
       ]);
       return;
     }
+    const grants = this.grantLabels();
+    await this.adoptConversation(
+      context,
+      `Resumed session ${context.state.publicId} · ${context.state.messages.length} messages` +
+        (grants.length ? ` · grants kept: ${grants.join(" · ")}` : ""),
+    );
+  }
+
+  /**
+   * `/sessions new`: the conversation starts over, as a new saved session
+   * when the process has a store, else as a new temporary one. Refused
+   * while busy, queued or approving, like a switch; grants survive it
+   * the same way (they are this process's trust), and the status says so.
+   */
+  private async newSession(): Promise<void> {
+    if (
+      this.switching ||
+      this.busy ||
+      this.proposal ||
+      this.queued !== undefined
+    ) {
+      await this.write([{ path: "status", value: BUSY_STATUS }]);
+      return;
+    }
+    this.switching = true;
+    try {
+      const create = this.options.sessions?.create;
+      let context: SessionContext | undefined;
+      if (create)
+        try {
+          context = await create();
+        } catch (error) {
+          await this.write([
+            ...this.closePanelWrite(),
+            {
+              path: "status",
+              value: oneLine(
+                error instanceof Error
+                  ? error.message
+                  : "Unable to start a session",
+              ),
+            },
+          ]);
+          return;
+        }
+      const grants = this.grantLabels();
+      await this.adoptConversation(
+        context,
+        (context
+          ? `New session ${context.state.publicId}`
+          : "New conversation (temporary: not saved)") +
+          (grants.length ? ` · grants kept: ${grants.join(" · ")}` : ""),
+      );
+    } finally {
+      this.switching = false;
+    }
+  }
+
+  /**
+   * Makes `context` (undefined: a temporary conversation) the live one,
+   * with `status`: history, transcript, builder and the checkpoint target
+   * change together, so the next turn can only continue that session.
+   */
+  private async adoptConversation(
+    context: SessionContext | undefined,
+    status: string,
+  ): Promise<void> {
     // Recheck after the await: if a turn somehow started anyway, the
     // swap aborts whole instead of mutating history under it.
     if (this.busy || this.proposal || this.queued !== undefined) {
@@ -1109,7 +1179,7 @@ export class TuimarkClient {
     // turn can only continue (and checkpoint) the loaded session.
     this.session = context;
     this.history.length = 0;
-    this.history.push(...context.state.messages);
+    this.history.push(...(context?.state.messages ?? []));
     this.builder = new ViewBuilder();
     const views: MessageView[] = [];
     this.lastReceipt = undefined;
@@ -1126,7 +1196,6 @@ export class TuimarkClient {
     }
     this.transcript.replace(views);
     this.ctx.reset();
-    const grants = this.grantLabels();
     const closed = this.closePanelWrite();
     // Inline, the loaded history joins the scrollback like a resumed
     // session's does at attach; the region itself holds no history.
@@ -1135,14 +1204,12 @@ export class TuimarkClient {
       ...closed,
       ...this.closeDetailsWrite(),
       { path: "empty", value: views.length === 0 },
-      { path: "header.session", value: `session ${context.state.publicId}` },
-      ...this.ctxWrites(0),
       {
-        path: "status",
-        value:
-          `Resumed session ${context.state.publicId} · ${context.state.messages.length} messages` +
-          (grants.length ? ` · grants kept: ${grants.join(" · ")}` : ""),
+        path: "header.session",
+        value: context ? `session ${context.state.publicId}` : "temporary",
       },
+      ...this.ctxWrites(0),
+      { path: "status", value: status },
     ]);
   }
 
@@ -2234,6 +2301,10 @@ export class TuimarkClient {
       await this.openSessions();
       return;
     }
+    if (outcome.newSession) {
+      await this.newSession();
+      return;
+    }
     if (outcome.exportTranscript) {
       await this.exportTranscript(outcome.exportFormat ?? "markdown");
       return;
@@ -2992,7 +3063,11 @@ export class TuimarkClient {
           : "Cancelled";
       } else {
         const message =
-          error instanceof Error ? error.message : "Inference failed";
+          error instanceof ConversationFullError
+            ? `${error.message} /sessions new starts a new one.`
+            : error instanceof Error
+              ? error.message
+              : "Inference failed";
         status = oneLine(message);
         // The full error joins the transcript as a UI-local notice: shown
         // (and inline, printed below), but never a model message.

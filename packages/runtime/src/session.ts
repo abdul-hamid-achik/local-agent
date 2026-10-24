@@ -66,6 +66,18 @@ export type ExecutionEvent = Readonly<{
 
 const alphabet = "0123456789abcdefghijklmnopqrstuvwxyz";
 
+/**
+ * A conversation that cannot grow: more messages than one request carries,
+ * or saved state past 8 MiB. The message is a whole sentence; a client
+ * adds how it starts a new session.
+ */
+export class ConversationFullError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ConversationFullError";
+  }
+}
+
 export class SessionStore {
   private constructor(
     private readonly db: Database,
@@ -575,7 +587,9 @@ function encodeMessages(messages: SessionMessage[]): string {
   const parsed = MessageSchema.array().parse(messages);
   const encoded = JSON.stringify(parsed);
   if (Buffer.byteLength(encoded, "utf8") > MAX_STATE_BYTES)
-    throw new Error("session state exceeds 8 MiB");
+    throw new ConversationFullError(
+      "This session is full: its saved state would pass 8 MiB.",
+    );
   return encoded;
 }
 function decodeMessages(encoded: string): SessionMessage[] {

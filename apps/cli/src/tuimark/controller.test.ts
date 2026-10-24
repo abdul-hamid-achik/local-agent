@@ -15,6 +15,7 @@ import type {
   SessionContext,
   Workspace,
 } from "@local-agent/runtime";
+import { ConversationFullError } from "@local-agent/runtime";
 import { expect, test } from "vitest";
 import {
   type Block,
@@ -23,7 +24,7 @@ import {
   parseBlocks,
   runsText,
 } from "#cli/tuimark/blocks";
-import type { PaletteItem } from "#cli/tuimark/commands";
+import { BUSY_STATUS, type PaletteItem } from "#cli/tuimark/commands";
 import {
   APPROVAL_ARM_MS,
   formatElapsed,
@@ -2433,7 +2434,7 @@ test("the help overlay's store carries the slash commands", () => {
     "/details",
     "/status",
     "/provider",
-    "/sessions",
+    "/sessions [new]",
     "/find TEXT",
     "/export [json]",
     "/mcp",
@@ -3204,6 +3205,91 @@ test("/sessions without a session capability says it needs --session-db", async 
   await ui.fire("send", "/sessions");
   expect(store(ui).panel.open).toBe(false);
   expect(store(ui).status).toBe("Sessions need --session-db PATH at startup");
+});
+
+test("/sessions new starts over in a new saved session, and the next turn checkpoints only it", async () => {
+  const first = fakeSession("aaa111", [
+    { role: "user", content: "old prompt" },
+    { role: "assistant", content: "old reply" },
+  ]);
+  const fresh = fakeSession("new999", []);
+  let created = 0;
+  const sessions = {
+    ...capabilityFor({ aaa111: first }),
+    create: async () => {
+      created++;
+      return fresh;
+    },
+  };
+  const turns: { session?: SessionContext; messages: string[] }[] = [];
+  const { ui, client } = setup(
+    async function* ({ options, messages }) {
+      turns.push({
+        session: options.session,
+        messages: messages.map((m) => `${m.role}:${m.content}`),
+      });
+      yield {
+        type: "message",
+        message: { role: "assistant", content: "hello again" },
+      };
+    },
+    { session: first, sessions },
+  );
+  await ui.fire("send", "/sessions new");
+  await client.idle();
+  expect(created).toBe(1);
+  expect(store(ui).status).toBe("New session new999");
+  expect(store(ui).header.session).toBe("session new999");
+  expect(store(ui).messages).toEqual([]);
+  await ui.fire("send", "fresh start");
+  await client.idle();
+  expect(turns[0]?.session?.state.publicId).toBe("new999");
+  // Nothing of the old conversation reaches the model.
+  expect(turns[0]?.messages).toEqual(["user:fresh start"]);
+});
+
+test("/sessions new without a store starts a temporary conversation; while busy it waits", async () => {
+  const seenMessages: string[][] = [];
+  let release: () => void = () => {};
+  const gate = new Promise<void>((r) => {
+    release = r;
+  });
+  let calls = 0;
+  const { ui, client } = setup(async function* ({ messages }) {
+    seenMessages.push(messages.map((m) => `${m.role}:${m.content}`));
+    if (++calls === 1) await gate;
+    yield { type: "message", message: { role: "assistant", content: "ok" } };
+  });
+  await ui.fire("send", "first");
+  // Busy: refused, the turn untouched.
+  await ui.fire("send", "/sessions new");
+  expect(store(ui).status).toBe(BUSY_STATUS);
+  release();
+  await client.idle();
+  await ui.fire("send", "/sessions new");
+  await client.idle();
+  expect(store(ui).status).toBe("New conversation (temporary: not saved)");
+  expect(store(ui).header.session).toBe("temporary");
+  expect(store(ui).messages).toEqual([]);
+  await ui.fire("send", "second");
+  await client.idle();
+  expect(seenMessages.at(-1)).toEqual(["user:second"]);
+});
+
+test("a full conversation says so, and how to start a new one", async () => {
+  const { ui, client } = setup(
+    quiet(async () => {
+      throw new ConversationFullError(
+        "This conversation is full: it has 1000 messages, and a request carries at most 999 besides the system prompt.",
+      );
+    }),
+  );
+  await ui.fire("send", "one more");
+  await client.idle();
+  const notice = store(ui).messages.find((m: MessageView) => m.is_notice);
+  expect(viewText(notice as MessageView)).toBe(
+    "This conversation is full: it has 1000 messages, and a request carries at most 999 besides the system prompt. /sessions new starts a new one.",
+  );
 });
 
 test("the picker loads a session whole: history, header and the next turn's checkpoint target", async () => {

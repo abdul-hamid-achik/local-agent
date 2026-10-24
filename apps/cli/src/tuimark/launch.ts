@@ -190,6 +190,9 @@ export function sessionCapability(
         messages: session.messageCount,
       }));
     },
+    async create() {
+      return { store, state: await store.createSession(workspaceRoot) };
+    },
     async load(handle) {
       const state = await store.loadSession(handle, workspaceRoot);
       const refusal = sessionRefusal(store, state);

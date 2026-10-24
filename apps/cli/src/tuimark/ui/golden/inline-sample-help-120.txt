@@ -12,7 +12,7 @@
                                 │  /details show the last tool output in full          │                                
                                 │  /status show the effective config (model, workspa…  │                                
                                 │  /provider ask the model's endpoint: answer time, …  │                                
-                                │  /sessions switch to a saved session (needs --sess…  │                                
+                                │  /sessions [new] switch to a saved session, or sta…  │                                
                                 │  /find TEXT search saved session messages (needs -…  │                                
                                 │  /export [json] write the conversation to a markdo…  │                                
                                 │  /mcp show connected MCP servers and their tools     │                                

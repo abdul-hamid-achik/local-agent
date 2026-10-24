@@ -34,7 +34,12 @@ import {
 import { gatewayTarget, type McpConnection } from "#runtime/mcp";
 import { assertFetchTarget, type FetchPolicy, fetchPolicy } from "#runtime/net";
 import { sandboxUnavailable } from "#runtime/sandbox";
-import type { ExecutionEvent, Session, SessionStore } from "#runtime/session";
+import {
+  ConversationFullError,
+  type ExecutionEvent,
+  type Session,
+  type SessionStore,
+} from "#runtime/session";
 import type {
   Workspace,
   WorkspaceEditProposal,
@@ -1464,6 +1469,9 @@ export type AgentOptions = {
   }) => Promise<string | undefined>;
 };
 
+/** Messages one provider request carries, the system prompt included. */
+export const MAX_REQUEST_MESSAGES = 1000;
+
 /** Capabilities of each model that passed admission in this process. */
 const admitted = new Map<string, readonly string[]>();
 
@@ -1625,7 +1633,13 @@ async function* agentTurn(
   const saved = options.session;
   const runId = randomUUID();
   const canonicalCallIds = new Set<string>();
-  const history = z.array(MessageSchema).min(1).max(1000).parse(messages);
+  // A conversation the request cannot carry is refused before anything is
+  // saved or asked, in a sentence rather than a schema error.
+  if (messages.length >= MAX_REQUEST_MESSAGES)
+    throw new ConversationFullError(
+      `This conversation is full: it has ${messages.length} messages, and a request carries at most ${MAX_REQUEST_MESSAGES - 1} besides the system prompt.`,
+    );
+  const history = z.array(MessageSchema).min(1).parse(messages);
   if (
     saved &&
     JSON.stringify(history.slice(0, saved.state.messages.length)) !==
@@ -1714,6 +1728,12 @@ async function* agentTurn(
       ...history,
       ...(nudge ? [nudge] : []),
     ];
+    // A turn whose own calls fill the request stops here, everything it
+    // ran already saved, rather than failing inside the transport.
+    if (request.length > MAX_REQUEST_MESSAGES)
+      throw new ConversationFullError(
+        `This conversation filled up during the turn: ${history.length} messages, more than a request carries (${MAX_REQUEST_MESSAGES - 1}). What ran so far is saved.`,
+      );
     const afterNote = nudge !== undefined;
     nudge = undefined;
     for await (const event of chat(provider, request, signal, offeredTools)) {

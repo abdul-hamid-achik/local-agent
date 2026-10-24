@@ -510,4 +510,8 @@ export async function* chat(
 
 export { inspectRecovery } from "#runtime/recovery";
 export { sandboxUnavailable } from "#runtime/sandbox";
-export { type Session, SessionStore } from "#runtime/session";
+export {
+  ConversationFullError,
+  type Session,
+  SessionStore,
+} from "#runtime/session";

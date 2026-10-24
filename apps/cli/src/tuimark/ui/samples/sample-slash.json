@@ -422,6 +422,11 @@
         "hint": "/sessions"
       },
       {
+        "id": "sessions-new",
+        "label": "Sessions: start a new one",
+        "hint": "/sessions new"
+      },
+      {
         "id": "export",
         "label": "Export transcript to markdown",
         "hint": "/export"
@@ -536,8 +541,8 @@
       },
       {
         "id": "/sessions",
-        "cmd": "/sessions",
-        "desc": "switch to a saved session (needs --session-db)"
+        "cmd": "/sessions [new]",
+        "desc": "switch to a saved session, or start a new one"
       },
       {
         "id": "/find",

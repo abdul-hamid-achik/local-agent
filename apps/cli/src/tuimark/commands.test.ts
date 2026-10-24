@@ -258,7 +258,7 @@ test("the slash catalog lists exactly the commands the parser knows", () => {
     "/details",
     "/status",
     "/provider",
-    "/sessions",
+    "/sessions [new]",
     "/find TEXT",
     "/export [json]",
     "/mcp",
@@ -285,6 +285,16 @@ test("/status, /sessions and /export ask the controller for their panels and fil
     providerPanel: true,
   });
   expect(paletteCommand("provider")).toBe("/provider");
+  expect(runSlash("/sessions new", state)).toEqual({
+    status: "Starting a new session…",
+    newSession: true,
+  });
+  expect(runSlash("/sessions NEW", state).newSession).toBe(true);
+  expect(runSlash("/sessions old", state)).toMatchObject({
+    unknown: true,
+    status: "Unknown sessions argument: old. Use /sessions or /sessions new",
+  });
+  expect(paletteCommand("sessions-new")).toBe("/sessions new");
   expect(runSlash("/export", state)).toEqual({
     status: "Exporting transcript…",
     exportTranscript: true,
