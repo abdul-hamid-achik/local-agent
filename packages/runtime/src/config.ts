@@ -116,6 +116,10 @@ export const ProviderSchema = z
     base_url: z.string(),
     model: z.string().trim().min(1).max(200),
     context_size: z.number().int().positive().max(2_097_152).default(16_384),
+    /** The user set context_size (--context, LOCAL_AGENT_CONTEXT): no plan replaces it. */
+    context_explicit: z.boolean().optional(),
+    /** Why a planned context_size is what it is (see planContext). */
+    context_plan: z.string().optional(),
     /** Sent to Ollama as `think` on chat only when set; unset keeps the model's default. */
     think: z.boolean().optional(),
     max_model_bytes: z
@@ -316,7 +320,9 @@ export function resolveProvider(
           : undefined;
     return {
       ...profile,
-      ...(context === undefined ? {} : { context_size: context }),
+      ...(context === undefined
+        ? {}
+        : { context_size: context, context_explicit: true }),
       ...(think === undefined ? {} : { think }),
       stream_idle_timeout_ms: defaultStreamIdleTimeoutMs,
     };
@@ -354,7 +360,9 @@ export function resolveProvider(
       type: "ollama",
       base_url: url.toString().replace(/\/$/, ""),
       model: model || present(env.LOCAL_AGENT_MODEL) || DEFAULT_OLLAMA_MODEL,
-      ...(context === undefined ? {} : { context_size: context }),
+      ...(context === undefined
+        ? {}
+        : { context_size: context, context_explicit: true }),
       ...(think === undefined ? {} : { think }),
     }),
     stream_idle_timeout_ms: defaultStreamIdleTimeoutMs,

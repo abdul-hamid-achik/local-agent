@@ -8,11 +8,14 @@ import {
   inspectRecovery,
   type McpConnection,
   type McpServerConfig,
+  PLANNED_CONTEXT_MAX,
+  planContext,
   readMcpConfig,
   resolveProvider,
   runAgent,
   type SessionContext,
   SessionStore,
+  sessionProblem,
   Workspace,
   workspaceRules,
 } from "@local-agent/runtime";
@@ -110,9 +113,10 @@ bun dev [--model MODEL (default: ${DEFAULT_OLLAMA_MODEL})] [--mode fullscreen|in
                        Chalupa keeps the model of its profile
   --think on|off       Turn the model's thinking on or off (or LOCAL_AGENT_THINK=1|0);
                        unset keeps the model's own default
-  --context N          Context size in tokens for local Ollama (default 16384, or
-                       LOCAL_AGENT_CONTEXT; 32768 and 32k both work); it cannot exceed
-                       the model's native context. Chalupa negotiates its own
+  --context N          Context size in tokens for local Ollama (or LOCAL_AGENT_CONTEXT;
+                       32768 and 32k both work); it cannot exceed the model's native
+                       context. Default: planned from the model's KV cache and this
+                       machine's memory, at most ${PLANNED_CONTEXT_MAX}. Chalupa negotiates its own
   --ui vue|tuimark     Interactive client: tuimark (default on macOS and Linux) or vue
                        (default on Windows). Tuimark inline is opt-in: --ui tuimark
                        --mode inline prints finished blocks into the terminal's own
@@ -270,10 +274,24 @@ Interrupted tool outcomes require inspection; they are never automatically repla
           }
         }
       } else {
-        const provider = resolveProvider(process.env, values.model, {
+        const resolved = resolveProvider(process.env, values.model, {
           context: values.context,
           think: values.think,
         });
+        // A resumed session that cannot continue is refused before the
+        // provider is asked anything.
+        const resumed =
+          store && values.resume
+            ? await store.loadSession(values.resume, workspace.root)
+            : undefined;
+        const problem = store && resumed && sessionProblem(store, resumed);
+        if (problem) throw new Error(problem);
+        // Without --context, the size comes from the model and this
+        // machine's memory (planContext); a failed look leaves 16384.
+        const provider = await planContext(
+          resolved,
+          AbortSignal.timeout(15_000),
+        );
         if (!headless) {
           // An interactive client must not open its screen for a model that is
           // missing, or a --context beyond its native one: say so in one line.
@@ -291,9 +309,7 @@ Interrupted tool outcomes require inspection; they are never automatically repla
         const session: SessionContext | undefined = store
           ? {
               store,
-              state: values.resume
-                ? await store.loadSession(values.resume, workspace.root)
-                : await store.createSession(workspace.root),
+              state: resumed ?? (await store.createSession(workspace.root)),
             }
           : undefined;
         const controller = new AbortController();

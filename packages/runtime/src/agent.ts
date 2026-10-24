@@ -1198,6 +1198,41 @@ class SubagentStopped extends Error {
   }
 }
 
+/**
+ * Why a saved session cannot continue as it is, or undefined when it can: an
+ * uncertain tool outcome, or a history whose tool calls and results do not
+ * pair up. It reads only the store, so a client can refuse before it asks
+ * the provider anything; `runAgent` checks again under the session's lease.
+ */
+export function sessionProblem(
+  store: SessionStore,
+  session: Session,
+): string | undefined {
+  if (store.listHazards(session.id, session.workspaceId).length)
+    return "Session has an uncertain tool outcome; inspect recovery before continuing";
+  let pending: ToolCall[] = [];
+  for (const message of session.messages) {
+    if (message.role !== "assistant" && message.tool_calls?.length)
+      return "Session contains invalid tool calls; recovery is required";
+    if (message.role === "tool") {
+      const expected = pending.shift();
+      if (
+        !expected ||
+        message.tool_name !== expected.function.name ||
+        message.tool_call_id !== expected.id
+      )
+        return "Session contains unmatched tool results; recovery is required";
+    } else {
+      if (pending.length)
+        return "Session contains interrupted tool calls; recovery is required";
+      if (message.tool_calls?.length) pending = message.tool_calls.slice();
+    }
+  }
+  if (pending.length)
+    return "Session contains interrupted tool calls; recovery is required";
+  return undefined;
+}
+
 /** Serial tool loop. A complete provider response is required before any host action. */
 export async function* runAgent(
   provider: Provider,
@@ -1219,40 +1254,8 @@ export async function* runAgent(
       if (current.revision !== saved.state.revision)
         throw new Error("Session changed in another client");
       saved.state = current;
-      if (saved.store.listHazards(current.id, current.workspaceId).length)
-        throw new Error(
-          "Session has an uncertain tool outcome; inspect recovery before continuing",
-        );
-      let pending: ToolCall[] = [];
-      for (const message of current.messages) {
-        if (message.role !== "assistant" && message.tool_calls?.length)
-          throw new Error(
-            "Session contains invalid tool calls; recovery is required",
-          );
-        if (message.role === "tool") {
-          const expected = pending.shift();
-          if (
-            !expected ||
-            message.tool_name !== expected.function.name ||
-            message.tool_call_id !== expected.id
-          )
-            throw new Error(
-              "Session contains unmatched tool results; recovery is required",
-            );
-        } else {
-          if (pending.length)
-            throw new Error(
-              "Session contains interrupted tool calls; recovery is required",
-            );
-          if (message.tool_calls?.length) {
-            pending = message.tool_calls.slice();
-          }
-        }
-      }
-      if (pending.length)
-        throw new Error(
-          "Session contains interrupted tool calls; recovery is required",
-        );
+      const problem = sessionProblem(saved.store, current);
+      if (problem) throw new Error(problem);
     }
     yield* agentTurn(provider, messages, options);
   } finally {

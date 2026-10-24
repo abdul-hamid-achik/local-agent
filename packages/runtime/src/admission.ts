@@ -17,6 +17,8 @@ export type OllamaAdmission =
       model: string;
       sizeBytes: number;
       nativeContext: number | undefined;
+      /** f16 KV cache bytes per token of context, when model_info says. */
+      kvBytesPerToken?: number;
       capabilities: string[];
     };
 
@@ -64,6 +66,52 @@ const contextLength = (show: ShowModel) => {
   if (detail !== undefined) values.push(detail);
   return values.length > 0 ? Math.max(...values) : undefined;
 };
+
+const count = (value: unknown) =>
+  typeof value === "number" && Number.isSafeInteger(value) && value > 0
+    ? value
+    : undefined;
+
+/**
+ * The f16 KV cache bytes one token of context costs, from `/api/show`
+ * `model_info`: 2 (K and V) × KV heads × head size, over the layers that
+ * keep a cache. A per-layer head count (an array) says which layers do; a
+ * hybrid model's `full_attention_interval` says one in that many does.
+ * Sliding-window layers are counted as full ones, which errs high.
+ * Undefined when the fields are missing.
+ */
+export function kvBytesPerToken(
+  modelInfo: Record<string, unknown> | undefined,
+): number | undefined {
+  const arch = modelInfo?.["general.architecture"];
+  if (!modelInfo || typeof arch !== "string") return undefined;
+  const field = (key: string) => modelInfo[`${arch}.${key}`];
+  const blocks = count(field("block_count"));
+  const heads = count(field("attention.head_count"));
+  const embedding = count(field("embedding_length"));
+  const keyLength =
+    count(field("attention.key_length")) ??
+    (embedding && heads ? embedding / heads : undefined);
+  const valueLength = count(field("attention.value_length")) ?? keyLength;
+  if (!blocks || !keyLength || !valueLength) return undefined;
+  const kvHeads = field("attention.head_count_kv");
+  let cachedHeads: number;
+  if (Array.isArray(kvHeads))
+    cachedHeads = kvHeads.reduce<number>(
+      (total, value) => total + (count(value) ?? 0),
+      0,
+    );
+  else {
+    const perLayer = count(kvHeads) ?? heads;
+    if (!perLayer) return undefined;
+    const interval = count(field("full_attention_interval"));
+    cachedHeads =
+      perLayer *
+      (interval && interval > 1 ? Math.ceil(blocks / interval) : blocks);
+  }
+  if (cachedHeads === 0) return undefined;
+  return cachedHeads * (keyLength + valueLength) * 2;
+}
 
 const maxMetadataBytes = 1 << 20;
 class MetadataError extends Error {}
@@ -246,6 +294,7 @@ export async function admitOllamaModel(
     model: config.model,
     sizeBytes,
     nativeContext,
+    kvBytesPerToken: kvBytesPerToken(show.model_info),
     capabilities,
   };
 }

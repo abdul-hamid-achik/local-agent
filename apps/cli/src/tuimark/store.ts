@@ -895,7 +895,7 @@ export function sessionRows(
 export interface StatusFacts {
   provider: Pick<
     Provider,
-    "type" | "model" | "context_size" | "base_url" | "think"
+    "type" | "model" | "context_size" | "context_plan" | "base_url" | "think"
   >;
   /** The workspace root, shown whole. */
   workspace: string;
@@ -923,10 +923,14 @@ export function statusLines(facts: StatusFacts): string[] {
     `Endpoint: ${cleanText(facts.provider.base_url)}`,
     `Think: ${facts.provider.think === undefined ? "model default" : facts.provider.think ? "on" : "off"}`,
     `Context: ${contextLabel(facts.usedTokens, facts.provider.context_size)}`,
+  ];
+  if (facts.provider.context_plan)
+    lines.push(`Context size: ${cleanText(facts.provider.context_plan)}`);
+  lines.push(
     `Workspace: ${cleanText(facts.workspace)}`,
     `Mode: ${facts.intent}`,
     `Session: ${facts.sessionId ?? "temporary"}`,
-  ];
+  );
   if (facts.sessionDb) lines.push(`Session db: ${cleanText(facts.sessionDb)}`);
   lines.push(
     `Theme: ${facts.theme}`,

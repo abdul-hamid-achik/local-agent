@@ -12,6 +12,7 @@
 // `tuimark host` owns it.
 
 import { stat, writeFile } from "node:fs/promises";
+import { totalmem } from "node:os";
 import { join } from "node:path";
 import {
   type AgentEvent,
@@ -30,6 +31,7 @@ import {
   type Provider,
   permissionRequest,
   permissionsPath,
+  planContextSize,
   proposeRule,
   runAgent,
   type SessionContext,
@@ -204,6 +206,8 @@ export interface ClientOptions {
   columns?: () => number;
   /** How long a new approval dialog ignores `y`. Default APPROVAL_ARM_MS. */
   armMs?: number;
+  /** The machine's memory, for planning a new model's context. Default os.totalmem. */
+  totalMemory?: () => number;
   /** Clock for the busy status's elapsed time. Default Date.now. */
   now?: () => number;
 }
@@ -1043,10 +1047,18 @@ export class TuimarkClient {
       { path: "status", value: `Switching model to ${name}…` },
     ]);
     const admit = this.options.admitModel ?? admitOllamaModel;
+    // A size the user did not set is planned again for the new model
+    // (a different load anyway), so admission is asked only for its facts.
+    const planned =
+      this.provider.type === "ollama" && !this.provider.context_explicit;
     let admission: OllamaAdmission;
     try {
       admission = await admit(
-        { ...this.provider, model: name },
+        {
+          ...this.provider,
+          model: name,
+          ...(planned ? { context_size: 512 } : {}),
+        },
         this.options.signal,
       );
     } catch (error) {
@@ -1064,10 +1076,25 @@ export class TuimarkClient {
       await this.write([{ path: "status", value: oneLine(admission.message) }]);
       return;
     }
-    this.provider = { ...this.provider, model: admission.model };
+    const plan = planned
+      ? planContextSize({
+          nativeContext: admission.nativeContext,
+          weightsBytes: admission.sizeBytes,
+          kvBytesPerToken: admission.kvBytesPerToken,
+          totalMemory: this.options.totalMemory?.() ?? totalmem(),
+        })
+      : undefined;
+    this.provider = {
+      ...this.provider,
+      model: admission.model,
+      ...(plan
+        ? { context_size: plan.context, context_plan: plan.reason }
+        : {}),
+    };
     await this.write([
       { path: "status", value: `Model changed to ${admission.model}` },
       { path: "header.model", value: clip(cleanText(admission.model), 40) },
+      ...this.ctxWrites(this.ctx.current),
     ]);
   }
 

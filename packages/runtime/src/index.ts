@@ -19,6 +19,7 @@ export {
   type ApprovalRequest,
   runAgent,
   type SessionContext,
+  sessionProblem,
 } from "#runtime/agent";
 export {
   DEFAULT_OLLAMA_MODEL,
@@ -29,6 +30,12 @@ export {
   providerStreamIdleTimeoutMs,
   resolveProvider,
 } from "#runtime/config";
+export {
+  type ContextPlan,
+  PLANNED_CONTEXT_MAX,
+  planContext,
+  planContextSize,
+} from "#runtime/context";
 export {
   connectMcp,
   connectMcpServers,

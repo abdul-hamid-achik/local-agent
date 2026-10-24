@@ -2673,6 +2673,60 @@ test("/model reports the current model, then switches the provider the next turn
   expect(providers.at(-1)?.model).toBe("llama3.2");
 });
 
+test("/model plans the new model's context unless the user chose a size", async () => {
+  const GIB = 1024 ** 3;
+  const asked: number[] = [];
+  const providers: Provider[] = [];
+  const admitModel = async (candidate: Provider) => {
+    asked.push(candidate.context_size);
+    return {
+      ...validated(candidate.model),
+      sizeBytes: 3.3 * GIB,
+      nativeContext: 262_144,
+      kvBytesPerToken: 32_768,
+    } as OllamaAdmission;
+  };
+  const run: ConstructorParameters<typeof TuimarkClient>[0]["run"] = (
+    provider,
+    messages,
+    options,
+  ) => {
+    providers.push(provider);
+    return reply("ok")({ options, messages });
+  };
+  const planned = setup(reply("ok"), {
+    admitModel,
+    run,
+    totalMemory: () => 16 * GIB,
+  });
+  await planned.ui.fire("send", "/model qwen3.5:4b");
+  expect(asked).toEqual([512]);
+  expect(store(planned.ui).header.ctx_label).toBe("0/32k");
+  await planned.ui.fire("send", "hi");
+  await planned.client.idle();
+  expect(providers.at(-1)).toMatchObject({
+    model: "qwen3.5:4b",
+    context_size: 32_768,
+    context_plan: expect.stringMatching(/^planned: /),
+  });
+  await planned.ui.fire("send", "/status");
+  expect(JSON.stringify(store(planned.ui))).toContain(
+    "Context size: planned: ",
+  );
+
+  const chosen = setup(reply("ok"), {
+    admitModel,
+    run,
+    provider: { ...provider, context_explicit: true },
+    totalMemory: () => 16 * GIB,
+  });
+  await chosen.ui.fire("send", "/model qwen3.5:4b");
+  expect(asked).toEqual([512, 8192]);
+  await chosen.ui.fire("send", "hi");
+  await chosen.client.idle();
+  expect(providers.at(-1)?.context_size).toBe(8192);
+});
+
 test("a model the Ollama inventory rejects is refused: no switch, no header write", async () => {
   const providers: Provider[] = [];
   const { ui, client } = setup(reply("ok"), {

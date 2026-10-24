@@ -14,6 +14,7 @@ import {
   inspectRecovery,
   type McpConnection,
   McpServerConfigSchema,
+  planContext,
   resolveProvider,
   runAgent,
   type SessionContext,
@@ -80,7 +81,10 @@ function resolveWorkspaceRoot(input: string): string {
 }
 
 async function resolveProviderView(model?: string): Promise<ProviderView> {
-  const provider = resolveProvider(process.env, model);
+  const provider = await planContext(
+    resolveProvider(process.env, model),
+    AbortSignal.timeout(15_000),
+  );
   return {
     type: provider.type,
     base_url: provider.base_url,
@@ -145,7 +149,11 @@ async function handleAgentStart(id: number, params: unknown): Promise<void> {
   const run: ActiveRun = { controller, pending: undefined };
   activeRuns.set(runId, run);
 
-  const provider = resolveProvider(process.env, model);
+  // The same planned context size as the CLI (see planContext).
+  const provider = await planContext(
+    resolveProvider(process.env, model),
+    controller.signal,
+  );
   const workspace = await Workspace.create(workspaceRoot);
   let store: SessionStore | undefined;
   const mcp: McpConnection[] = [];
