@@ -292,6 +292,59 @@ test("rejects a truncated stream without a completion event", async () => {
   }
 });
 
+test("a lost Chalupa tunnel is named as one; a local Ollama's error is not", async () => {
+  const remote = (base_url: string) =>
+    resolveProvider({
+      LOCAL_AGENT_PROVIDER: "chalupa",
+      LOCAL_AGENT_LOCAL_ONLY: "false",
+      LOCAL_AGENT_PROVIDER_CONFIG: JSON.stringify({
+        type: "ollama_remote",
+        base_url,
+        model: "fixture",
+        context_size: 8192,
+        max_model_bytes: 1_000_000_000,
+        stream_idle_timeout: "10m",
+      }),
+    });
+  const drain = async (provider: ReturnType<typeof resolveProvider>) => {
+    for await (const _ of chat(
+      provider,
+      [{ role: "user", content: "Hello" }],
+      AbortSignal.timeout(5000),
+    ));
+  };
+  // A port nothing listens on: the tunnel's forward is gone.
+  const closed = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch: () => new Response(),
+  });
+  const gone = closed.url.origin;
+  await closed.stop(true);
+  await expect(drain(remote(gone))).rejects.toThrow(
+    `The Chalupa tunnel to ${gone} was lost (Unable to connect. Is the computer able to access the url?). The GPU may still be running: run chalupa status.`,
+  );
+  // Cut mid-reply.
+  const cut = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch: () =>
+      new Response(
+        `${JSON.stringify({ message: { role: "assistant", content: "a" }, done: false })}\n`,
+      ),
+  });
+  try {
+    await expect(drain(remote(cut.url.origin))).rejects.toThrow(
+      /^The Chalupa tunnel to .* was lost \(Did not receive done/,
+    );
+    await expect(
+      drain(resolveProvider({ OLLAMA_HOST: cut.url.origin }, "fixture")),
+    ).rejects.toThrow(/^Did not receive done/);
+  } finally {
+    await cut.stop(true);
+  }
+});
+
 test("rejects redirects rather than forwarding a prompt to another host", async () => {
   const server = Bun.serve({
     hostname: "127.0.0.1",

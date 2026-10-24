@@ -16,6 +16,8 @@ const HEADROOM = 2.5 * GIB;
  */
 export const PLANNED_CONTEXT_MAX = 32_768;
 const STEPS = [32_768, 24_576, 16_384, 12_288, 8_192];
+/** Below this, a Chalupa-negotiated context is worth a warning. */
+const LOW_REMOTE_CONTEXT = 16_384;
 
 export type ContextPlan = { context: number; reason: string };
 
@@ -97,8 +99,9 @@ export function explicitContextNote(
 /**
  * The provider with a planned `context_size`, for a local Ollama model whose
  * size the user did not set (--context, LOCAL_AGENT_CONTEXT); a size the
- * user set is kept, with what it costs (`explicitContextNote`). Chalupa and
- * openai_local keep theirs. When the model cannot be inspected the provider
+ * user set is kept, with what it costs (`explicitContextNote`). Chalupa's
+ * negotiated size is kept, with a warning when it is small; openai_local
+ * keeps its own. When the model cannot be inspected the provider
  * is returned as it is: admission reports why on its own.
  */
 export async function planContext(
@@ -106,6 +109,18 @@ export async function planContext(
   signal: AbortSignal,
   totalMemory = totalmem(),
 ): Promise<Provider> {
+  if (provider.type === "ollama_remote")
+    return {
+      ...provider,
+      context_plan: "negotiated by Chalupa",
+      // Chalupa's automatic size can go well below what the planner gives
+      // a local model; long turns then compact early.
+      ...(provider.context_size < LOW_REMOTE_CONTEXT
+        ? {
+            context_warning: `Chalupa negotiated a context of ${provider.context_size} tokens: long turns are compacted early. A larger GPU or a smaller model gives more.`,
+          }
+        : {}),
+    };
   if (provider.type !== "ollama") return provider;
   // The plan picks the size, so admission is asked only for the model's
   // facts: the smallest size passes its native-context check.

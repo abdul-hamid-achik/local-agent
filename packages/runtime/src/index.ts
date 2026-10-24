@@ -386,6 +386,22 @@ async function* openAILocalChat(
   });
 }
 
+/** A connection that was refused, reset or cut before the reply ended. */
+function tunnelLost(error: unknown): boolean {
+  const { code, message } = (error ?? {}) as {
+    code?: unknown;
+    message?: unknown;
+  };
+  return (
+    /^(ConnectionRefused|ConnectionClosed|ECONNREFUSED|ECONNRESET|EPIPE)$/.test(
+      String(code ?? ""),
+    ) ||
+    /Unable to connect|socket connection was closed|Did not receive done|stream ended before completion/.test(
+      String(message ?? ""),
+    )
+  );
+}
+
 /** Transport only: tool calls are data, never authority to execute. */
 export async function* chat(
   provider: Provider,
@@ -465,6 +481,15 @@ export async function* chat(
       }
     }
     throw new Error("Ollama stream ended before completion");
+  } catch (error) {
+    // A Chalupa endpoint is a tunnel: when it drops, say so, and that the
+    // GPU behind it may still be running (Chalupa owns it, not this run).
+    if (config.type === "ollama_remote" && !signal.aborted && tunnelLost(error))
+      throw new Error(
+        `The Chalupa tunnel to ${config.base_url} was lost (${error instanceof Error ? error.message.split("\n")[0] : "connection closed"}). The GPU may still be running: run chalupa status.`,
+        { cause: error },
+      );
+    throw error;
   } finally {
     client.abort();
   }

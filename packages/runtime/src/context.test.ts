@@ -195,24 +195,31 @@ test("planContext keeps a chosen size and says what it costs", async () => {
   ).toEqual({ reason: "set by --context or LOCAL_AGENT_CONTEXT" });
 });
 
-test("planContext leaves Chalupa's and openai_local's size alone", async () => {
+test("planContext keeps Chalupa's negotiated size, and warns when it is small", async () => {
   const fetchMock = ollama(qwen35);
-  try {
-    const chalupa = resolveProvider({
+  const chalupa = (context_size: number) =>
+    resolveProvider({
       LOCAL_AGENT_PROVIDER: "chalupa",
       LOCAL_AGENT_LOCAL_ONLY: "false",
       LOCAL_AGENT_PROVIDER_CONFIG: JSON.stringify({
         type: "ollama_remote",
         base_url: "http://127.0.0.1:1",
         model: "large:35b",
-        context_size: 65536,
+        context_size,
         max_model_bytes: 32 * GIB,
         stream_idle_timeout: "10m",
       }),
     });
-    expect(await planContext(chalupa, AbortSignal.timeout(5_000))).toBe(
-      chalupa,
+  try {
+    expect(
+      await planContext(chalupa(65_536), AbortSignal.timeout(5_000)),
+    ).toEqual({ ...chalupa(65_536), context_plan: "negotiated by Chalupa" });
+    const small = await planContext(chalupa(8_192), AbortSignal.timeout(5_000));
+    expect(small.context_size).toBe(8_192);
+    expect(small.context_warning).toBe(
+      "Chalupa negotiated a context of 8192 tokens: long turns are compacted early. A larger GPU or a smaller model gives more.",
     );
+    // Nothing is asked of the remote host.
     expect(fetchMock).not.toHaveBeenCalled();
   } finally {
     fetchMock.mockRestore();
