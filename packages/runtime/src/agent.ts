@@ -1102,17 +1102,18 @@ export function toolOutputLimit(contextSize: number): number {
 
 /**
  * What each result of one assistant message's `calls` may hold: together
- * they share about 40% of the window (at three characters a token), at
- * least 1,000 characters each, never more than `toolOutputLimit`. Four
- * reads at a quarter of the window each would fill it with results the
- * model has not seen yet, which nothing could then shorten.
+ * they share about 40% of the window (at three characters a token), never
+ * more than `toolOutputLimit` each. Four reads at a quarter of the window
+ * each would fill it with results the model has not seen yet, which
+ * nothing could then shorten. The 200-character floor only binds past 196
+ * calls at 32k, beyond the 32 a message may make.
  */
 export function batchOutputLimit(contextSize: number, calls: number): number {
   const single = toolOutputLimit(contextSize);
   if (calls <= 1) return single;
   return Math.min(
     single,
-    Math.max(1_000, Math.floor((contextSize * 6) / 5 / calls)),
+    Math.max(200, Math.floor((contextSize * 6) / 5 / calls)),
   );
 }
 
@@ -1143,11 +1144,13 @@ export function readLines(
   // A final newline ends the last line; it does not start another.
   if (lines.length > 1 && lines.at(-1) === "") lines.pop();
   const total = lines.length;
-  const first = Math.min(offset ?? 1, total + 1);
-  const last = Math.min(total, first - 1 + (limit ?? total));
+  const first = offset ?? 1;
   if (first > total)
     return `[the file has ${total} line${total === 1 ? "" : "s"}; offset ${first} is past its end]`;
-  const room = chars - 120;
+  const last = Math.min(total, first - 1 + (limit ?? total));
+  // Room for the note at the end, the longest of which (a cut line) runs
+  // near 170 characters.
+  const room = chars - 200;
   let shown = first - 1;
   let size = 0;
   while (shown < last) {
@@ -1157,11 +1160,16 @@ export function readLines(
     shown++;
   }
   let body = lines.slice(first - 1, shown).join("\n");
-  // One line longer than the whole limit is cut, not returned whole.
-  if (body.length > room) body = body.slice(0, room);
+  // One line longer than the whole limit is cut, not returned whole, and
+  // the note says so: no offset reaches the rest of that line.
+  let cut = "";
+  if (body.length > room) {
+    cut = `; line ${first} is cut at ${room} of ${(lines[first - 1] ?? "").length} characters (search can find text in the rest)`;
+    body = body.slice(0, room);
+  }
   const more =
     shown < total ? `; read again with offset ${shown + 1} to continue` : "";
-  return `${body}\n[lines ${first}-${shown} of ${total}${more}]`;
+  return `${body}\n[lines ${first}-${shown} of ${total}${cut}${more}]`;
 }
 
 export type AgentEvent =

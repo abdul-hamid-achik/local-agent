@@ -76,6 +76,12 @@ test("the prompt counts reasoning only after the last user message", () => {
   expect(chars - withoutCurrent).toBe(2_000);
 });
 
+test("a wide character counts as a token, not a third of one", () => {
+  expect(promptChars([{ role: "user", content: "abc" }])).toBe(3);
+  expect(promptChars([{ role: "user", content: "日本語" }])).toBe(9);
+  expect(promptChars([{ role: "user", content: "한글 ok" }])).toBe(9);
+});
+
 test("compaction frees images first, then read results, oldest first", () => {
   const little = compactHistory(history, 1);
   expect(little.elided).toBe(1);

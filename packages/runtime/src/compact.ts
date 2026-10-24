@@ -23,17 +23,27 @@ const MIN_ELIDED = 800;
 const ELIDED =
   "characters elided to keep the conversation within the context window. Run the tool again if you need them.]";
 
+// CJK and other wide scripts run near one token a character, not three.
+const WIDE = /[\u2e80-\u9fff\uac00-\ud7af\uf900-\ufaff\uff00-\uffef]/g;
+
+/** `text`'s length, a wide character counted as a whole token. */
+function weighted(text: string): number {
+  const wide = text.match(WIDE)?.length ?? 0;
+  return text.length + wide * (CHARS_PER_TOKEN - 1);
+}
+
 /**
  * Characters the model reads of `messages`: content, tool calls and images,
  * and `thinking` only after the last user message (templates such as
- * qwen3.5's drop earlier turns' reasoning).
+ * qwen3.5's drop earlier turns' reasoning). A wide character counts three.
  */
 export function promptChars(messages: readonly Message[]): number {
   const lastUser = messages.findLastIndex((message) => message.role === "user");
   let chars = 0;
   for (const [index, message] of messages.entries()) {
-    chars += message.content.length;
-    if (message.thinking && index > lastUser) chars += message.thinking.length;
+    chars += weighted(message.content);
+    if (message.thinking && index > lastUser)
+      chars += weighted(message.thinking);
     if (message.tool_calls) chars += JSON.stringify(message.tool_calls).length;
     chars += (message.images?.length ?? 0) * IMAGE_CHARS;
   }

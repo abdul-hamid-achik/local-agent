@@ -7,6 +7,8 @@ import { admitOllamaModel } from "#runtime/admission";
 import type { Provider } from "#runtime/config";
 
 const GIB = 1024 ** 3;
+/** Compute buffer, Ollama's prompt cache and its checkpoints. */
+const HEADROOM = 2.5 * GIB;
 /**
  * The largest planned size. Memory is rarely the limit on a 16 GB machine;
  * prefill is: refilling 64k tokens after a trim takes about a minute on a
@@ -24,7 +26,9 @@ const gib = (bytes: number) => `${(bytes / GIB).toFixed(1)} GiB`;
  * above the model's native context. What fits is 11/16 of the machine's
  * memory (about what Metal lets the GPU use), less the weights, less 2.5 GiB
  * for the compute buffer, Ollama's prompt cache and its checkpoints. With
- * no KV facts the size stays at the long-standing 16384.
+ * no KV facts the size stays at the long-standing 16384; when nothing fits,
+ * 16384 or 12288 still stands if its cache fits without the headroom (as
+ * it ran before planning), and 8192 otherwise.
  */
 export function planContextSize(facts: {
   nativeContext?: number;
@@ -39,7 +43,7 @@ export function planContextSize(facts: {
       context: Math.min(16_384, native),
       reason: "the default: the model does not report its KV cache size",
     };
-  const budget = (facts.totalMemory * 11) / 16 - facts.weightsBytes - 2.5 * GIB;
+  const budget = (facts.totalMemory * 11) / 16 - facts.weightsBytes - HEADROOM;
   for (const step of STEPS) {
     if (step > native) continue;
     if (step * kv <= budget)
@@ -48,9 +52,15 @@ export function planContextSize(facts: {
         reason: `planned: its KV cache takes ${gib(step * kv)} of the ${gib(Math.max(0, budget))} left after the weights`,
       };
   }
+  // Memory is tight: the long-standing 16384 (or 12288) still stands when
+  // its cache fits without the headroom, as it ran before the planner.
+  const bare = budget + HEADROOM;
+  const fallback =
+    [16_384, 12_288].find((step) => step <= native && step * kv <= bare) ??
+    Math.min(8_192, native);
   return {
-    context: Math.min(8_192, native),
-    reason: `planned: memory is tight (${gib(Math.max(0, budget))} left after the weights)`,
+    context: fallback,
+    reason: `planned: memory is tight (${gib(Math.max(0, budget))} left after the weights and headroom)`,
   };
 }
 

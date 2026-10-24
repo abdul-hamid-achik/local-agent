@@ -14,6 +14,7 @@ import {
   inspectRecovery,
   type McpConnection,
   McpServerConfigSchema,
+  type Provider,
   planContext,
   resolveProvider,
   runAgent,
@@ -80,11 +81,40 @@ function resolveWorkspaceRoot(input: string): string {
   return root;
 }
 
+/** The last plan per endpoint and model: a run whose look at the model fails keeps it. */
+const plans = new Map<string, Provider>();
+
+/**
+ * The provider with the CLI's planned context size (see planContext). A
+ * plan is kept per endpoint and model, so a run whose look at the model
+ * fails reuses the last one instead of falling back to 16384 for one run.
+ */
+async function plannedProvider(
+  model: string | undefined,
+  signal: AbortSignal,
+): Promise<Provider> {
+  const resolved = resolveProvider(process.env, model);
+  const key = `${resolved.base_url}\n${resolved.model}`;
+  const provider = await planContext(resolved, signal);
+  if (provider.context_plan) plans.set(key, provider);
+  else if (
+    provider === resolved &&
+    resolved.type === "ollama" &&
+    !resolved.context_explicit
+  ) {
+    const last = plans.get(key);
+    if (last)
+      return {
+        ...resolved,
+        context_size: last.context_size,
+        context_plan: last.context_plan,
+      };
+  }
+  return provider;
+}
+
 async function resolveProviderView(model?: string): Promise<ProviderView> {
-  const provider = await planContext(
-    resolveProvider(process.env, model),
-    AbortSignal.timeout(15_000),
-  );
+  const provider = await plannedProvider(model, AbortSignal.timeout(15_000));
   return {
     type: provider.type,
     base_url: provider.base_url,
@@ -149,11 +179,7 @@ async function handleAgentStart(id: number, params: unknown): Promise<void> {
   const run: ActiveRun = { controller, pending: undefined };
   activeRuns.set(runId, run);
 
-  // The same planned context size as the CLI (see planContext).
-  const provider = await planContext(
-    resolveProvider(process.env, model),
-    controller.signal,
-  );
+  const provider = await plannedProvider(model, controller.signal);
   const workspace = await Workspace.create(workspaceRoot);
   let store: SessionStore | undefined;
   const mcp: McpConnection[] = [];

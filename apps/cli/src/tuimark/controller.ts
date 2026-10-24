@@ -2331,7 +2331,7 @@ export class TuimarkClient {
       published();
     }
     this.timer = setInterval(() => this.tick(), this.options.flushMs ?? 33);
-    await this.loop(prompt, request);
+    await this.loop(prompt, request, userView);
     // A send queued while busy runs now, after success and after an error
     // alike (it is the user's latest intent); esc and quit already dropped
     // it, and a process-level abort makes a new turn impossible.
@@ -2343,7 +2343,11 @@ export class TuimarkClient {
     }
   }
 
-  private async loop(prompt: string, request: AbortController): Promise<void> {
+  private async loop(
+    prompt: string,
+    request: AbortController,
+    userView?: MessageView,
+  ): Promise<void> {
     const { workspace, mcp, signal } = this.options;
     // The session this turn checkpoints to (a switch is refused while
     // busy, so it cannot change under the turn).
@@ -2498,7 +2502,8 @@ export class TuimarkClient {
         // visible next to its error notice — and inline it is already in
         // the scrollback either way.
         this.history.pop();
-        if (aborted) this.transcript.pop();
+        // The prompt's own view: a compaction note may have followed it.
+        if (aborted && userView) this.transcript.remove(userView);
         // The host may be gone already (ctrl+c mid-turn): keep going to the
         // cleanup. A draft typed during the turn is never overwritten, and
         // a queued send (which cleared the draft for its own turn) is the

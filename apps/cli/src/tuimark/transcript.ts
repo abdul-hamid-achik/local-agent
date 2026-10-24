@@ -52,9 +52,20 @@ export class Transcript {
     this.shown = this.windowSize;
   }
 
-  /** Removes and returns the newest view (a failed turn takes its prompt back). */
+  /** Removes and returns the newest view. */
   pop(): MessageView | undefined {
     return this.views.pop();
+  }
+
+  /**
+   * Removes `view` wherever it is (a cancelled turn takes its prompt back,
+   * even with a note pushed after it). False when it is not here.
+   */
+  remove(view: MessageView): boolean {
+    const index = this.views.lastIndexOf(view);
+    if (index < 0) return false;
+    this.views.splice(index, 1);
+    return true;
   }
 
   /** Shows `step` more messages. Returns false when everything is already shown. */

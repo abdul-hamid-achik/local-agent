@@ -89,7 +89,7 @@ test("the planned size is the largest step that fits", () => {
   ).toBe(4_096);
 });
 
-test("unknown KV facts keep 16384 and no room keeps 8192", () => {
+test("unknown KV facts keep 16384; tight memory keeps what ran before", () => {
   expect(planContextSize({ weightsBytes: GIB, totalMemory: MAC_16GB })).toEqual(
     {
       context: 16_384,
@@ -103,16 +103,27 @@ test("unknown KV facts keep 16384 and no room keeps 8192", () => {
       totalMemory: MAC_16GB,
     }).context,
   ).toBe(2_048);
-  const tight = planContextSize({
-    nativeContext: 131_072,
-    weightsBytes: 9 * GIB,
-    kvBytesPerToken: 131_072,
-    totalMemory: MAC_16GB,
+  // An 8 GB Mac with a 4B model: nothing fits with the headroom, but the
+  // old 16384 (0.5 GiB of cache) did run there, so it stays.
+  const small = planContextSize({
+    nativeContext: 262_144,
+    weightsBytes: 3.4 * GIB,
+    kvBytesPerToken: 32_768,
+    totalMemory: 8 * GIB,
   });
-  expect(tight.context).toBe(8_192);
-  expect(tight.reason).toBe(
-    "planned: memory is tight (0.0 GiB left after the weights)",
+  expect(small.context).toBe(16_384);
+  expect(small.reason).toBe(
+    "planned: memory is tight (0.0 GiB left after the weights and headroom)",
   );
+  // A dense model that leaves half a GiB: 8192.
+  expect(
+    planContextSize({
+      nativeContext: 131_072,
+      weightsBytes: 10.5 * GIB,
+      kvBytesPerToken: 131_072,
+      totalMemory: MAC_16GB,
+    }).context,
+  ).toBe(8_192);
 });
 
 function ollama(modelInfo: Record<string, unknown>, size = 3.3 * GIB) {

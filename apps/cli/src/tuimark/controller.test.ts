@@ -3448,3 +3448,39 @@ test("without a session a failed compacted turn takes back only its prompt", asy
     "user:third",
   ]);
 });
+
+test("esc after a compaction takes back the prompt, not the compaction note", async () => {
+  let turn = 0;
+  const { ui, client } = setup(reply("ok"), {
+    run: (_provider, messages, options) => {
+      turn++;
+      if (turn === 1) return reply("ok")({ options, messages });
+      return (async function* (): AsyncGenerator<AgentEvent> {
+        yield {
+          type: "compacted",
+          messages: messages.slice(),
+          elided: 1,
+          tokensBefore: 6_000,
+          tokensAfter: 3_000,
+        };
+        await new Promise((_, reject) =>
+          options.signal.addEventListener("abort", () =>
+            reject(new Error("aborted")),
+          ),
+        );
+      })();
+    },
+  });
+  await ui.fire("send", "hello");
+  await client.idle();
+  await ui.fire("send", "slow one");
+  await until(() =>
+    JSON.stringify(store(ui).messages).includes("Context compacted"),
+  );
+  await ui.fire("cancel");
+  await client.idle();
+  const text = JSON.stringify(store(ui).messages);
+  expect(text).toContain("Context compacted");
+  expect(text).not.toContain("slow one");
+  expect(store(ui).draft).toBe("slow one");
+});

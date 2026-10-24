@@ -402,7 +402,9 @@ test("the results of one message share 40% of the window", () => {
   expect(batchOutputLimit(32_768, 2)).toBe(19_660);
   expect(batchOutputLimit(32_768, 4)).toBe(9_830);
   expect(batchOutputLimit(32_768, 32)).toBe(1_228);
-  expect(batchOutputLimit(2_048, 32)).toBe(1_000);
+  expect(batchOutputLimit(2_048, 32)).toBe(200);
+  // Even at 32 calls the batch stays inside 40% of the window.
+  expect(batchOutputLimit(8_192, 32) * 32).toBeLessThanOrEqual(8_192 * 1.2);
 });
 
 test("a batch of reads is cut to its share, and the next step to its own", async () => {
@@ -444,6 +446,9 @@ test("read pages through a file that does not fit, at line ends", () => {
   expect(readLines(file, 101, undefined, 4_000)).toBe(
     "[the file has 100 lines; offset 101 is past its end]",
   );
+  expect(readLines(file, 500, undefined, 4_000)).toBe(
+    "[the file has 100 lines; offset 500 is past its end]",
+  );
   // Too long for the limit: the lines that fit, and where to go on.
   const part = readLines(file, undefined, undefined, 300);
   expect(part.length).toBeLessThanOrEqual(300);
@@ -454,10 +459,18 @@ test("read pages through a file that does not fit, at line ends", () => {
     /lines 1-(\d+) of 100; read again with offset (\d+)/.exec(part) ?? [];
   expect(Number(next)).toBe(Number(last) + 1);
   expect(part.split("\n").at(-2)).toBe(`line ${last}`);
-  // One line longer than the limit is cut, not returned whole.
-  expect(
-    readLines("x".repeat(10_000), undefined, undefined, 4_000).length,
-  ).toBeLessThanOrEqual(4_000);
+  // One line longer than the limit is cut, not returned whole, and the
+  // note says so (no offset reaches the rest of it).
+  const long = readLines(
+    `${"x".repeat(10_000)}\nnext`,
+    undefined,
+    undefined,
+    4_000,
+  );
+  expect(long.length).toBeLessThanOrEqual(4_000);
+  expect(long).toMatch(
+    /\n\[lines 1-1 of 2; line 1 is cut at 3800 of 10000 characters \(search can find text in the rest\); read again with offset 2 to continue\]$/,
+  );
 });
 
 test("read takes offset and limit, as numbers or strings", async () => {
