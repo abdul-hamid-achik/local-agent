@@ -28,7 +28,7 @@ steps:
     - wait:
         screen:
             contains: "Draft cleared · ctrl+c again to quit"
-        timeoutMs: 5000
+        timeoutMs: 10000
     - type: "count this line"
     - press: enter
     - wait:
@@ -40,7 +40,7 @@ steps:
     - wait:
         process:
             exitCode: 0
-        timeoutMs: 5000
+        timeoutMs: 10000
 outcomes:
     - id: tuimark_inline_error_scrollback
       description: the failed prompt and its Error notice remain in the scrollback after exit

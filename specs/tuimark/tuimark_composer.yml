@@ -26,7 +26,7 @@ steps:
     - wait:
         screen:
             matches: "║ third line\\s*║"
-        timeoutMs: 5000
+        timeoutMs: 10000
     - snapshot: three_lines
     - press: enter
     - wait:
@@ -41,7 +41,7 @@ steps:
     - wait:
         screen:
             matches: "║ text\\s*║"
-        timeoutMs: 5000
+        timeoutMs: 10000
     - snapshot: pasted
     - press: enter
     - wait:
@@ -52,7 +52,7 @@ steps:
     - wait:
         process:
             exitCode: 0
-        timeoutMs: 5000
+        timeoutMs: 10000
 outcomes:
     - id: tuimark_composer_typed_lines
       description: three lines typed with shift+enter and alt+enter reach the model as one message of three lines

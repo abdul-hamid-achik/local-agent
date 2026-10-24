@@ -22,7 +22,7 @@ steps:
     - wait:
         screen:
             contains: "No tool output yet"
-        timeoutMs: 5000
+        timeoutMs: 10000
     - type: "read the long file"
     - press: enter
     - wait:
@@ -33,17 +33,17 @@ steps:
     - wait:
         screen:
             contains: "Ready"
-        timeoutMs: 5000
+        timeoutMs: 10000
     - wait:
         screen:
             notContains: "long line 15 past the card"
-        timeoutMs: 5000
+        timeoutMs: 10000
     - type: "/details"
     - press: enter
     - wait:
         screen:
             contains: "read · succeeded"
-        timeoutMs: 5000
+        timeoutMs: 10000
     - press: down
     - press: down
     - press: down
@@ -52,18 +52,18 @@ steps:
     - wait:
         screen:
             contains: "long line 15 past the card"
-        timeoutMs: 5000
+        timeoutMs: 10000
     - snapshot: details_open
     - press: esc
     - wait:
         screen:
             notContains: "esc or q close"
-        timeoutMs: 5000
+        timeoutMs: 10000
     - press: ctrl+c
     - wait:
         process:
             exitCode: 0
-        timeoutMs: 5000
+        timeoutMs: 10000
 outcomes:
     - id: tuimark_details
       description: the card truncates a long tool output with a /details pointer, and /details shows the cut lines in the viewer

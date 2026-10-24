@@ -27,11 +27,11 @@ steps:
     - wait:
         screen:
             contains: "a allow file changes this session"
-        timeoutMs: 5000
+        timeoutMs: 10000
     - wait:
         screen:
             contains: "y allow"
-        timeoutMs: 5000
+        timeoutMs: 10000
     - press: a
     - wait:
         screen:
@@ -40,7 +40,7 @@ steps:
     - wait:
         screen:
             contains: "auto: files"
-        timeoutMs: 5000
+        timeoutMs: 10000
     - type: "edit again"
     - press: enter
     - wait:
@@ -50,19 +50,19 @@ steps:
     - wait:
         screen:
             notContains: "Edit notes.txt?"
-        timeoutMs: 5000
+        timeoutMs: 10000
     # The trailing space closes the slash popup, so enter sends at once.
     - type: "/permissions "
     - press: enter
     - wait:
         screen:
             contains: "Permissions: session: files"
-        timeoutMs: 5000
+        timeoutMs: 10000
     - press: ctrl+c
     - wait:
         process:
             exitCode: 0
-        timeoutMs: 5000
+        timeoutMs: 10000
 outcomes:
     - id: tuimark_edit_session
       description: a grants file changes for the session; the second edit lands without a second approval

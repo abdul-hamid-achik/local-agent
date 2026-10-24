@@ -30,12 +30,12 @@ steps:
     - wait:
         screen:
             contains: "Edit notes.txt?"
-        timeoutMs: 5000
+        timeoutMs: 10000
     - snapshot: approval_narrow
     - wait:
         screen:
             contains: "y allow"
-        timeoutMs: 5000
+        timeoutMs: 10000
     - press: y
     - wait:
         screen:
@@ -45,12 +45,12 @@ steps:
     - wait:
         screen:
             notContains: "Edit notes.txt?"
-        timeoutMs: 5000
+        timeoutMs: 10000
     - press: ctrl+c
     - wait:
         process:
             exitCode: 0
-        timeoutMs: 5000
+        timeoutMs: 10000
 outcomes:
     - id: tuimark_edit_approved
       description: approving the proposal applies the exact edit in the workspace

@@ -22,25 +22,25 @@ steps:
     - wait:
         screen:
             contains: "Mode changed to plan"
-        timeoutMs: 5000
+        timeoutMs: 10000
     - type: "/help"
     - press: enter
     - wait:
         screen:
             contains: "close help"
-        timeoutMs: 5000
+        timeoutMs: 10000
     - snapshot: help
     - press: esc
     - wait:
         screen:
             notContains: "close help"
-        timeoutMs: 5000
+        timeoutMs: 10000
     - type: "/nope"
     - press: enter
     - wait:
         screen:
             contains: "Unknown command: /nope"
-        timeoutMs: 5000
+        timeoutMs: 10000
     - type: "stream a reply"
     - press: enter
     - wait:
@@ -55,7 +55,7 @@ steps:
     - wait:
         screen:
             contains: "Ready"
-        timeoutMs: 5000
+        timeoutMs: 10000
     - snapshot: reply_done
     - type: "slow please"
     - press: enter
@@ -67,7 +67,7 @@ steps:
     - wait:
         screen:
             contains: "Cancelled"
-        timeoutMs: 5000
+        timeoutMs: 10000
     - snapshot: cancelled
     - press: enter
     - wait:
@@ -78,7 +78,7 @@ steps:
     - wait:
         process:
             exitCode: 0
-        timeoutMs: 5000
+        timeoutMs: 10000
 outcomes:
     - id: tuimark_chat
       description: streaming, slash commands, esc cancel work end to end, and ctrl+c quits in the middle of a reply

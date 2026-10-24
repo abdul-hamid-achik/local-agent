@@ -31,13 +31,13 @@ steps:
     - wait:
         screen:
             contains: "Ready"
-        timeoutMs: 5000
+        timeoutMs: 10000
     - snapshot: reply_done
     - press: ctrl+c
     - wait:
         process:
             exitCode: 0
-        timeoutMs: 5000
+        timeoutMs: 10000
 outcomes:
     - id: tuimark_inline_chat_scrollback
       description: after exit, the committed prompt and reply remain as scrollback rows

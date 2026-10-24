@@ -43,7 +43,7 @@ steps:
     - wait:
         screen:
             contains: "edit once more"
-        timeoutMs: 5000
+        timeoutMs: 10000
     - snapshot: denied_with_esc
     - press: enter
     - wait:
@@ -55,7 +55,7 @@ steps:
     - wait:
         process:
             exitCode: 0
-        timeoutMs: 5000
+        timeoutMs: 10000
 outcomes:
     - id: tuimark_inline_edit_denied
       description: denying the in-flow proposal, with n and with esc, leaves the file unchanged

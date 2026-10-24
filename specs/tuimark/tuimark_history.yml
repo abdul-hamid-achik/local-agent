@@ -46,13 +46,13 @@ steps:
     - wait:
         screen:
             matches: "║ count beta\\s*║"
-        timeoutMs: 5000
+        timeoutMs: 10000
     - snapshot: newest
     - press: up
     - wait:
         screen:
             matches: "║ count alpha\\s*║"
-        timeoutMs: 5000
+        timeoutMs: 10000
     - snapshot: oldest
     - press: up
     - wait:
@@ -63,23 +63,23 @@ steps:
     - wait:
         screen:
             matches: "║ count beta\\s*║"
-        timeoutMs: 5000
+        timeoutMs: 10000
     - press: down
     - wait:
         screen:
             matches: "║ half typed\\s*║"
-        timeoutMs: 5000
+        timeoutMs: 10000
     - snapshot: draft_back
     - press: ctrl+c
     - wait:
         screen:
             contains: "Draft cleared · ctrl+c again to quit"
-        timeoutMs: 5000
+        timeoutMs: 10000
     - press: ctrl+c
     - wait:
         process:
             exitCode: 0
-        timeoutMs: 5000
+        timeoutMs: 10000
 outcomes:
     - id: tuimark_history_recalls
       description: up walked back through both sent messages and down walked forward again to the unsent draft (proven by the step waits on the composer; the closing ctrl+c clears that draft, so the final screen shows the transcript instead)

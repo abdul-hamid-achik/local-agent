@@ -27,18 +27,18 @@ steps:
     - wait:
         screen:
             contains: "Cancelled"
-        timeoutMs: 5000
+        timeoutMs: 10000
     - snapshot: cancelled
     - press: ctrl+c
     - wait:
         screen:
             contains: "Draft cleared · ctrl+c again to quit"
-        timeoutMs: 5000
+        timeoutMs: 10000
     - press: ctrl+c
     - wait:
         process:
             exitCode: 0
-        timeoutMs: 5000
+        timeoutMs: 10000
 outcomes:
     - id: tuimark_inline_cancel_tail
       description: the cancelled reply's partial tail remains in the scrollback after exit

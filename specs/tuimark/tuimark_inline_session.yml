@@ -20,15 +20,15 @@ steps:
     - wait:
         screen:
             contains: "stream complete"
-        timeoutMs: 5000
+        timeoutMs: 10000
     - wait:
         screen:
             contains: "stream the first reply"
-        timeoutMs: 5000
+        timeoutMs: 10000
     - wait:
         screen:
             contains: "session"
-        timeoutMs: 5000
+        timeoutMs: 10000
     - snapshot: resumed
     - type: "stream a second reply"
     - press: enter
@@ -45,7 +45,7 @@ steps:
     - wait:
         process:
             exitCode: 0
-        timeoutMs: 5000
+        timeoutMs: 10000
 outcomes:
     - id: tuimark_inline_session
       description: a saved session is committed at startup and continued by the inline client

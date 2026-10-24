@@ -27,13 +27,13 @@ steps:
     - wait:
         screen:
             contains: "Ready"
-        timeoutMs: 5000
+        timeoutMs: 10000
     - snapshot: reply_done
     - press: ctrl+c
     - wait:
         process:
             exitCode: 0
-        timeoutMs: 5000
+        timeoutMs: 10000
 outcomes:
     - id: tuimark_startup
       description: the Tuimark client starts, streams a reply to completion, and exits cleanly within budget

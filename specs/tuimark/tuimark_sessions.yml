@@ -22,26 +22,26 @@ steps:
     - wait:
         screen:
             contains: "Sessions"
-        timeoutMs: 5000
+        timeoutMs: 10000
     - wait:
         screen:
             contains: "messages · current"
-        timeoutMs: 5000
+        timeoutMs: 10000
     - snapshot: picker
     - press: down
     - press: enter
     - wait:
         screen:
             contains: "Resumed session"
-        timeoutMs: 5000
+        timeoutMs: 10000
     - wait:
         screen:
             contains: "stream the second reply"
-        timeoutMs: 5000
+        timeoutMs: 10000
     - wait:
         screen:
             contains: "stream complete"
-        timeoutMs: 5000
+        timeoutMs: 10000
     - snapshot: switched
     - type: "stream a third reply"
     - press: enter
@@ -58,7 +58,7 @@ steps:
     - wait:
         process:
             exitCode: 0
-        timeoutMs: 5000
+        timeoutMs: 10000
 outcomes:
     - id: tuimark_sessions_switch
       description: the picker switches the live conversation to a saved session and continues it

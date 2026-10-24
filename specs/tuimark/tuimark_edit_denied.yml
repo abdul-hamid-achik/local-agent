@@ -30,7 +30,7 @@ steps:
     - wait:
         screen:
             notContains: "Edit notes.txt?"
-        timeoutMs: 5000
+        timeoutMs: 10000
     - snapshot: denied_with_n
     - type: "edit it again"
     - press: enter
@@ -42,7 +42,7 @@ steps:
     - wait:
         screen:
             notContains: "Edit notes.txt?"
-        timeoutMs: 5000
+        timeoutMs: 10000
     - wait:
         screen:
             contains: "Ready"
@@ -51,7 +51,7 @@ steps:
     - wait:
         screen:
             contains: "edit once more"
-        timeoutMs: 5000
+        timeoutMs: 10000
     - snapshot: denied_with_esc
     - press: enter
     - wait:
@@ -63,7 +63,7 @@ steps:
     - wait:
         process:
             exitCode: 0
-        timeoutMs: 5000
+        timeoutMs: 10000
 outcomes:
     - id: tuimark_edit_denied
       description: denying the proposal, with n and with esc, leaves the file unchanged

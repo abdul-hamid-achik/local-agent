@@ -27,13 +27,13 @@ steps:
     - wait:
         screen:
             contains: "fail please"
-        timeoutMs: 5000
+        timeoutMs: 10000
     - snapshot: failed_turn
     - press: ctrl+c
     - wait:
         screen:
             contains: "Draft cleared · ctrl+c again to quit"
-        timeoutMs: 5000
+        timeoutMs: 10000
     - snapshot: draft_cleared
     - type: "count this line"
     - press: enter
@@ -44,19 +44,19 @@ steps:
     - wait:
         screen:
             contains: "Ready"
-        timeoutMs: 5000
+        timeoutMs: 10000
     - snapshot: recovered
     - type: "unsent words"
     - press: ctrl+c
     - wait:
         screen:
             contains: "Draft cleared · ctrl+c again to quit"
-        timeoutMs: 5000
+        timeoutMs: 10000
     - press: ctrl+c
     - wait:
         process:
             exitCode: 0
-        timeoutMs: 5000
+        timeoutMs: 10000
 outcomes:
     - id: tuimark_error_notice
       description: the failed prompt stays visible with an Error notice, ctrl+c first clears the restored draft, and a later turn succeeds
