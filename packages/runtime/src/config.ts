@@ -143,11 +143,15 @@ export const ProviderSchema = z
     const timeout = profile.stream_idle_timeout
       ? durationMilliseconds(profile.stream_idle_timeout)
       : undefined;
-    if (profile.stream_idle_timeout && timeout === undefined)
+    // "" is present but empty: it must not read as absent and fall to the default.
+    if (profile.stream_idle_timeout !== undefined && timeout === undefined)
       ctx.addIssue({
         code: "custom",
         path: ["stream_idle_timeout"],
-        message: "Use a positive Go duration such as 10m or 250ms",
+        message:
+          profile.stream_idle_timeout === ""
+            ? "stream_idle_timeout must not be empty; use a positive Go duration such as 10m or 250ms"
+            : "Use a positive Go duration such as 10m or 250ms",
       });
     if (
       profile.stream_idle_timeout_ms !== undefined &&

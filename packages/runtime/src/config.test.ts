@@ -93,6 +93,27 @@ describe("provider configuration boundary", () => {
     ).toThrow(/stream_idle_timeout/);
   });
 
+  test.each(["", "   "])(
+    "rejects an empty Chalupa stream_idle_timeout (%j) instead of defaulting to 5 minutes",
+    (stream_idle_timeout) => {
+      const result = ProviderSchema.safeParse({
+        type: "ollama_remote",
+        base_url: "https://remote.example",
+        model: "fixture",
+        max_model_bytes: 40_000_000_000,
+        stream_idle_timeout,
+      });
+      expect(result.success).toBe(false);
+      if (!result.success)
+        expect(result.error.issues).toContainEqual(
+          expect.objectContaining({
+            path: ["stream_idle_timeout"],
+            message: expect.stringMatching(/must not be empty/),
+          }),
+        );
+    },
+  );
+
   test("does not allow a Chalupa launch to override its negotiated model", () => {
     const env = {
       LOCAL_AGENT_PROVIDER: "chalupa",
