@@ -35,6 +35,13 @@ const messageSyntax = SyntaxStyle.fromStyles({
   "markup.raw": { fg: "#a3be8c" },
 });
 
+/** What each intent may do, as the sidebar says it. */
+const INTENT_TOOLS = {
+  plan: "Read only",
+  chat: "Read · Research · MCP asks",
+  build: "Read · Edit · Write · Command",
+} as const;
+
 /**
  * A command is one line whose first word is a name (`/mode plan`): a pasted
  * block, or a line that starts with a path (`/tmp/a.log is empty`), is a
@@ -346,7 +353,7 @@ export function createTerminalRoot(
                 Text,
                 {},
                 () =>
-                  `Model\n${provider.model}\n\nContext\n${provider.context_size}\n\nMode\n${selectedIntent.value}\n${selectedIntent.value === "plan" ? "Read only" : "Read · Edit · Write · Command"}\n\nMCP servers: ${mcp.length}\n${session ? `Session\n${session.state.publicId}` : "Session: temporary"}`,
+                  `Model\n${provider.model}\n\nContext\n${provider.context_size}\n\nMode\n${selectedIntent.value}\n${INTENT_TOOLS[selectedIntent.value]}\n\nMCP servers: ${mcp.length}\n${session ? `Session\n${session.state.publicId}` : "Session: temporary"}`,
               ),
           },
         );

@@ -358,8 +358,16 @@ test("fullscreen mode can switch intent from the composer", async () => {
   await terminal.mockInput.pasteBracketedText("/mode plan");
   terminal.mockInput.pressEnter();
   await terminal.waitForFrame(
-    (frame) => frame.includes("Mode") && frame.includes("plan"),
+    (frame) => frame.includes("Mode") && frame.includes("Read only"),
   );
+  // Chat cannot edit, write or run commands: the sidebar does not say it can.
+  await terminal.flush();
+  await terminal.mockInput.pasteBracketedText("/mode chat");
+  terminal.mockInput.pressEnter();
+  const frame = await terminal.waitForFrame((text) =>
+    text.includes("Read · Research · MCP asks"),
+  );
+  expect(frame).not.toContain("Edit · Write");
 });
 
 test.each([
