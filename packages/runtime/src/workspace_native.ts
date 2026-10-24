@@ -1,5 +1,5 @@
 import { dlopen, type FFIFunction, ptr, read } from "bun:ffi";
-import { closeSync, constants, fchmodSync, openSync } from "node:fs";
+import { closeSync, constants, fchmodSync, fstatSync, openSync } from "node:fs";
 
 // Node does not expose O_CLOEXEC, but native descriptors must not reach children.
 export const CLOEXEC = process.platform === "darwin" ? 0x1000000 : 0x80000;
@@ -53,6 +53,55 @@ function component(value: string): Buffer {
   return Buffer.from(`${value}\0`);
 }
 
+let fstatatSymbol:
+  | ((dirfd: number, path: Buffer, buffer: Buffer, flags: number) => number)
+  | null
+  | undefined;
+
+/**
+ * The inode and the low 32 bits of the device of an entry of `parent`, read
+ * without opening it (a file whose mode could not be set may be unreadable).
+ * Both sit at the same offsets in `struct stat` on macOS and 64-bit Linux.
+ * `fstatat` is looked up on its own: a libc without it must not stop the rest
+ * of this module from loading. Undefined when it cannot be read.
+ */
+function entryIdentity(
+  parent: number,
+  name: string,
+): { dev: bigint; ino: bigint } | undefined {
+  if (fstatatSymbol === undefined) {
+    fstatatSymbol = null;
+    const candidates =
+      process.platform === "darwin"
+        ? ["/usr/lib/libSystem.B.dylib"]
+        : [
+            "libc.so.6",
+            `/lib/ld-musl-${process.arch === "arm64" ? "aarch64" : "x86_64"}.so.1`,
+          ];
+    for (const path of candidates) {
+      try {
+        const { symbols } = dlopen(path, {
+          fstatat: { args: ["int", "ptr", "ptr", "int"], returns: "int" },
+        });
+        fstatatSymbol = (dirfd, entry, buffer, flags) =>
+          symbols.fstatat(dirfd, ptr(entry), ptr(buffer), flags);
+        break;
+      } catch {
+        // Try the next library.
+      }
+    }
+  }
+  if (!fstatatSymbol) return undefined;
+  const buffer = Buffer.alloc(256);
+  const noFollow = process.platform === "darwin" ? 0x20 : 0x100;
+  if (fstatatSymbol(parent, component(name), buffer, noFollow) !== 0)
+    return undefined;
+  return {
+    dev: BigInt(buffer.readUInt32LE(0)),
+    ino: buffer.readBigUInt64LE(8),
+  };
+}
+
 function errno(): number {
   const symbols = libc().symbols;
   const address =
@@ -88,14 +137,25 @@ export function openAt(
   if (creating && (flags & constants.O_EXCL) === 0)
     throw new Error("Creating a workspace file requires O_EXCL");
   const bytes = component(name);
-  const fd = libc().symbols.openat(
-    parent,
-    ptr(bytes),
-    flags | FILE_FLAGS,
-    mode,
-  );
+  // Whatever `mode` the kernel reads (see below), a new file is created
+  // private to the owner; the umask is restored whatever happens.
+  let umask: number | undefined;
+  if (creating) {
+    try {
+      umask = process.umask(0o077);
+    } catch {
+      // A worker thread cannot change it.
+    }
+  }
+  let fd: number;
+  let code = 0;
+  try {
+    fd = libc().symbols.openat(parent, ptr(bytes), flags | FILE_FLAGS, mode);
+    if (fd < 0) code = errno();
+  } finally {
+    if (umask !== undefined) process.umask(umask);
+  }
   if (fd < 0) {
-    const code = errno();
     throw Object.assign(
       new Error(
         "Workspace entry cannot be opened: missing, inaccessible, or symbolic links",
@@ -110,12 +170,21 @@ export function openAt(
     try {
       fchmodSync(fd, mode);
     } catch (error) {
-      closeSync(fd);
       try {
-        unlinkAt(parent, name);
+        // Remove only the file this descriptor is: the name may have been
+        // replaced by now, and that is not ours to unlink.
+        const created = fstatSync(fd, { bigint: true });
+        const entry = entryIdentity(parent, name);
+        if (
+          entry &&
+          entry.ino === created.ino &&
+          entry.dev === (created.dev & 0xffffffffn)
+        )
+          unlinkAt(parent, name);
       } catch {
-        // The file this call created is already gone or unreachable.
+        // The entry is gone or unreachable.
       }
+      closeSync(fd);
       throw error;
     }
   }
