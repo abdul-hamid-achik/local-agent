@@ -245,33 +245,44 @@ async function readBytesCapped(
   return { bytes: Buffer.concat(chunks), truncated: false };
 }
 
+/** A declared charset in HTML's first bytes: `<meta charset=x>` or the
+ * `content="text/html; charset=x"` of an http-equiv meta. */
+const META_CHARSET = /<meta[^>]*?charset\s*=\s*["']?([\w:.-]+)/i;
+/** How far into a page the HTML spec looks for that declaration. */
+const META_SNIFF_BYTES = 1024;
+
+/** Bytes to text in the charset the server declared: the Content-Type header
+ * first, then (HTML only) a meta tag near the top. A label TextDecoder does
+ * not know is skipped, and with none left the body is UTF-8, as before. */
+function decodeBody(bytes: Uint8Array, response: Response): string {
+  const labels = [
+    /;\s*charset\s*=\s*"?([^";\s]+)/i.exec(
+      response.headers.get("content-type") ?? "",
+    )?.[1],
+  ];
+  const type = textContentType(response);
+  if (type === "text/html" || type.endsWith("+html"))
+    labels.push(
+      META_CHARSET.exec(
+        new TextDecoder("latin1").decode(bytes.subarray(0, META_SNIFF_BYTES)),
+      )?.[1],
+    );
+  for (const label of labels) {
+    if (!label) continue;
+    try {
+      return new TextDecoder(label).decode(bytes);
+    } catch {}
+  }
+  return new TextDecoder().decode(bytes);
+}
+
 /** Reads at most maxBytes of the body as text. */
 async function readCapped(
   response: Response,
   maxBytes: number,
 ): Promise<{ text: string; truncated: boolean }> {
-  const reader = response.body?.getReader();
-  if (reader === undefined) return { text: "", truncated: false };
-  const chunks: Uint8Array[] = [];
-  let kept = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    if (kept + value.length > maxBytes) {
-      chunks.push(value.slice(0, maxBytes - kept));
-      await reader.cancel();
-      return {
-        text: await new Blob(chunks as BlobPart[]).text(),
-        truncated: true,
-      };
-    }
-    chunks.push(value);
-    kept += value.length;
-  }
-  return {
-    text: await new Blob(chunks as BlobPart[]).text(),
-    truncated: false,
-  };
+  const { bytes, truncated } = await readBytesCapped(response, maxBytes);
+  return { text: decodeBody(bytes, response), truncated };
 }
 
 const HTML_BLOCK_TAGS: Record<string, true> = {

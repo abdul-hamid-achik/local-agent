@@ -1094,3 +1094,66 @@ test("numeric entities outside the Unicode range decode to U+FFFD instead of fai
     await run.cleanup();
   }
 });
+test("fetch decodes the body with the charset the server declares", async () => {
+  const latin1 = (text: string) =>
+    Uint8Array.from(text, (c) => c.charCodeAt(0));
+  // "日本語" in Shift_JIS.
+  const sjis = Uint8Array.from([0x93, 0xfa, 0x96, 0x7b, 0x8c, 0xea]);
+  const withSjis = (head: string) =>
+    Uint8Array.from([
+      ...latin1(head),
+      ...sjis,
+      ...latin1("</p></body></html>"),
+    ]);
+  stubFetch((url) => {
+    if (url.endsWith("/latin1"))
+      return new Response(latin1("caf\xe9 cr\xe8me"), {
+        headers: { "content-type": 'text/plain; charset="ISO-8859-1"' },
+      });
+    if (url.endsWith("/meta"))
+      return new Response(
+        withSjis(`<html><head><meta charset="shift_jis"></head><body><p>`),
+        { headers: { "content-type": "text/html" } },
+      );
+    if (url.endsWith("/http-equiv"))
+      return new Response(
+        withSjis(
+          `<html><head><meta http-equiv="Content-Type" content="text/html; charset=Shift_JIS"></head><body><p>`,
+        ),
+        { headers: { "content-type": "text/html" } },
+      );
+    // The header outranks a meta tag that disagrees with it.
+    if (url.endsWith("/header-wins"))
+      return new Response(
+        new TextEncoder().encode(
+          `<html><head><meta charset="iso-8859-1"></head><body><p>café</p></body></html>`,
+        ),
+        { headers: { "content-type": "text/html; charset=utf-8" } },
+      );
+    if (url.endsWith("/bogus"))
+      return new Response(new TextEncoder().encode("café"), {
+        headers: { "content-type": "text/plain; charset=x-bogus" },
+      });
+    return undefined;
+  });
+  const run = await session(
+    ["latin1", "meta", "http-equiv", "header-wins", "bogus"].map((name) => ({
+      name: "fetch",
+      arguments: { url: `http://enc.example/${name}` },
+    })),
+  );
+  try {
+    expect(run.results.map((result) => result.status)).toEqual(
+      Array(5).fill("succeeded"),
+    );
+    expect(run.output(0)).toContain("café crème");
+    expect(run.output(1)).toContain("日本語");
+    expect(run.output(2)).toContain("日本語");
+    expect(run.output(3)).toContain("café");
+    // An unknown label falls back to UTF-8 rather than failing the fetch.
+    expect(run.output(4)).toContain("café");
+  } finally {
+    restoreFetch();
+    await run.cleanup();
+  }
+});
