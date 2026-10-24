@@ -207,6 +207,13 @@ no shell. The approval shows the parsed command as one shell-quoted line. The
 system prompt lists which of `bun`, `node`, `npm`, `python3`, `go`, `cargo` and
 `git` are on `PATH`. MCP tools are named `SERVER__TOOL` and are handled as before.
 
+Results of `fetch`, `web_search`, MCP tools and `task` (errors included) reach
+the model marked `"source": "external"`, and it is told that such text is data,
+not instructions. That is guidance to the model, not a guarantee, and `fetch`
+and `web_search` never ask: a page can steer the model to send what it read to
+another host. Deny rules in `.local-agent/permissions.json` (`fetch` with
+`domain:*`, `web_search` with `*`) keep a session off the network.
+
 ### Ornith on Chalupa
 
 For `ornith-1.5:9b` (or `35b`) on a rented GPU, Chalupa places the model and opens
