@@ -29,12 +29,41 @@ model is not a silent fallback: interactive runs pre-admit the model with a
 ## Context
 
 `--context N` — or `LOCAL_AGENT_CONTEXT` — sets the context tokens requested
-from local Ollama. The default is 16384; `32768` and `32k` both parse. The
-value cannot exceed the model's native context, and an oversized value is
-rejected up front by the same admission check.
+from local Ollama; `32768` and `32k` both parse. The value cannot exceed the
+model's native context, and an oversized value is rejected up front by the
+same admission check.
+
+Without either, the size is planned at startup. Local Agent reads the model's
+metadata from Ollama (`/api/show`), works out what its key/value cache costs
+per token, and picks the largest of 32768, 24576, 16384, 12288 and 8192
+tokens that fits in about 11/16 of the machine's memory once the weights and
+2.5 GiB of headroom are set aside, never above the model's native context.
+`qwen3.5:4b`, whose cache lives in one layer of four, gets 32768 on a 16 GB
+machine. A model that does not report the figures keeps 16384, as does a run
+that cannot reach Ollama. In the Tuimark client, `/status` shows how the size
+was chosen, and `/model` plans again for the new model. The planner stops at 32768 because
+refilling a larger window takes long on small models; pass `--context` for
+more.
 
 `--context` applies to the local Ollama provider only; Chalupa negotiates its
 own. See [Providers](/providers).
+
+### Long turns
+
+A tool result holds at most about a quarter of the window, and the results of
+one model reply share about 40% of it. A file too long for that comes back in
+part, ending with the `offset` to read next; the model can also ask `read`
+for a line range (`offset`, `limit`).
+
+In the Tuimark client and headless runs, a turn whose prompt would pass 70%
+of the window is compacted first: the oldest material the model has already
+acted on is shortened until the prompt is near 45%. Images go first, then
+tool results (each keeps its first lines and a note of what went), then the
+reasoning of earlier steps of the turn. The user's latest message, the
+latest tool calls and their results are never shortened, and the model can
+run a tool again to get a result back. The session keeps the shortened
+history, and the transcript shows a "Context compacted" note. The Vue client
+and the desktop app do not compact.
 
 ## Thinking
 

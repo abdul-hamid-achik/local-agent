@@ -17,7 +17,7 @@ are no subcommands. Run `local-agent --help` for the authoritative short list.
 | `-h`, `--help` | Print help and exit |
 | `--model MODEL` | Ollama model. Default `qwen3.5:4b-q4_K_M` or `LOCAL_AGENT_MODEL`; the flag overrides the environment. The default is the smallest model that passed the agent battery reliably |
 | `--think on\|off` | Force thinking on or off; `LOCAL_AGENT_THINK=1\|0` is equivalent. Unset means the model default |
-| `--context N` | Context tokens for local Ollama. Default 16384 or `LOCAL_AGENT_CONTEXT`; `32768` and `32k` both work. Cannot exceed the model's native context. Chalupa negotiates its own context |
+| `--context N` | Context tokens for local Ollama, or `LOCAL_AGENT_CONTEXT`; `32768` and `32k` both work. Cannot exceed the model's native context. Default: planned from the model and the machine's memory, at most 32768 (see [Ollama models](/ollama-models#context)). Chalupa negotiates its own context |
 | `-p`, `--prompt PROMPT` | Run one prompt; implies headless mode |
 | `--mode fullscreen\|inline\|headless` | Run mode; default `fullscreen` |
 | `--ui vue\|tuimark` | Client. `tuimark` is the default on macOS/Linux, `vue` on Windows; `tuimark` is rejected on Windows |
@@ -65,9 +65,10 @@ binary is missing, the run falls back to vue with a note on stderr.
 
 ### Headless output
 
-Text streams to stdout; tool_result statuses go to stderr. With `--json`, stdout
-carries NDJSON events, starting with an initial `{"type":"session","id":...}`
-event.
+Text streams to stdout; tool_result statuses go to stderr, as does a note when
+the history is compacted. With `--json`, stdout carries NDJSON events,
+starting with an initial `{"type":"session","id":...}` event; a compaction is
+a `compacted` event carrying the shortened history.
 
 Approval in headless is fail-closed by default. Without `--approve-edits`,
 `--approve-commands`, or `--approve-mcp`, the matching request class is denied:

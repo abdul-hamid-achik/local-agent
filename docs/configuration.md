@@ -37,9 +37,11 @@ smallest model that passed the agent battery reliably — unless
 `--think on|off` forces thinking on or off. Unset means whatever the model
 defaults to.
 
-`--context N` sets context tokens for the local Ollama provider. The default is
-16384 (`LOCAL_AGENT_CONTEXT` is equivalent). The value cannot exceed the model's
-native context. Chalupa negotiates its own context; the flag does not apply.
+`--context N` sets context tokens for the local Ollama provider
+(`LOCAL_AGENT_CONTEXT` is equivalent). The value cannot exceed the model's
+native context. Without either, the size is planned from the model and this
+machine's memory, at most 32768; see [Ollama models](/ollama-models#context).
+Chalupa negotiates its own context; the flag does not apply.
 
 Interactive runs reject a missing model or an oversized `--context` up front
 with a 15 s admission check, before the session starts.

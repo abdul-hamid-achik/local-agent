@@ -59,7 +59,8 @@ The profile arrives via `LOCAL_AGENT_PROVIDER_CONFIG`:
 `LOCAL_AGENT_LOCAL_ONLY=false` is set explicitly, the same boundary MCP
 endpoints use. `api_key` is optional: some local servers require a dummy
 bearer token. The model is selected in the profile; a differing `--model` is
-refused, while `--context` behaves as with local Ollama. On startup the
+refused, while `--context` behaves as with local Ollama (without it the size
+stays 16384; only local Ollama plans one). On startup the
 client checks the model against `GET {baseURL}/models`; servers that do not
 implement the endpoint (404) skip the check with a status note.
 
