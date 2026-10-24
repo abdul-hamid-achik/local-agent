@@ -163,3 +163,21 @@ test("a --context beyond the native context is rejected with the largest usable 
     fetchMock.mockRestore();
   }
 });
+
+test("a model missing from a Chalupa host points at chalupa status, not ollama pull", async () => {
+  const fetchMock = vi
+    .spyOn(globalThis, "fetch")
+    .mockImplementation(async () => Response.json({ models: [] }));
+  try {
+    const admission = await admitOllamaModel(
+      remote("http://127.0.0.1"),
+      AbortSignal.timeout(5_000),
+    );
+    expect(admission).toMatchObject({ status: "rejected", kind: "metadata" });
+    expect(admission.status === "rejected" && admission.message).toBe(
+      "Ollama model large:35b is not on the Chalupa host yet. Run chalupa status to see the download, or set inference.pull: true in chalupa.yml.",
+    );
+  } finally {
+    fetchMock.mockRestore();
+  }
+});

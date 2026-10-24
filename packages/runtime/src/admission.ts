@@ -188,7 +188,7 @@ export async function admitOllamaModel(
         ? `Ollama model ${config.model} was not listed. Use --model ${unprefixed} without the ollama/ prefix.`
         : config.type === "ollama"
           ? `Model ${config.model} is not installed. Run: ollama pull ${config.model}`
-          : `Ollama model ${config.model} was not listed. Check the installed model name with ollama list.`;
+          : `Ollama model ${config.model} is not on the Chalupa host yet. Run chalupa status to see the download, or set inference.pull: true in chalupa.yml.`;
       return {
         status: "rejected",
         kind: "metadata",

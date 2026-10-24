@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { Tool } from "ollama";
 import { z } from "zod";
-import { admitOllamaModel } from "#runtime/admission";
+import { admitOllamaModel, admitOpenAILocalModel } from "#runtime/admission";
 import {
   type ApprovedCommandProposal,
   createCommandProposal,
@@ -1240,6 +1240,52 @@ export type AgentOptions = {
   }) => Promise<string | undefined>;
 };
 
+/** Capabilities of each model that passed admission in this process. */
+const admitted = new Map<string, readonly string[]>();
+
+/**
+ * Admits the provider's model before a turn, the way its type allows, once
+ * per process, and returns its capabilities: a later turn (or a subagent)
+ * does not ask again, so a blip in a tunnel cannot abort it, and a model
+ * removed meanwhile fails in the chat request itself. An OpenAI-compatible
+ * server lists its models but no capabilities, so tool calls are assumed
+ * and vision is not; one without GET /models is not refused, since the
+ * chat request fails loudly on a model it does not serve.
+ */
+async function admitTurn(
+  provider: Provider,
+  signal: AbortSignal,
+): Promise<readonly string[]> {
+  const key = JSON.stringify([
+    provider.type,
+    provider.base_url,
+    provider.model,
+    provider.context_size,
+  ]);
+  const known = admitted.get(key);
+  if (known) return known;
+  if (provider.type === "openai_local") {
+    const admission = await admitOpenAILocalModel(provider, signal);
+    signal.throwIfAborted();
+    if (admission.status === "rejected") throw new Error(admission.message);
+    const capabilities = ["completion", "tools"];
+    admitted.set(key, capabilities);
+    return capabilities;
+  }
+  const admission = await admitOllamaModel(provider, signal);
+  signal.throwIfAborted();
+  if (admission.status !== "validated")
+    throw new Error(
+      admission.status === "rejected" && admission.code === "not_installed"
+        ? admission.message
+        : `Model admission ${admission.status}: ${admission.message}`,
+    );
+  if (!admission.capabilities.includes("tools"))
+    throw new Error("Agent requires a model with tools capability");
+  admitted.set(key, admission.capabilities);
+  return admission.capabilities;
+}
+
 /** Internal control-flow signal: a subagent run hit its turn or call budget. */
 class SubagentStopped extends Error {
   constructor(readonly reason: "turn_limit" | "budget") {
@@ -1374,16 +1420,7 @@ async function* agentTurn(
   ]
     .filter(Boolean)
     .join("\n\n");
-  const admission = await admitOllamaModel(provider, signal);
-  signal.throwIfAborted();
-  if (admission.status !== "validated")
-    throw new Error(
-      admission.status === "rejected" && admission.code === "not_installed"
-        ? admission.message
-        : `Model admission ${admission.status}: ${admission.message}`,
-    );
-  if (!admission.capabilities.includes("tools"))
-    throw new Error("Agent requires a model with tools capability");
+  const capabilities = await admitTurn(provider, signal);
   const stepLimit = options.maxTurns ?? 20;
   const offeredTools = options.subagent
     ? tools.filter((tool) => SUBAGENT_TOOLS.has(tool.function.name ?? ""))
@@ -1577,9 +1614,9 @@ async function* agentTurn(
           // Admission exposes the model's capabilities; a text-only model
           // cannot use an image, so fail fast instead of shipping base64
           // it would ignore.
-          if (!admission.capabilities.includes("vision"))
+          if (!capabilities.includes("vision"))
             throw new Error(
-              `read_image: model ${admission.model} has no vision capability; switch to a multimodal model such as llava, llama3.2-vision, qwen2.5vl or minicpm-v`,
+              `read_image: model ${provider.model} has no vision capability; switch to a multimodal model such as llava, llama3.2-vision, qwen2.5vl or minicpm-v`,
             );
           const image = await readWorkspaceImage(workspace, args.path);
           images.push(image.base64);
@@ -1647,13 +1684,13 @@ async function* agentTurn(
               );
             const { width, height } = kind.dimensions(bytes);
             const descriptor = `image ${width}x${height} ${kind.format} from ${finalUrl}`;
-            if (admission.capabilities.includes("vision")) {
+            if (capabilities.includes("vision")) {
               images.push(bytes.toString("base64"));
               output = `${descriptor} (attached)`;
             } else {
               // Gentler than read_image's fail-fast: a chat over a
               // text-only model can still name what it fetched.
-              output = `${descriptor} (model ${admission.model} has no vision; image not attached)`;
+              output = `${descriptor} (model ${provider.model} has no vision; image not attached)`;
             }
           } else {
             const textual =
@@ -2101,6 +2138,10 @@ async function* agentTurn(
         remaining--;
         wake?.();
       });
+      // A result's status goes out as its call completes; its message goes
+      // out in call order, as history and the session hold them, so a
+      // client that builds its history from messages keeps the same one.
+      let nextMessage = 0;
       try {
         while (remaining > 0 || completedIndices.length) {
           while (!completedIndices.length && remaining > 0) {
@@ -2109,8 +2150,19 @@ async function* agentTurn(
             await gate.promise;
           }
           for (const index of completedIndices.splice(0)) {
+            const ctx = contexts[index]!;
             const oc = outcomes[index]!;
-            yield* emitOutcome(contexts[index]!, oc);
+            yield {
+              type: "tool_result",
+              id: ctx.id,
+              name: ctx.name,
+              status: oc.status,
+              output: oc.output,
+            };
+          }
+          while (nextMessage < contexts.length && outcomes[nextMessage]) {
+            yield { type: "message", message: outcomes[nextMessage]!.message };
+            nextMessage++;
           }
         }
       } finally {

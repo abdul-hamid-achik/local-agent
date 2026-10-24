@@ -524,7 +524,7 @@ async function batchRun(
   serve?: (
     request: Request,
     path: string,
-  ) => Response | Promise<Response> | undefined,
+  ) => Response | Promise<Response | undefined> | undefined,
 ) {
   const root = await mkdtemp(join(tmpdir(), "local-agent-parallel-"));
   await writeFile(join(root, "a.txt"), "alpha\n");
@@ -632,6 +632,42 @@ test("a read-only batch runs in parallel: starts in call order, all results pres
         .filter((message) => message.role === "tool")
         .map((message) => message.tool_call_id),
     ).toEqual(["call-0", "call-1"]);
+  } finally {
+    await run.cleanup();
+  }
+});
+
+test("a batch reports results as they finish and messages in call order", async () => {
+  const run = await batchRun(
+    [
+      { name: "fetch", arguments: { url: "/slow" } },
+      { name: "read", arguments: { path: "a.txt" } },
+    ],
+    async (_request, path) => {
+      if (path !== "/slow") return undefined;
+      await Bun.sleep(300);
+      return new Response("slow page", {
+        headers: { "content-type": "text/plain" },
+      });
+    },
+  );
+  try {
+    const results = run.events.filter((event) => event.type === "tool_result");
+    // The quick read finishes first and says so first...
+    expect(results.map((event) => event.name)).toEqual(["read", "fetch"]);
+    // ...but the messages a client builds its history from keep call order,
+    // the order the next request (and a session) holds.
+    const messages = run.events.flatMap((event) =>
+      event.type === "message" && event.message.role === "tool"
+        ? [event.message.tool_call_id]
+        : [],
+    );
+    expect(messages).toEqual(["call-0", "call-1"]);
+    expect(
+      run.bodies[1]?.messages
+        .filter((message) => message.role === "tool")
+        .map((message) => message.tool_call_id),
+    ).toEqual(messages);
   } finally {
     await run.cleanup();
   }

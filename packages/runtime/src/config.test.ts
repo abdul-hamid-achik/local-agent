@@ -157,6 +157,19 @@ describe("provider configuration boundary", () => {
     ).toBe("flag:2b");
   });
 
+  test("an invalid profile is named in one line, not as a schema dump", () => {
+    let message = "";
+    try {
+      resolveProvider(chalupa({ max_model_bytes: undefined, model: "" }));
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+    expect(message).toMatch(
+      /^Chalupa provider config \(LOCAL_AGENT_PROVIDER_CONFIG\) is invalid: model: /,
+    );
+    expect(message).not.toContain("\n");
+  });
+
   test("Chalupa keeps the model of its profile", () => {
     expect(resolveProvider(chalupa()).model).toBe("ornith-1.5:9b");
   });

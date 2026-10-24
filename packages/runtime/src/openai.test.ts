@@ -1,7 +1,12 @@
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { expect, test } from "vitest";
 import { admitOpenAILocalModel } from "#runtime/admission";
+import { type AgentEvent, runAgent } from "#runtime/agent";
 import { resolveProvider } from "#runtime/config";
 import { chat } from "#runtime/index";
+import { Workspace } from "#runtime/workspace";
 
 const localProvider = (baseURL: string) =>
   resolveProvider({
@@ -188,5 +193,91 @@ test("admits against GET /models, skips on 404, rejects unknown models", async (
     );
   } finally {
     server.stop(true);
+  }
+});
+
+test("an openai_local turn runs, admitted against /models once per process", async () => {
+  const paths: string[] = [];
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    async fetch(req) {
+      const path = new URL(req.url).pathname;
+      paths.push(path);
+      if (path === "/v1/models")
+        return Response.json({ data: [{ id: "fixture-model" }] });
+      const sse = [
+        JSON.stringify({ choices: [{ delta: { content: "Hello" } }] }),
+        JSON.stringify({
+          choices: [],
+          usage: { prompt_tokens: 20, completion_tokens: 1 },
+        }),
+        "[DONE]",
+      ]
+        .map((line) => `data: ${line}\n\n`)
+        .join("");
+      return new Response(sse, {
+        headers: { "Content-Type": "text/event-stream" },
+      });
+    },
+  });
+  const root = await mkdtemp(join(tmpdir(), "local-agent-openai-"));
+  try {
+    using workspace = await Workspace.create(root);
+    const provider = localProvider(`${server.url.origin}/v1`);
+    for (const prompt of ["hi", "again"]) {
+      const events: AgentEvent[] = [];
+      for await (const event of runAgent(
+        provider,
+        [{ role: "user", content: prompt }],
+        {
+          workspace,
+          signal: AbortSignal.timeout(5_000),
+          approve: async () => false,
+        },
+      ))
+        events.push(event);
+      expect(events.at(-1)?.type).toBe("turn_complete");
+    }
+    // No Ollama metadata endpoint is asked, and /models only for the first turn.
+    expect(paths).toEqual([
+      "/v1/models",
+      "/v1/chat/completions",
+      "/v1/chat/completions",
+    ]);
+  } finally {
+    server.stop(true);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("an openai_local model the server does not list is refused before the chat", async () => {
+  const paths: string[] = [];
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch(req) {
+      paths.push(new URL(req.url).pathname);
+      return Response.json({ data: [{ id: "other-model" }] });
+    },
+  });
+  const root = await mkdtemp(join(tmpdir(), "local-agent-openai-"));
+  try {
+    using workspace = await Workspace.create(root);
+    await expect(
+      runAgent(
+        localProvider(`${server.url.origin}/v1`),
+        [{ role: "user", content: "hi" }],
+        {
+          workspace,
+          signal: AbortSignal.timeout(5_000),
+          approve: async () => false,
+        },
+      ).next(),
+    ).rejects.toThrow("Model fixture-model is not served by");
+    expect(paths).toEqual(["/v1/models"]);
+  } finally {
+    server.stop(true);
+    await rm(root, { recursive: true, force: true });
   }
 });

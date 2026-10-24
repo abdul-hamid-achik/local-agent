@@ -239,6 +239,18 @@ const present = (value: string | undefined) =>
   value === undefined || value.trim() === "" ? undefined : value;
 
 /** Chalupa owns provisioning, model placement and the tunnel; we consume its process profile. */
+/** A provider profile from the environment, or one line saying what is wrong with it. */
+function parseProfile(raw: unknown, label: string): Provider {
+  const parsed = ProviderSchema.safeParse(raw);
+  if (parsed.success) return parsed.data;
+  const issues = parsed.error.issues
+    .slice(0, 3)
+    .map((issue) => `${issue.path.join(".") || "profile"}: ${issue.message}`);
+  throw new Error(
+    `${label} provider config (LOCAL_AGENT_PROVIDER_CONFIG) is invalid: ${issues.join("; ")}`,
+  );
+}
+
 export function resolveProvider(
   env: Record<string, string | undefined>,
   model?: string,
@@ -261,7 +273,7 @@ export function resolveProvider(
     } catch {
       throw new Error("Chalupa provider config must be valid JSON");
     }
-    const profile = ProviderSchema.parse(rawProfile);
+    const profile = parseProfile(rawProfile, "Chalupa");
     if (profile.type !== "ollama_remote")
       throw new Error("Chalupa requires an ollama_remote profile");
     if (model && model !== profile.model)
@@ -297,7 +309,7 @@ export function resolveProvider(
       };
       rawProfile = { ...rest, base_url: baseURL };
     }
-    const profile = ProviderSchema.parse(rawProfile);
+    const profile = parseProfile(rawProfile, "openai_local");
     if (profile.type !== "openai_local")
       throw new Error("openai_local requires an openai_local profile");
     // Same boundary the MCP transport enforces: loopback unless explicitly widened.
