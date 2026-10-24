@@ -1,7 +1,12 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import { admitOpenAILocalModel } from "#runtime/admission";
 import { resolveProvider } from "#runtime/config";
-import { chat, parseOpenAISSE, type RunEvent } from "#runtime/index";
+import {
+  chat,
+  parseOpenAISSE,
+  providerRetryDelayMs,
+  type RunEvent,
+} from "#runtime/index";
 
 const localProvider = (baseURL: string) =>
   resolveProvider({
@@ -375,4 +380,193 @@ describe("finish reasons", () => {
       }
     },
   );
+});
+
+describe("provider request retries", () => {
+  const ollamaDone = `${JSON.stringify({
+    message: { role: "assistant", content: "ok" },
+    done: true,
+  })}\n`;
+  const providers = {
+    openai: (origin: string) => localProvider(`${origin}/v1`),
+    ollama: (origin: string) =>
+      resolveProvider({ OLLAMA_HOST: origin }, "fixture"),
+  };
+  const ok = (kind: "openai" | "ollama") =>
+    kind === "openai"
+      ? sseResponse(sse(delta({ content: "ok" }, "stop"), "[DONE]"))
+      : new Response(ollamaDone);
+
+  test.each([
+    ["openai", 429],
+    ["openai", 502],
+    ["openai", 503],
+    ["openai", 504],
+    ["ollama", 503],
+    ["ollama", 429],
+  ] as const)(
+    "%s: a %i before any reply is retried and succeeds",
+    async (kind, status) => {
+      let requests = 0;
+      const server = serve(() =>
+        ++requests === 1
+          ? new Response("busy", { status, headers: { "retry-after": "0" } })
+          : ok(kind),
+      );
+      try {
+        const seen = await events(providers[kind](server.url.origin));
+        expect(seen.some((event) => event.type === "text")).toBe(true);
+        expect(requests).toBe(2);
+      } finally {
+        server.stop(true);
+      }
+    },
+  );
+
+  test("gives up after two retries and reports the last status", async () => {
+    let requests = 0;
+    const server = serve(() => {
+      requests++;
+      return new Response("busy", {
+        status: 503,
+        headers: { "retry-after": "0" },
+      });
+    });
+    try {
+      await expect(events(providers.openai(server.url.origin))).rejects.toThrow(
+        /\(503\)/,
+      );
+      expect(requests).toBe(3);
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test.each([400, 401, 404, 500])("a %i is final: no retry", async (status) => {
+    let requests = 0;
+    const server = serve(() => {
+      requests++;
+      return new Response("no", { status });
+    });
+    try {
+      await expect(
+        events(providers.openai(server.url.origin)),
+      ).rejects.toThrow();
+      expect(requests).toBe(1);
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test("a stream cut after its first byte is never retried", async () => {
+    let requests = 0;
+    const server = serve(() => {
+      requests++;
+      return sseResponse(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(encoder.encode(sse(delta({ content: "a" }))));
+            setTimeout(() => controller.close(), 30);
+          },
+        }),
+      );
+    });
+    try {
+      await expect(events(providers.openai(server.url.origin))).rejects.toThrow(
+        /before \[DONE\]/,
+      );
+      expect(requests).toBe(1);
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test("a wait for Retry-After ends the moment the request is aborted", async () => {
+    let requests = 0;
+    const server = serve(() => {
+      requests++;
+      return new Response("busy", {
+        status: 503,
+        headers: { "retry-after": "10" },
+      });
+    });
+    try {
+      const controller = new AbortController();
+      setTimeout(() => controller.abort(new Error("stop")), 150);
+      const started = Date.now();
+      await expect(
+        events(providers.openai(server.url.origin), controller.signal),
+      ).rejects.toThrow("stop");
+      expect(Date.now() - started).toBeLessThan(2_000);
+      expect(requests).toBe(1);
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test("a refused connection is retried, then succeeds", async () => {
+    const server = serve(() => ok("openai"));
+    const real = globalThis.fetch;
+    let attempts = 0;
+    const spy = vi.spyOn(globalThis, "fetch").mockImplementation(((
+      input: RequestInfo | URL,
+      init?: RequestInit,
+    ) => {
+      if (++attempts === 1)
+        return Promise.reject(
+          Object.assign(new Error("Unable to connect"), {
+            code: "ConnectionRefused",
+          }),
+        );
+      return real(input, init);
+    }) as typeof fetch);
+    try {
+      const seen = await events(providers.openai(server.url.origin));
+      expect(seen.some((event) => event.type === "text")).toBe(true);
+      expect(attempts).toBe(2);
+    } finally {
+      spy.mockRestore();
+      server.stop(true);
+    }
+  });
+
+  test("a cancelled request is not retried, whatever its error looks like", async () => {
+    const controller = new AbortController();
+    let attempts = 0;
+    const spy = vi.spyOn(globalThis, "fetch").mockImplementation((() => {
+      attempts++;
+      controller.abort(new Error("stop"));
+      return Promise.reject(
+        Object.assign(new Error("Unable to connect"), {
+          code: "ConnectionRefused",
+        }),
+      );
+    }) as unknown as typeof fetch);
+    try {
+      await expect(
+        events(providers.openai("http://127.0.0.1:9"), controller.signal),
+      ).rejects.toThrow();
+      expect(attempts).toBe(1);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  test("Retry-After is honoured but capped; a missing one backs off", () => {
+    const after = (value?: string) =>
+      providerRetryDelayMs(
+        new Response(null, {
+          status: 503,
+          ...(value === undefined ? {} : { headers: { "retry-after": value } }),
+        }),
+        0,
+      );
+    expect(after("2")).toBe(2_000);
+    expect(after("0")).toBe(0);
+    expect(after("3600")).toBe(10_000);
+    expect(after(new Date(Date.now() + 3_600_000).toUTCString())).toBe(10_000);
+    expect(after("soon")).toBeGreaterThan(0);
+    expect(after()).toBeGreaterThan(0);
+    expect(after()).toBeLessThan(10_000);
+  });
 });

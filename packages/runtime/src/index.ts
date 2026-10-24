@@ -188,33 +188,90 @@ function wrapBodyWithIdleTimeout(
   });
 }
 
-/** Redirects cannot silently move a local request across the network boundary. */
+const maxProviderRetries = 2;
+const maxRetryWaitMs = 10_000;
+/** Answers that say "not now" before any reply: the server did nothing with the request. */
+const retryableStatuses = new Set([429, 502, 503, 504]);
+
+/** The wait before retry `attempt` (0-based): the server's Retry-After, capped, else a short backoff. */
+export function providerRetryDelayMs(
+  response: Response | undefined,
+  attempt: number,
+): number {
+  const header = response?.headers.get("retry-after")?.trim();
+  if (header) {
+    const ms = /^\d+$/.test(header)
+      ? Number(header) * 1_000
+      : Date.parse(header) - Date.now();
+    if (Number.isFinite(ms)) return Math.min(Math.max(ms, 0), maxRetryWaitMs);
+  }
+  return 250 * 2 ** attempt;
+}
+
+/** A pause that the request's own signal can end. */
+const pause = (ms: number, signal: AbortSignal) =>
+  new Promise<void>((resolve, reject) => {
+    if (signal.aborted) return reject(signal.reason);
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(signal.reason);
+    };
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+
+/**
+ * Redirects cannot silently move a local request across the network boundary.
+ * A refused connection or a 429/502/503/504 is retried up to twice: both
+ * come before any byte of the reply, and a model call has no side effects,
+ * so a repeat cannot double anything. Once a response is handed back, its
+ * body is the caller's and is never replayed.
+ */
 function guardedFetch(signal: AbortSignal, timeoutMs: number): typeof fetch {
   return Object.assign(
     async (
       url: Parameters<typeof fetch>[0],
       init?: Parameters<typeof fetch>[1],
     ) => {
-      const controller = new AbortController();
-      const requestSignal = init?.signal
-        ? AbortSignal.any([signal, init.signal, controller.signal])
-        : AbortSignal.any([signal, controller.signal]);
-      let headersTimer: ReturnType<typeof setTimeout> | undefined;
-      headersTimer = setTimeout(
-        () => controller.abort(streamIdleError(timeoutMs)),
-        timeoutMs,
-      );
-      try {
-        const response = await fetch(url, {
-          ...init,
-          redirect: "error",
-          signal: requestSignal,
-        });
-        if (headersTimer !== undefined) clearTimeout(headersTimer);
+      const caller = init?.signal
+        ? AbortSignal.any([signal, init.signal])
+        : signal;
+      for (let attempt = 0; ; attempt++) {
+        const controller = new AbortController();
+        const headersTimer = setTimeout(
+          () => controller.abort(streamIdleError(timeoutMs)),
+          timeoutMs,
+        );
+        let response: Response;
+        try {
+          response = await fetch(url, {
+            ...init,
+            redirect: "error",
+            signal: AbortSignal.any([caller, controller.signal]),
+          });
+        } catch (error) {
+          clearTimeout(headersTimer);
+          // Only a refused or reset connection; a timeout or a cancel is final
+          // (their errors are not tunnelLost, and pause throws once cancelled).
+          if (attempt < maxProviderRetries && tunnelLost(error)) {
+            await pause(providerRetryDelayMs(undefined, attempt), caller);
+            continue;
+          }
+          throw controller.signal.reason ?? error;
+        }
+        clearTimeout(headersTimer);
+        if (
+          attempt < maxProviderRetries &&
+          retryableStatuses.has(response.status)
+        ) {
+          await response.body?.cancel().catch(() => undefined);
+          await pause(providerRetryDelayMs(response, attempt), caller);
+          continue;
+        }
         return wrapBodyWithIdleTimeout(response, timeoutMs, controller);
-      } catch (error) {
-        if (headersTimer !== undefined) clearTimeout(headersTimer);
-        throw controller.signal.reason ?? error;
       }
     },
     { preconnect: fetch.preconnect },
