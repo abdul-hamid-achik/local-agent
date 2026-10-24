@@ -1342,8 +1342,9 @@ const READ_ONLY_TOOLS = new Set([
   "ask_user",
   "goal_status",
 ]);
-/** Inspection tools whose same call, with nothing run in between, gives the
- * same result: a repeat is answered with a note instead of a second copy. */
+/** Inspection tools whose repeats are compared: the same call again, with
+ * the same result as one the model can still see, is answered with a note
+ * instead of a second copy. */
 const REPEATABLE = new Set([
   "read",
   "read_image",
@@ -1993,11 +1994,12 @@ async function* agentTurn(
   const refused = options.refused ?? new Set<string>();
   const refusedIn = options.refused ? "in this goal" : "in this turn";
   // Inspection calls answered this turn, by name and arguments, with the
-  // result the model was given. The same call again, while that result is
-  // still in the request and nothing else has run since, is answered with
-  // a note: a small model that rereads a file each step fills its window
-  // with copies before the step limit ends it.
-  const answered = new Map<string, { message: Message; limit: number }>();
+  // latest result the model was given. A repeat still runs (a file or a
+  // page may have changed since); when its result is the same as that one
+  // and the model can still see it, the repeat is answered with a note: a
+  // small model that rereads a file each step fills its window with copies
+  // before the step limit ends the turn.
+  const answered = new Map<string, Message>();
   // The last call's reported prompt size and the characters it was made
   // of: the next prompt is estimated from the characters added since.
   let anchor: { tokens: number; chars: number } | undefined;
@@ -2254,13 +2256,16 @@ async function* agentTurn(
     };
     /** Runs one tool call; yields its tool_start (unless pre-emitted for a
      * parallel batch) and returns the outcome for history + durability. */
-    // A result cut to share a batch is not what the call alone would get.
-    const repeats = (signature: string) => {
+    // In the request, as it was saved: compaction copies what it shortens.
+    const seen = (signature: string, message: Message) => {
       const earlier = answered.get(signature);
+      const images = message.images ?? [];
       return (
         earlier !== undefined &&
-        earlier.limit >= outputLimit &&
-        history.indexOf(earlier.message) >= (start ?? 0)
+        history.indexOf(earlier) >= (start ?? 0) &&
+        earlier.content === message.content &&
+        (earlier.images ?? []).length === images.length &&
+        (earlier.images ?? []).every((image, index) => image === images[index])
       );
     };
     const performCall = async function* (
@@ -2310,10 +2315,6 @@ async function* agentTurn(
             name === "ask_user"
               ? `The user already declined this question ${refusedIn}. Continue with what you know, or say what you need.`
               : `This exact ${name} call was already refused ${refusedIn}, so it was not asked again. Ask the user, or take another approach.`;
-        } else if (repeats(signature)) {
-          yield* emitStart();
-          repeated = true;
-          output = `This exact ${name} call already ran in this turn, and nothing has run since that could change it. Its result is above: use it, or try something else.`;
         } else if (name === "read") {
           const args = ReadRangeArgs.parse(call.function.arguments);
           yield* emitStart();
@@ -2838,6 +2839,12 @@ async function* agentTurn(
         ),
       };
       if (images.length) message.images = images.splice(0);
+      if (REPEATABLE.has(name) && seen(signature, message)) {
+        repeated = true;
+        output = `This exact ${name} call returned the same result earlier in this turn, and that result is above: use it, or try something else.`;
+        message.content = JSON.stringify({ status, output });
+        delete message.images;
+      }
       return { status, output, message, uncertain, signature, repeated };
     };
     const endedAs = (oc: CallOutcome): ExecutionEvent["type"] =>
@@ -2875,15 +2882,14 @@ async function* agentTurn(
           oc.message = kept;
         }
       }
-      if (!REPEATABLE.has(ctx.name)) {
-        if (oc.status !== "denied") answered.clear();
-      } else if (
-        // A note is not a result: the one it points at must stay in the
-        // request for the next repeat to point at it too.
+      // What a repeat is compared with is the result the model read, never
+      // a repeat's note (a state's note matches no result).
+      if (
+        REPEATABLE.has(ctx.name) &&
         !oc.repeated &&
         (oc.status === "succeeded" || oc.status === "unverified")
       )
-        answered.set(oc.signature, { message: oc.message, limit: outputLimit });
+        answered.set(oc.signature, oc.message);
     };
     function* emitOutcome(
       ctx: CallContext,

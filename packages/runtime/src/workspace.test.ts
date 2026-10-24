@@ -19,7 +19,7 @@ import {
   secretPathsIn,
   Workspace,
 } from "#runtime/workspace";
-import { renameAt } from "#runtime/workspace_native";
+import { renameAt, unlinkAt } from "#runtime/workspace_native";
 
 vi.mock("node:fs", async (importOriginal) => {
   const fs = await importOriginal<typeof import("node:fs")>();
@@ -28,12 +28,20 @@ vi.mock("node:fs", async (importOriginal) => {
 vi.mock("#runtime/workspace_native", async (importOriginal) => {
   const native =
     await importOriginal<typeof import("#runtime/workspace_native")>();
-  return { ...native, renameAt: vi.fn(native.renameAt) };
+  return {
+    ...native,
+    renameAt: vi.fn(native.renameAt),
+    unlinkAt: vi.fn(native.unlinkAt),
+  };
 });
 
 const roots: string[] = [];
 const workspaces: Workspace[] = [];
 afterEach(async () => {
+  // A queued failure a test did not reach must not reach the next test.
+  vi.mocked(fsyncSync).mockReset();
+  vi.mocked(renameAt).mockReset();
+  vi.mocked(unlinkAt).mockReset();
   for (const workspace of workspaces.splice(0)) workspace.close();
   for (const root of roots.splice(0))
     await rm(root, { recursive: true, force: true });
@@ -148,6 +156,28 @@ test("a failure after the file was replaced is not reported as unapplied", async
   expect(failed).toHaveProperty("message", "EIO: i/o error, fsync");
   expect(failed).not.toBeInstanceOf(NotAppliedError);
   expect(await readFile(join(root, "fresh", "new.txt"), "utf8")).toBe("x");
+});
+
+test("a cleanup that fails keeps the error that stopped the change, and names what it left", async () => {
+  const { root, workspace } = await fixture();
+  const proposal = await workspace.prepareEdit("notes.md", "before", "after");
+  vi.mocked(renameAt).mockImplementationOnce(() => {
+    throw new Error("Workspace replacement could not be published");
+  });
+  vi.mocked(unlinkAt).mockImplementationOnce(() => {
+    throw new Error("Workspace temporary file cleanup failed");
+  });
+  const error = await workspace.applyEdit(proposal).catch((e: unknown) => e);
+  expect(error).toBeInstanceOf(NotAppliedError);
+  const [left] = (await readdir(root)).filter((name) =>
+    name.startsWith(".local-agent-"),
+  );
+  expect(left).toBeDefined();
+  expect(error).toHaveProperty(
+    "message",
+    `Workspace replacement could not be published; its temporary file remains beside it: ${left}`,
+  );
+  expect(await readFile(join(root, "notes.md"), "utf8")).toContain("before");
 });
 
 test("a write that could not be published changed nothing but the directories it made, and says so", async () => {

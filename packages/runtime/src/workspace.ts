@@ -42,10 +42,26 @@ const MAX_FILE_BYTES = 8 * 1024 * 1024;
  */
 export class NotAppliedError extends Error {}
 
-function notApplied(error: unknown, note = ""): NotAppliedError {
-  if (error instanceof NotAppliedError) return error;
+/** What one edit or write did to the workspace, for the error if it fails. */
+type Change = {
+  /** The file was replaced: a failure now is not a NotAppliedError. */
+  published: boolean;
+  /** Directories a new file's path needed, made on the way. */
+  made: string[];
+  /** A temporary file its cleanup could not remove. */
+  left?: string;
+};
+
+function failed(error: unknown, change: Change): unknown {
+  if (change.published || error instanceof NotAppliedError) return error;
   const message = error instanceof Error ? error.message : String(error);
-  return new NotAppliedError(`${message}${note}`, { cause: error });
+  const made = change.made.length
+    ? `; the directories it made remain: ${change.made.join(", ")}`
+    : "";
+  const left = change.left
+    ? `; its temporary file remains beside it: ${change.left}`
+    : "";
+  return new NotAppliedError(`${message}${made}${left}`, { cause: error });
 }
 
 export type WorkspaceEditProposal = Readonly<{
@@ -322,20 +338,15 @@ export class Workspace implements Disposable {
   }
 
   async applyEdit(proposal: WorkspaceEditProposal): Promise<void> {
-    let published = false;
+    const change: Change = { published: false, made: [] };
     try {
-      this.publishEdit(proposal, () => {
-        published = true;
-      });
+      this.publishEdit(proposal, change);
     } catch (error) {
-      throw published ? error : notApplied(error);
+      throw failed(error, change);
     }
   }
 
-  private publishEdit(
-    proposal: WorkspaceEditProposal,
-    published: () => void,
-  ): void {
+  private publishEdit(proposal: WorkspaceEditProposal, change: Change): void {
     const expectedParent = proposal && this.proposals.get(proposal);
     if (!expectedParent)
       throw new Error(
@@ -376,11 +387,18 @@ export class Workspace implements Disposable {
         // POSIX rename has no compare-and-swap against other writers. Recheck
         // immediately before publication; all pathname operations stay pinned.
         renameAt(parent, tempName, name);
-        published();
+        change.published = true;
         temporary = false;
         fsyncSync(parent);
       } finally {
-        if (temporary) unlinkAt(parent, tempName);
+        // Only while an error is on its way: the error stays the one that
+        // stopped the change, and names the file a failed cleanup left.
+        if (temporary)
+          try {
+            unlinkAt(parent, tempName);
+          } catch {
+            change.left = tempName;
+          }
       }
     });
   }
@@ -767,28 +785,15 @@ export class Workspace implements Disposable {
   }
 
   async applyWrite(proposal: WorkspaceWriteProposal): Promise<void> {
-    let published = false;
-    const made: string[] = [];
+    const change: Change = { published: false, made: [] };
     try {
-      this.publishWrite(proposal, made, () => {
-        published = true;
-      });
+      this.publishWrite(proposal, change);
     } catch (error) {
-      if (published) throw error;
-      throw notApplied(
-        error,
-        made.length
-          ? `; the directories it made remain: ${made.join(", ")}`
-          : "",
-      );
+      throw failed(error, change);
     }
   }
 
-  private publishWrite(
-    proposal: WorkspaceWriteProposal,
-    made: string[],
-    published: () => void,
-  ): void {
+  private publishWrite(proposal: WorkspaceWriteProposal, change: Change): void {
     const expectedParent = proposal && this.proposals.get(proposal);
     if (!expectedParent || proposal.kind !== "write")
       throw new Error(
@@ -799,7 +804,7 @@ export class Workspace implements Disposable {
     const relative = this.relative(proposal.path);
     const parentOf = (operation: (parent: number, name: string) => void) =>
       proposal.created
-        ? withParentCreating(this.fd, relative, operation, made)
+        ? withParentCreating(this.fd, relative, operation, change.made)
         : withParent(this.fd, relative, operation);
     parentOf((parent, name) => {
       if (!proposal.created && parentIdentity(parent) !== expectedParent)
@@ -850,11 +855,18 @@ export class Workspace implements Disposable {
         }
         verify();
         renameAt(parent, tempName, name);
-        published();
+        change.published = true;
         temporary = false;
         fsyncSync(parent);
       } finally {
-        if (temporary) unlinkAt(parent, tempName);
+        // Only while an error is on its way: the error stays the one that
+        // stopped the change, and names the file a failed cleanup left.
+        if (temporary)
+          try {
+            unlinkAt(parent, tempName);
+          } catch {
+            change.left = tempName;
+          }
       }
     });
   }

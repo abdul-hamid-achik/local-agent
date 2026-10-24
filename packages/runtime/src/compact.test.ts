@@ -163,7 +163,8 @@ test("the current work stays whole, and a second pass finds nothing", () => {
  * reporting the prompt as a third of its characters, as Ollama reports the
  * whole prompt (cached or not).
  */
-function ollama(replies: ("read" | "done" | "fail")[]) {
+/** "read" reads big.txt from the next line on; a number, from that line. */
+function ollama(replies: ("read" | "done" | "fail" | number)[]) {
   const bodies: { messages: Message[] }[] = [];
   // Each read starts a line further on: the same call again would be
   // answered with a note, not a second copy.
@@ -189,13 +190,16 @@ function ollama(replies: ("read" | "done" | "fail")[]) {
           message: {
             role: "assistant",
             content: reply === "done" ? "Done" : "",
-            ...(reply === "read"
+            ...(reply === "read" || typeof reply === "number"
               ? {
                   tool_calls: [
                     {
                       function: {
                         name: "read",
-                        arguments: { path: "big.txt", offset: ++reads },
+                        arguments: {
+                          path: "big.txt",
+                          offset: typeof reply === "number" ? reply : ++reads,
+                        },
                       },
                     },
                   ],
@@ -293,6 +297,49 @@ test("a compacted session survives a provider failure and the next turn runs", a
     ))
       next.push(event);
     expect(next.at(-1)?.type).toBe("turn_complete");
+  } finally {
+    await server.stop(true);
+    store.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a read repeated after compaction shortened its first result gets the whole text again", async () => {
+  const root = await mkdtemp(join(tmpdir(), "local-agent-compact-repeat-"));
+  await writeFile(
+    join(root, "big.txt"),
+    Array.from({ length: 2_000 }, (_, i) => `row ${i + 1}`).join("\n"),
+  );
+  using workspace = await Workspace.create(root);
+  const store = await SessionStore.open(join(root, "session.sqlite"));
+  // offset 1, 2, 3, 4, then 1 again: the first read's result is the one
+  // compaction shortens first.
+  const { server } = ollama(["read", "read", "read", "read", 1]);
+  try {
+    const events: AgentEvent[] = [];
+    for await (const event of runAgent(
+      resolveProvider({ OLLAMA_HOST: server.url.origin }, "fixture", {
+        context: "8192",
+      }),
+      [{ role: "user", content: "go" }],
+      {
+        workspace,
+        session: { store, state: await store.createSession(root) },
+        intent: "plan",
+        signal: AbortSignal.timeout(10_000),
+        approve: async () => true,
+        compact: true,
+      },
+    ))
+      events.push(event);
+    const results = events.flatMap((event) =>
+      event.type === "tool_result" ? [event] : [],
+    );
+    expect(results).toHaveLength(5);
+    expect(
+      events.findIndex((event) => event.type === "compacted"),
+    ).toBeLessThan(events.indexOf(results[4] as AgentEvent));
+    expect(results[4]?.output).toBe(results[0]?.output);
   } finally {
     await server.stop(true);
     store.close();

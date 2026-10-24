@@ -276,6 +276,43 @@ test("read_image attaches the base64 image to its own tool result message", asyn
   }
 });
 
+test("a repeated read_image is a note only when the image is the same", async () => {
+  const shot = { name: "read_image", arguments: { path: "shot.png" } };
+  // Same size, other bytes: the text is the same, the image is not.
+  const append = {
+    name: "run_command",
+    arguments: {
+      argv: [
+        process.execPath,
+        "-e",
+        'require("node:fs").appendFileSync("shot.png", "!")',
+      ],
+    },
+  };
+  const run = await session([shot, append, shot, shot], "build", () => true, {
+    capabilities: ["completion", "tools", "vision"],
+    seed: (root) => writeFile(join(root, "shot.png"), fakePng(3, 2)),
+  });
+  try {
+    const sent = (step: number) => run.bodies[step]?.messages.at(-1);
+    expect(run.results.map((result) => result.status)).toEqual([
+      "succeeded",
+      "succeeded",
+      "succeeded",
+      "succeeded",
+    ]);
+    expect(run.results[2]?.output).toBe(
+      "image 3x2 PNG from shot.png (attached)",
+    );
+    expect(sent(3)?.images).toHaveLength(1);
+    expect(sent(3)?.images).not.toEqual(sent(1)?.images);
+    expect(run.results[3]?.output).toContain("returned the same result");
+    expect(sent(4)?.images).toBeUndefined();
+  } finally {
+    await run.cleanup();
+  }
+});
+
 test("read_image checks content, not extensions: real images pass, text fails", async () => {
   const run = await session(
     [
@@ -440,7 +477,7 @@ test("a batch of reads is cut to its share, and the next step to its own", async
   }
 });
 
-test("the same inspection call again in a turn is answered with a note, until something else runs", async () => {
+test("the same inspection call again in a turn, with the same result, is answered with a note", async () => {
   const read = { name: "read", arguments: { path: "src/stats.ts" } };
   const list = { name: "list", arguments: { path: "src" } };
   const edit = {
@@ -467,7 +504,7 @@ test("the same inspection call again in a turn is answered with a note, until so
   );
   try {
     const NOTE =
-      "This exact read call already ran in this turn, and nothing has run since that could change it. Its result is above: use it, or try something else.";
+      "This exact read call returned the same result earlier in this turn, and that result is above: use it, or try something else.";
     expect(run.results.map((result) => [result.name, result.status])).toEqual([
       ["read", "succeeded"],
       ["list", "succeeded"],
@@ -479,8 +516,7 @@ test("the same inspection call again in a turn is answered with a note, until so
       ["read", "succeeded"],
     ]);
     const outputs = run.results.map((result) => result.output);
-    // Another inspection between them does not count, nor a refused edit;
-    // an edit that ran does.
+    // An edit that ran changes the result; a refused one does not.
     expect(outputs[0]).toBe("export const mean = 1;\n");
     expect(outputs[2]).toBe(NOTE);
     expect(outputs[4]).toBe("export const mean = 2;\n");

@@ -173,6 +173,61 @@ test("an approved edit whose file changed before it was applied fails plainly an
   }
 });
 
+test("a read repeated after the file changed outside the run gets the new text, not a note", async () => {
+  const root = await mkdtemp(join(tmpdir(), "local-agent-repeat-read-"));
+  await writeFile(join(root, "notes.md"), "one\n");
+  using workspace = await Workspace.create(root);
+  const read = {
+    function: { name: "read", arguments: { path: "notes.md" } },
+  };
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    async fetch(request) {
+      const path = new URL(request.url).pathname;
+      if (path === "/api/tags")
+        return Response.json({ models: [{ name: "fixture", size: 1000 }] });
+      if (path === "/api/show")
+        return Response.json({
+          capabilities: ["completion", "tools"],
+          model_info: { "fixture.context_length": 16384 },
+        });
+      const body = (await request.json()) as { messages: { role: string }[] };
+      const step = body.messages.filter((m) => m.role === "tool").length;
+      // The user edits the file between the second and third reads.
+      if (step === 2) await writeFile(join(root, "notes.md"), "two\n");
+      const message =
+        step < 4
+          ? { role: "assistant", content: "", tool_calls: [read] }
+          : { role: "assistant", content: "Finished" };
+      return new Response(`${JSON.stringify({ message, done: true })}\n`);
+    },
+  });
+  try {
+    const events: AgentEvent[] = [];
+    for await (const event of runAgent(
+      resolveProvider({ OLLAMA_HOST: server.url.origin }, "fixture"),
+      [{ role: "user", content: "Read the notes" }],
+      {
+        workspace,
+        signal: AbortSignal.timeout(5000),
+        approve: async () => true,
+      },
+    ))
+      events.push(event);
+    const NOTE =
+      "This exact read call returned the same result earlier in this turn, and that result is above: use it, or try something else.";
+    expect(
+      events.flatMap((event) =>
+        event.type === "tool_result" ? [event.output] : [],
+      ),
+    ).toEqual(["one\n", NOTE, "two\n", NOTE]);
+  } finally {
+    await server.stop(true);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("a gateway call is approved as the tool it runs, or not sent at all", async () => {
   const root = await mkdtemp(join(tmpdir(), "local-agent-mcp-gateway-"));
   using workspace = await Workspace.create(root);
