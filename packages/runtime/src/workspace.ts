@@ -1019,27 +1019,59 @@ function isExcludedName(part: string, leaf: boolean): boolean {
   );
 }
 
-/**
- * The part of a command-line argument that names a path the file tools would
- * hide, as the argument spells it (`--config=.env` is `.env`), or undefined.
- * Lexical only: a symlink or a glob that expands to a secret is not seen.
- */
-export function secretPathIn(argument: string): string | undefined {
-  const equals = argument.indexOf("=");
-  const value =
-    argument.startsWith("-") && equals >= 0
-      ? argument.slice(equals + 1)
-      : argument;
-  // A web address is not a workspace path.
-  if (/^https?:\/\//iu.test(value)) return undefined;
-  const parts = value.split("/").filter((part) => part && part !== ".");
-  const hidden = parts.some(
+/** Whether the file tools would hide this path (relative, or absolute). */
+export function isSecretPath(path: string): boolean {
+  const parts = path.split("/").filter((part) => part && part !== ".");
+  return parts.some(
     (part, index) =>
       isExcludedName(part, index === parts.length - 1) ||
       isUserConfig(parts[index - 1], part) ||
       endsScopedSecret(parts, index),
   );
-  return hidden ? value : undefined;
+}
+
+/**
+ * Programs that take a program, a script or a whole command line in an
+ * argument, or read a file named inside an option value: for these a
+ * secret-named token anywhere in an argument counts, quotes and spaces
+ * included (`sh -c "cat .env"`, `python3 -c "open('.env')"`).
+ */
+const WRAPPERS =
+  /^(?:(?:ba|z|da|k|a)?sh|fish|env|xargs|find|sudo|nohup|time|timeout|nice|watch|exec|awk|gawk|sed|curl|wget|dd|osascript|(?:python|ruby|perl|php|lua|node)[\d.]*|bun|deno|tclsh|busybox)$/u;
+
+/**
+ * The words of an argument that could be a path: split where an option joins
+ * a value (`--env-file=.env`, `-d@.env`, `file=@.env`, `a:b`, `a,b`) and, for
+ * a wrapper, also at quotes, spaces and shell punctuation. Web addresses are
+ * dropped: they are not workspace paths.
+ */
+export function pathTokens(program: string, argument: string): string[] {
+  const wrapper = WRAPPERS.test(basename(program).toLowerCase());
+  const text = argument.replace(/\bhttps?:\/\/[^\s'"`)]*/giu, " ");
+  return text
+    .split(wrapper ? /[=@:,;&|<>()'"\s$`]+/u : /[=@:,]+/u)
+    .filter(Boolean);
+}
+
+/**
+ * The words in a command's arguments that name a path the file tools would
+ * hide, as written (`--env-file=.env` gives `.env`).
+ *
+ * A limit, stated here where it applies: the match is lexical. It does not see
+ * a recursive read (`grep -r TOKEN .`, `find . -exec cat {} +`), a glob that
+ * expands to a secret, or a name built inside a script; symlinks are looked at
+ * separately, when the proposal is made.
+ */
+export function secretPathsIn(argv: readonly string[]): string[] {
+  const program = argv[0] ?? "";
+  return [
+    ...new Set(
+      argv
+        .slice(1)
+        .flatMap((argument) => pathTokens(program, argument))
+        .filter(isSecretPath),
+    ),
+  ];
 }
 
 /** A workspace at the home directory still cannot reach the user's

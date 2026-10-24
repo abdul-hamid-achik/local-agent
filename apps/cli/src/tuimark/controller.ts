@@ -100,6 +100,7 @@ import {
 } from "#cli/tuimark/goal";
 import {
   APPROVAL_SANDBOX_SESSION_STATUS,
+  APPROVAL_SECRET_STATUS,
   APPROVAL_STATUS,
   APPROVAL_TRUNCATED_ALWAYS_STATUS,
   APPROVAL_TRUNCATED_SESSION_STATUS,
@@ -126,6 +127,7 @@ import {
   mcpLines,
   mcpParts,
   NO_DETAILS_STATUS,
+  namesSecret,
   noApproval,
   noDetails,
   noPanel,
@@ -695,6 +697,11 @@ export class TuimarkClient {
         ]);
         return undefined;
       }
+      // A command that names a secret path is let out by its own card only.
+      if (this.proposal && namesSecret(this.proposal)) {
+        await this.write([{ path: "status", value: APPROVAL_SECRET_STATUS }]);
+        return undefined;
+      }
       // With the sandbox on, a card lets out only its own command: a grant
       // would run later ones outside without a card.
       if (this.sandbox && this.proposal?.kind === "command") {
@@ -720,6 +727,11 @@ export class TuimarkClient {
         await this.write([
           { path: "status", value: APPROVAL_TRUNCATED_ALWAYS_STATUS },
         ]);
+        return undefined;
+      }
+      // Nor does one become a standing rule.
+      if (namesSecret(this.proposal)) {
+        await this.write([{ path: "status", value: APPROVAL_SECRET_STATUS }]);
         return undefined;
       }
       const root = this.options.workspace?.root;
@@ -2888,8 +2900,7 @@ export class TuimarkClient {
     // workspace. An ask rule still shows the card.
     // A command that names a path the file tools refuse always gets its
     // card, which says so: no allow rule, grant or sandbox spares it.
-    const secret =
-      proposal.kind === "command" && !!proposal.secretPaths?.length;
+    const secret = namesSecret(proposal);
     let sandboxLost = false;
     if (
       this.sandbox &&

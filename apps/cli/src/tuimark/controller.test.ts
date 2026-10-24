@@ -40,6 +40,7 @@ import {
 import { FakeHost } from "#cli/tuimark/fake-host";
 import {
   APPROVAL_SANDBOX_SESSION_STATUS,
+  APPROVAL_SECRET_STATUS,
   APPROVAL_STATUS,
   APPROVAL_TRUNCATED_SESSION_STATUS,
   APPROVAL_TRUNCATED_STATUS,
@@ -4904,11 +4905,10 @@ test("a command that names a secret path always gets its card: no allow rule, gr
       .approval.lines.map((line) => line.t)
       .join("\n"),
   ).toContain("names a path the workspace treats as secret: .env");
-  await ui.fire("dialog_session");
+  await ui.fire("dialog_confirm");
   await client.idle();
   expect(decisions).toEqual([true, true]);
-  // The session grant just made does not spare the next card either, and
-  // with the sandbox on neither does the sandbox.
+  // With the sandbox on, the sandbox does not spare the next card either.
   await ui.fire("send", "/sandbox on");
   await ui.fire("send", "two");
   await untilApproval(ui);
@@ -4918,14 +4918,45 @@ test("a command that names a secret path always gets its card: no allow rule, gr
   expect(decisions).toEqual([true, true, "sandbox", false]);
 });
 
-test("a session grant for a command never covers a later one that names a secret path", async () => {
+test("a card that names a secret path offers no session grant and no always rule", async () => {
+  const root = await mkdtemp(join(tmpdir(), "la-secret-"));
   const secret = {
     ...commandProposal(["cat", ".env"]),
     secretPaths: [".env"],
   } as ApprovalRequest;
-  const { ui, client } = setup(turnsAsking([[secret], [secret]]), {
-    workspace: { root: "/w" } as Workspace,
+  const { ui, client } = setup(turnsAsking([[secret]]), {
+    workspace: { root } as Workspace,
   });
+  await ui.fire("send", "one");
+  await untilApproval(ui);
+  expect(store(ui).approval.grant_hint).toBe(
+    "names a secret path: session grant and always rule unavailable",
+  );
+  await ui.fire("dialog_session");
+  expect(store(ui).status).toBe(APPROVAL_SECRET_STATUS);
+  expect(store(ui).approval.open).toBe(true);
+  await ui.fire("dialog_always");
+  expect(store(ui).status).toBe(APPROVAL_SECRET_STATUS);
+  expect(store(ui).approval.open).toBe(true);
+  // No rule was written for it.
+  expect(
+    await Bun.file(join(root, ".local-agent", "permissions.json")).exists(),
+  ).toBe(false);
+  await ui.fire("dialog_cancel");
+  await client.idle();
+  expect(decisions).toEqual([false]);
+});
+
+test("a session grant for a command never covers a later one that names a secret path", async () => {
+  const secret = {
+    ...commandProposal(["bun", "test", ".env"]),
+    secretPaths: [".env"],
+  } as ApprovalRequest;
+  // A grant made for a plain `bun test` would cover this one by its words.
+  const { ui, client } = setup(
+    turnsAsking([[commandProposal(["bun", "test"])], [secret]]),
+    { workspace: { root: "/w" } as Workspace },
+  );
   await ui.fire("send", "one");
   await untilApproval(ui);
   await ui.fire("dialog_session");

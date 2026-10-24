@@ -89,6 +89,9 @@ export const APPROVAL_TRUNCATED_SESSION_STATUS =
 /** An `a` on a command card with the sandbox on: a card lets out only its own command. */
 export const APPROVAL_SANDBOX_SESSION_STATUS =
   "Sandbox on: no session grant for commands; y runs this one outside the sandbox";
+/** An `a` or `!` on a command that names a secret path: only its own card lets it out. */
+export const APPROVAL_SECRET_STATUS =
+  "Names a secret path: no session grant or always rule for this command; y runs this one";
 /** A `!` on a truncated preview: no persistent rule comes from an unread change. */
 export const APPROVAL_TRUNCATED_ALWAYS_STATUS =
   "Preview truncated: always rule unavailable";
@@ -876,6 +879,8 @@ export function grantHint(
   sandboxOn = false,
 ): string {
   if (truncated) return "preview truncated: session grant unavailable";
+  if (namesSecret(proposal))
+    return "names a secret path: session grant and always rule unavailable";
   if (sandboxOn && proposal.kind === "command")
     return "sandbox on: session grant unavailable";
   if (proposal.kind === "edit" || proposal.kind === "write")
@@ -884,6 +889,11 @@ export function grantHint(
   if (proposal.kind !== "command" || exact)
     return `a allow \`${label}\` this session`;
   return `a allow \`${label} …\` this session`;
+}
+
+/** A command with an argument that names a path the file tools refuse. */
+export function namesSecret(proposal: ApprovalRequest): boolean {
+  return proposal.kind === "command" && !!proposal.secretPaths?.length;
 }
 
 /** The header's compact grants label: "auto: files · bun test", "" for none. */

@@ -265,3 +265,73 @@ test("a start that fails before it is answered gets its error and frees its run"
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("an allowed command that names a secret path still asks, and the card carries the path", async () => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), "la-sidecar-")));
+  await writeFile(join(root, ".env"), "TOKEN=planted");
+  await appendRule(root, {
+    effect: "allow",
+    tool: "run_command",
+    pattern: "cat *",
+  });
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    async fetch(request) {
+      const path = new URL(request.url).pathname;
+      if (path === "/api/tags")
+        return Response.json({ models: [{ name: "fixture", size: 1000 }] });
+      if (path === "/api/show")
+        return Response.json({
+          capabilities: ["completion", "tools"],
+          model_info: { "fixture.context_length": 16384 },
+        });
+      const message = {
+        role: "assistant",
+        content: "",
+        tool_calls: [
+          {
+            function: {
+              name: "run_command",
+              arguments: { argv: ["cat", "--file=.env"] },
+            },
+          },
+        ],
+      };
+      return new Response(`${JSON.stringify({ message, done: true })}\n`);
+    },
+  });
+  const side = sidecarChild({
+    DESKTOP_REPO_ROOT: root,
+    OLLAMA_HOST: server.url.origin,
+  });
+  try {
+    side.send({
+      id: 1,
+      method: "agent.start",
+      params: {
+        runId: "r1",
+        workspace: root,
+        intent: "build",
+        model: "fixture",
+        messages: [{ role: "user", content: "go" }],
+      },
+    });
+    const card = await side.frame(
+      (frame) =>
+        frame.stream === "r1" &&
+        (frame.event as { type?: string } | undefined)?.type ===
+          "approval_requested",
+    );
+    expect((card.event as { proposal: unknown }).proposal).toMatchObject({
+      kind: "command",
+      argv: ["cat", "--file=.env"],
+      secret_paths: [".env"],
+    });
+  } finally {
+    side.child.kill();
+    await side.child.exited;
+    await server.stop(true);
+    await rm(root, { recursive: true, force: true });
+  }
+});

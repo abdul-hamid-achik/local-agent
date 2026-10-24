@@ -1,11 +1,12 @@
 import { type ChildProcess, spawn } from "node:child_process";
-import { realpath, stat } from "node:fs/promises";
+import { lstat, readlink, realpath, stat } from "node:fs/promises";
+import { isAbsolute, relative, resolve, sep } from "node:path";
 import {
   type CommandSandbox,
   sandboxedCommand,
   sandboxUnavailable,
 } from "#runtime/sandbox";
-import { secretPathIn } from "#runtime/workspace";
+import { isSecretPath, pathTokens, secretPathsIn } from "#runtime/workspace";
 
 const MAX_OUTPUT_BYTES = 1 << 20;
 const MAX_TIMEOUT_MS = 2_147_483_647;
@@ -176,9 +177,7 @@ export async function createCommandProposal(
   const info = await stat(canonicalCwd, { bigint: true });
   if (!info.isDirectory()) throw new Error("Command cwd must be a directory");
 
-  const secretPaths = [
-    ...new Set(argv.flatMap((argument) => secretPathIn(argument) ?? [])),
-  ].slice(0, 8);
+  const secretPaths = (await secretArguments(argv, canonicalCwd)).slice(0, 8);
   const proposal = Object.freeze({
     kind: "command" as const,
     argv: Object.freeze([...argv]) as readonly [string, ...string[]],
@@ -193,6 +192,47 @@ export async function createCommandProposal(
   });
   proposalEnvironment.set(proposal, { ...childEnvironment(), ...extraEnv });
   return proposal;
+}
+
+const MAX_LINK_CHECKS = 64;
+
+/**
+ * The words of argv that name a secret path (see secretPathsIn), then the
+ * ones that name a link to one: a word that resolves inside `cwd` through a
+ * symbolic link whose target the file tools would hide, shown as
+ * `notes.txt -> .env`. A dangling link is judged by its text. Checked when
+ * the proposal is made; a link changed afterwards is not seen.
+ */
+async function secretArguments(
+  argv: readonly string[],
+  cwd: string,
+): Promise<string[]> {
+  const found = secretPathsIn(argv);
+  const words = argv
+    .slice(1)
+    .flatMap((argument) => pathTokens(argv[0] ?? "", argument))
+    .filter((word) => !word.startsWith("-") && !word.startsWith("~"));
+  for (const word of [...new Set(words)].slice(0, MAX_LINK_CHECKS)) {
+    const path = resolve(cwd, word);
+    if (path !== cwd && !path.startsWith(`${cwd}${sep}`)) continue;
+    let target: string | undefined;
+    try {
+      const real = await realpath(path);
+      if (real !== path) target = real;
+    } catch {
+      try {
+        if ((await lstat(path)).isSymbolicLink()) target = await readlink(path);
+      } catch {
+        // Not there: nothing to follow.
+      }
+    }
+    if (target === undefined) continue;
+    const inside = isAbsolute(target) ? relative(cwd, target) : target;
+    const shown =
+      inside === ".." || inside.startsWith(`..${sep}`) ? target : inside;
+    if (isSecretPath(shown)) found.push(`${word} -> ${shown}`);
+  }
+  return found;
 }
 
 function childEnvironment(): NodeJS.ProcessEnv {
