@@ -116,9 +116,25 @@ a child and draws the whole screen from `apps/cli/src/tuimark/ui/app.tui`.
   tool`), marks how the call ended (`✓` succeeded, `✗` denied or failed, `!`
   outcome unknown or unverified) and says how long it ran; a successful edit
   shows the lines it changed and a created file its lines. While a turn
-  runs, spinners mark the streaming reply and a running tool, and the status
-  bar draws the stream's pace (pieces per second, flat while an approval
-  waits) after the elapsed time.
+  runs, the assistant's live message has a head, `Assistant ⠋ thinking ·
+  12s`: waiting for the model (or connecting MCP servers), thinking, or only
+  the elapsed time while the reply streams. A running tool's card has its own
+  spinner. While an approval or a question waits on you, the head stands
+  still ("waiting for your approval") and that wait is not counted. The status bar holds the
+  same facts at rest and during a turn: the mode, the MCP state, and after a
+  turn `last 1m 06s · 32 tok/s`, plus `1 queued` while a send waits; a
+  command's answer, an approval's keys or an error take it over until the
+  next change.
+  `/copy` (or `ctrl+y`) puts the last reply's markdown on the clipboard,
+  `/copy code` its last code block, through `pbcopy` on macOS or `wl-copy`,
+  `xclip` or `xsel` on Linux. The tool is looked up only on absolute `PATH`
+  entries outside the workspace and the working directory, and runs with a
+  minimal environment (no API keys) and a UTF-8 character type; control
+  bytes are stripped, and a tool that takes over 3 seconds is killed.
+  During a turn it copies the last finished reply and says so. With no
+  tool found, the status says how to select by hand: with mouse reporting
+  on, shift-drag (option-drag in iTerm2, fn-drag in Terminal.app); the
+  welcome and `/help` say it too.
   When the model calls `ask_user`, its question opens in the flow above the
   composer. For a choice, `up`/`down` choose (a single choice starts with
   none chosen, a yes/no on No) and `enter` answers, or type the row's
