@@ -20,6 +20,7 @@ import {
   runAgent,
   type SessionContext,
   SessionStore,
+  secretPathNotes,
   Workspace,
   workspaceRules,
 } from "@local-agent/runtime";
@@ -56,6 +57,18 @@ function fail(id: number, error: unknown): void {
     ok: false,
     error: error instanceof Error ? error.message : "Sidecar request failed",
   });
+}
+
+/** A command's secretPaths as the card's fields (see secretPathNotes). */
+function secretFields(secretPaths: readonly string[] | undefined): {
+  secret_paths?: string[];
+  unchecked_path_words?: number;
+} {
+  const { paths, unchecked } = secretPathNotes(secretPaths);
+  return {
+    ...(paths.length ? { secret_paths: paths } : {}),
+    ...(unchecked === undefined ? {} : { unchecked_path_words: unchecked }),
+  };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -263,9 +276,7 @@ async function handleAgentStart(id: number, params: unknown): Promise<void> {
               argv: [...proposal.argv],
               timeout_ms: proposal.timeoutMs,
               cwd: proposal.cwd,
-              ...(proposal.secretPaths?.length
-                ? { secret_paths: [...proposal.secretPaths] }
-                : {}),
+              ...secretFields(proposal.secretPaths),
             },
           });
         } else {

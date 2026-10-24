@@ -18,6 +18,7 @@ import {
   executeApprovedCommand,
   killLiveCommandGroups,
   parseArgv,
+  secretPathNotes,
   splitCommandLine,
 } from "./command";
 
@@ -434,6 +435,20 @@ test("more path words than are checked for links flags the command instead of pa
   expect(await secretsOf("cat", ...words, "plain.txt")).toEqual([
     "65 path words, only 64 checked",
   ]);
+  // The proposal keeps 8 entries, and the note is one of them.
+  const many = Array.from({ length: 9 }, (_, i) => `s${i}/.env`);
+  const flagged = await secretsOf("cat", ...many, ...words);
+  expect(flagged).toHaveLength(8);
+  expect(flagged?.[0]).toBe("73 path words, only 64 checked");
+  // For display it is a count, not a path.
+  expect(secretPathNotes(flagged)).toEqual({
+    paths: many.slice(0, 7),
+    unchecked: 73,
+  });
+  expect(secretPathNotes(["notes.txt -> .env"])).toEqual({
+    paths: ["notes.txt -> .env"],
+  });
+  expect(secretPathNotes(undefined)).toEqual({ paths: [] });
 });
 
 function alive(pid: number): boolean {

@@ -13,6 +13,9 @@
     <div v-if="proposal.kind === 'command' && proposal.secret_paths?.length" class="dim">
       names a path the workspace treats as secret: {{ proposal.secret_paths.join(", ") }}
     </div>
+    <div v-if="proposal.kind === 'command' && proposal.unchecked_path_words !== undefined" class="dim">
+      names {{ proposal.unchecked_path_words }} path words, too many to check each for a link to a secret
+    </div>
     <pre v-if="proposal.kind === 'mcp'">{{ proposal.argumentsJson }}</pre>
     <div class="row">
       <button class="primary small" :disabled="status !== 'pending'" @click="$emit('decide', true)">

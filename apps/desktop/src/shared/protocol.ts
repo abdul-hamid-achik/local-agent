@@ -133,6 +133,8 @@ export type AgentStreamEvent =
             cwd: string;
             /** Arguments that name a path the file tools treat as secret. */
             secret_paths?: string[];
+            /** Its path words, when there are too many to check each for a link to a secret. */
+            unchecked_path_words?: number;
           }
         | {
             kind: "mcp";

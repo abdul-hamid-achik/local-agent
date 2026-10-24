@@ -28,6 +28,7 @@ export {
   StepLimitError,
   sessionProblem,
 } from "#runtime/agent";
+export { secretPathNotes } from "#runtime/command";
 export {
   DEFAULT_OLLAMA_MODEL,
   type OpenAILocalProvider,

@@ -46,6 +46,7 @@ import {
   APPROVAL_TRUNCATED_STATUS,
   APPROVAL_UNARMED_SESSION_STATUS,
   APPROVAL_UNARMED_STATUS,
+  APPROVAL_UNCHECKED_STATUS,
   APPROVAL_WAIT_STATUS,
   IDLE_STATUS,
   NO_DETAILS_STATUS,
@@ -5049,6 +5050,34 @@ test("a card that names a secret path offers no session grant and no always rule
   expect(
     await Bun.file(join(root, ".local-agent", "permissions.json")).exists(),
   ).toBe(false);
+  await ui.fire("dialog_cancel");
+  await client.idle();
+  expect(decisions).toEqual([false]);
+});
+
+test("a card with too many path words to check says that, and offers no grant either", async () => {
+  const root = await mkdtemp(join(tmpdir(), "la-unchecked-"));
+  const unchecked = {
+    ...commandProposal(["cat", "a.txt"]),
+    secretPaths: ["65 path words, only 64 checked"],
+  } as ApprovalRequest;
+  const { ui, client } = setup(turnsAsking([[unchecked]]), {
+    workspace: { root } as Workspace,
+  });
+  await ui.fire("send", "one");
+  await untilApproval(ui);
+  expect(store(ui).approval.body).toContain(
+    "It names 65 path words, too many to check each for a link to a secret.",
+  );
+  expect(store(ui).approval.body).not.toContain("treats as secret");
+  expect(store(ui).approval.grant_hint).toBe(
+    "too many paths to check: session grant and always rule unavailable",
+  );
+  await ui.fire("dialog_session");
+  expect(store(ui).status).toBe(APPROVAL_UNCHECKED_STATUS);
+  await ui.fire("dialog_always");
+  expect(store(ui).status).toBe(APPROVAL_UNCHECKED_STATUS);
+  expect(store(ui).approval.open).toBe(true);
   await ui.fire("dialog_cancel");
   await client.idle();
   expect(decisions).toEqual([false]);

@@ -335,3 +335,80 @@ test("an allowed command that names a secret path still asks, and the card carri
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("a command with too many path words to check is flagged on its card as that, not as a secret path", async () => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), "la-sidecar-")));
+  await writeFile(join(root, ".env"), "TOKEN=planted");
+  await appendRule(root, {
+    effect: "allow",
+    tool: "run_command",
+    pattern: "cat *",
+  });
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    async fetch(request) {
+      const path = new URL(request.url).pathname;
+      if (path === "/api/tags")
+        return Response.json({ models: [{ name: "fixture", size: 1000 }] });
+      if (path === "/api/show")
+        return Response.json({
+          capabilities: ["completion", "tools"],
+          model_info: { "fixture.context_length": 16384 },
+        });
+      const message = {
+        role: "assistant",
+        content: "",
+        tool_calls: [
+          {
+            function: {
+              name: "run_command",
+              arguments: {
+                argv: [
+                  "cat",
+                  ...Array.from({ length: 65 }, (_, i) => `w${i}.txt`),
+                ],
+              },
+            },
+          },
+        ],
+      };
+      return new Response(`${JSON.stringify({ message, done: true })}\n`);
+    },
+  });
+  const side = sidecarChild({
+    DESKTOP_REPO_ROOT: root,
+    OLLAMA_HOST: server.url.origin,
+  });
+  try {
+    side.send({
+      id: 1,
+      method: "agent.start",
+      params: {
+        runId: "r1",
+        workspace: root,
+        intent: "build",
+        model: "fixture",
+        messages: [{ role: "user", content: "go" }],
+      },
+    });
+    const card = await side.frame(
+      (frame) =>
+        frame.stream === "r1" &&
+        (frame.event as { type?: string } | undefined)?.type ===
+          "approval_requested",
+    );
+    expect((card.event as { proposal: unknown }).proposal).toMatchObject({
+      kind: "command",
+      unchecked_path_words: 65,
+    });
+    expect(
+      (card.event as { proposal: Record<string, unknown> }).proposal,
+    ).not.toHaveProperty("secret_paths");
+  } finally {
+    side.child.kill();
+    await side.child.exited;
+    await server.stop(true);
+    await rm(root, { recursive: true, force: true });
+  }
+});

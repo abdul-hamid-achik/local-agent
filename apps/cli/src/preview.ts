@@ -1,7 +1,11 @@
 // Plain-text previews shared by the Vue and Tuimark clients. Nothing here may
 // import a renderer: this module is loaded before any terminal is claimed.
 
-import type { ApprovalRequest, Message } from "@local-agent/runtime";
+import {
+  type ApprovalRequest,
+  type Message,
+  secretPathNotes,
+} from "@local-agent/runtime";
 import { terminalText } from "#cli/text";
 
 /** One argument as a POSIX shell would need it written, for display only (nothing is run through a shell). */
@@ -38,11 +42,22 @@ export function approvalPreview(
   );
 }
 
-/** A command's arguments that name a path the file tools refuse, as a line under the command. */
+/**
+ * A command's arguments that name a path the file tools refuse, as a line
+ * under the command, and a line when it has too many path words to check.
+ */
 export function secretNote(proposal: ApprovalRequest): string {
-  return proposal.kind === "command" && proposal.secretPaths?.length
-    ? `\nnames a path the workspace treats as secret: ${proposal.secretPaths.map(shellQuote).join(", ")}`
-    : "";
+  if (proposal.kind !== "command") return "";
+  const { paths, unchecked } = secretPathNotes(proposal.secretPaths);
+  return `${
+    paths.length
+      ? `\nnames a path the workspace treats as secret: ${paths.map(shellQuote).join(", ")}`
+      : ""
+  }${
+    unchecked === undefined
+      ? ""
+      : `\nnames ${unchecked} path words, too many to check each for a link to a secret`
+  }`;
 }
 
 /** "31 tok/s" from Ollama's counters, or undefined when it reported none. */

@@ -195,6 +195,27 @@ export async function createCommandProposal(
 }
 
 const MAX_LINK_CHECKS = 64;
+/** The secretPaths entry for path words past the link check: a reason, not a path. */
+const UNCHECKED = /^(\d+) path words, only \d+ checked$/;
+
+/**
+ * A command's secretPaths for display: the paths, and the number of path
+ * words when there are more than are checked for a link to a secret (that
+ * entry withholds the grants as a path does, but names none).
+ */
+export function secretPathNotes(secretPaths: readonly string[] = []): {
+  paths: string[];
+  unchecked?: number;
+} {
+  const paths: string[] = [];
+  let unchecked: number | undefined;
+  for (const entry of secretPaths) {
+    const match = UNCHECKED.exec(entry);
+    if (match) unchecked = Number(match[1]);
+    else paths.push(entry);
+  }
+  return unchecked === undefined ? { paths } : { paths, unchecked };
+}
 
 /**
  * The words of argv that name a secret path (see secretPathsIn), then the
@@ -239,8 +260,11 @@ async function secretArguments(
   }
   // Words past the cap are not looked at, and a link among them could point
   // at a secret: say so, which withholds the grants, instead of passing them.
+  // First, so the proposal's cut to 8 entries keeps it.
   if (words.length > MAX_LINK_CHECKS)
-    found.push(`${words.length} path words, only ${MAX_LINK_CHECKS} checked`);
+    found.unshift(
+      `${words.length} path words, only ${MAX_LINK_CHECKS} checked`,
+    );
   return found;
 }
 

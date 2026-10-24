@@ -101,7 +101,6 @@ import {
 } from "#cli/tuimark/goal";
 import {
   APPROVAL_SANDBOX_SESSION_STATUS,
-  APPROVAL_SECRET_STATUS,
   APPROVAL_STATUS,
   APPROVAL_TRUNCATED_ALWAYS_STATUS,
   APPROVAL_TRUNCATED_SESSION_STATUS,
@@ -153,6 +152,7 @@ import {
   RATE_POINTS,
   type SessionSummary,
   type Store,
+  secretStatus,
   sessionRows,
   statusLines,
   WAITING_STATUS,
@@ -702,7 +702,9 @@ export class TuimarkClient {
       }
       // A command that names a secret path is let out by its own card only.
       if (this.proposal && namesSecret(this.proposal)) {
-        await this.write([{ path: "status", value: APPROVAL_SECRET_STATUS }]);
+        await this.write([
+          { path: "status", value: secretStatus(this.proposal) },
+        ]);
         return undefined;
       }
       // With the sandbox on, a card lets out only its own command: a grant
@@ -734,7 +736,9 @@ export class TuimarkClient {
       }
       // Nor does one become a standing rule.
       if (namesSecret(this.proposal)) {
-        await this.write([{ path: "status", value: APPROVAL_SECRET_STATUS }]);
+        await this.write([
+          { path: "status", value: secretStatus(this.proposal) },
+        ]);
         return undefined;
       }
       const root = this.options.workspace?.root;

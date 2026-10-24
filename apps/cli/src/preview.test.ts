@@ -38,6 +38,23 @@ test("a command that names a secret path says so under the command line", () => 
   expect(approvalPreview({ ...command, secretPaths: [] }, "/w")).not.toContain(
     "secret",
   );
+  // Too many path words to check is said as that, not as a secret path.
+  expect(
+    approvalPreview(
+      { ...command, secretPaths: ["65 path words, only 64 checked"] },
+      "/w",
+    ),
+  ).toBe(
+    "$ cat .env\nin the workspace · timeout 1s · runs with your permissions\nnames 65 path words, too many to check each for a link to a secret",
+  );
+  expect(
+    approvalPreview(
+      { ...command, secretPaths: ["73 path words, only 64 checked", ".env"] },
+      "/w",
+    ),
+  ).toBe(
+    "$ cat .env\nin the workspace · timeout 1s · runs with your permissions\nnames a path the workspace treats as secret: .env\nnames 73 path words, too many to check each for a link to a secret",
+  );
 });
 
 test("tokensPerSecond needs both of Ollama's counters", () => {

@@ -9,6 +9,7 @@ import {
   type ProviderProbe,
   placementWarning,
   type Question,
+  secretPathNotes,
 } from "@local-agent/runtime";
 import { approvalPreview } from "#cli/preview";
 import {
@@ -92,6 +93,9 @@ export const APPROVAL_SANDBOX_SESSION_STATUS =
 /** An `a` or `!` on a command that names a secret path: only its own card lets it out. */
 export const APPROVAL_SECRET_STATUS =
   "Names a secret path: no session grant or always rule for this command; y runs this one";
+/** The same, for a command with too many path words to check each for a link to a secret. */
+export const APPROVAL_UNCHECKED_STATUS =
+  "Too many paths to check for a secret: no session grant or always rule for this command; y runs this one";
 /** A `!` on a truncated preview: no persistent rule comes from an unread change. */
 export const APPROVAL_TRUNCATED_ALWAYS_STATUS =
   "Preview truncated: always rule unavailable";
@@ -880,7 +884,10 @@ export function grantHint(
 ): string {
   if (truncated) return "preview truncated: session grant unavailable";
   if (namesSecret(proposal))
-    return "names a secret path: session grant and always rule unavailable";
+    return proposal.kind === "command" &&
+      secretPathNotes(proposal.secretPaths).paths.length === 0
+      ? "too many paths to check: session grant and always rule unavailable"
+      : "names a secret path: session grant and always rule unavailable";
   if (sandboxOn && proposal.kind === "command")
     return "sandbox on: session grant unavailable";
   if (proposal.kind === "edit" || proposal.kind === "write")
@@ -891,9 +898,34 @@ export function grantHint(
   return `a allow \`${label} …\` this session`;
 }
 
-/** A command with an argument that names a path the file tools refuse. */
+/**
+ * A command with an argument that names a path the file tools refuse, or
+ * with too many path words to check each for a link to one.
+ */
 export function namesSecret(proposal: ApprovalRequest): boolean {
   return proposal.kind === "command" && !!proposal.secretPaths?.length;
+}
+
+/** The card's sentences for a command's secretPaths (see secretPathNotes). */
+function secretSentences(secretPaths: readonly string[] | undefined): string {
+  const { paths, unchecked } = secretPathNotes(secretPaths);
+  return `${
+    paths.length
+      ? ` It names a path the workspace treats as secret: ${paths.map(cleanText).join(", ")}.`
+      : ""
+  }${
+    unchecked === undefined
+      ? ""
+      : ` It names ${unchecked} path words, too many to check each for a link to a secret.`
+  }`;
+}
+
+/** The status for an `a` or `!` that namesSecret refuses. */
+export function secretStatus(proposal: ApprovalRequest): string {
+  return proposal.kind === "command" &&
+    secretPathNotes(proposal.secretPaths).paths.length === 0
+    ? APPROVAL_UNCHECKED_STATUS
+    : APPROVAL_SECRET_STATUS;
 }
 
 /** The header's compact grants label: "auto: files · bun test", "" for none. */
@@ -983,9 +1015,7 @@ export function approvalState(
               : "Runs exactly as written: there is no shell."
           }${
             // Said here too: the preview below can be long.
-            proposal.secretPaths?.length
-              ? ` It names a path the workspace treats as secret: ${proposal.secretPaths.map(cleanText).join(", ")}.`
-              : ""
+            secretSentences(proposal.secretPaths)
           }`,
         ),
         danger: true,
