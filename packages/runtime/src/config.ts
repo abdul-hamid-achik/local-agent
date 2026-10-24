@@ -120,6 +120,8 @@ export const ProviderSchema = z
     context_explicit: z.boolean().optional(),
     /** Why a planned context_size is what it is (see planContext). */
     context_plan: z.string().optional(),
+    /** Set when an explicit context_size's KV cache does not fit in memory. */
+    context_warning: z.string().optional(),
     /** Sent to Ollama as `think` on chat only when set; unset keeps the model's default. */
     think: z.boolean().optional(),
     max_model_bytes: z

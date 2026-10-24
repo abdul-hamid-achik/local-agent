@@ -287,11 +287,16 @@ Interrupted tool outcomes require inspection; they are never automatically repla
         const problem = store && resumed && sessionProblem(store, resumed);
         if (problem) throw new Error(problem);
         // Without --context, the size comes from the model and this
-        // machine's memory (planContext); a failed look leaves 16384.
+        // machine's memory (planContext); a failed look leaves 16384. A
+        // size the user set stays, with a warning when it does not fit.
         const provider = await planContext(
           resolved,
           AbortSignal.timeout(15_000),
         );
+        if (provider.context_warning)
+          process.stderr.write(
+            `warning: ${terminalText(provider.context_warning)}\n`,
+          );
         if (!headless) {
           // An interactive client must not open its screen for a model that is
           // missing, or a --context beyond its native one: say so in one line.

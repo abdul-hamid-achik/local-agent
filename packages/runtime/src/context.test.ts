@@ -1,7 +1,11 @@
 import { expect, test, vi } from "vitest";
 import { kvBytesPerToken } from "#runtime/admission";
 import { resolveProvider } from "#runtime/config";
-import { planContext, planContextSize } from "#runtime/context";
+import {
+  explicitContextNote,
+  planContext,
+  planContextSize,
+} from "#runtime/context";
 
 const GIB = 1024 ** 3;
 const MAC_16GB = 16 * GIB;
@@ -158,15 +162,42 @@ test("planContext plans an unset local Ollama size", async () => {
   }
 });
 
-test("planContext keeps a chosen size, Chalupa's and openai_local's", async () => {
+test("planContext keeps a chosen size and says what it costs", async () => {
   const fetchMock = ollama(qwen35);
   try {
     const chosen = resolveProvider({}, "qwen3.5:4b", { context: "8k" });
-    expect(await planContext(chosen, AbortSignal.timeout(5_000))).toBe(chosen);
-    const fromEnv = resolveProvider({ LOCAL_AGENT_CONTEXT: "65536" });
-    expect(await planContext(fromEnv, AbortSignal.timeout(5_000))).toBe(
-      fromEnv,
+    const kept = await planContext(
+      chosen,
+      AbortSignal.timeout(5_000),
+      MAC_16GB,
     );
+    expect(kept).toMatchObject({ context_size: 8_192, context_explicit: true });
+    expect(kept.context_plan).toBe(
+      "set by --context or LOCAL_AGENT_CONTEXT; its KV cache takes 0.3 GiB of the 7.7 GiB left after the weights",
+    );
+    expect(kept.context_warning).toBeUndefined();
+    // 256k tokens at 32 KiB a token is 8 GiB: more than is left.
+    const big = await planContext(
+      resolveProvider({ LOCAL_AGENT_CONTEXT: "262144" }, "qwen3.5:4b"),
+      AbortSignal.timeout(5_000),
+      MAC_16GB,
+    );
+    expect(big.context_size).toBe(262_144);
+    expect(big.context_warning).toBe(
+      "context 262144 needs a 8.0 GiB KV cache, more than the 7.7 GiB left after the weights: Ollama may run part of the model on the CPU, or fail to load it",
+    );
+    expect(big.context_plan).toContain(big.context_warning);
+  } finally {
+    fetchMock.mockRestore();
+  }
+  expect(
+    explicitContextNote({ weightsBytes: GIB, totalMemory: MAC_16GB }, 65_536),
+  ).toEqual({ reason: "set by --context or LOCAL_AGENT_CONTEXT" });
+});
+
+test("planContext leaves Chalupa's and openai_local's size alone", async () => {
+  const fetchMock = ollama(qwen35);
+  try {
     const chalupa = resolveProvider({
       LOCAL_AGENT_PROVIDER: "chalupa",
       LOCAL_AGENT_LOCAL_ONLY: "false",

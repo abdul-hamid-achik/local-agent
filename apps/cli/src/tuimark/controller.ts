@@ -22,6 +22,7 @@ import {
   appendRule,
   clearRules,
   evaluate,
+  explicitContextNote,
   loadPermissionFile,
   type McpConnection,
   type Message,
@@ -1077,23 +1078,35 @@ export class TuimarkClient {
       await this.write([{ path: "status", value: oneLine(admission.message) }]);
       return;
     }
-    const plan = planned
-      ? planContextSize({
-          nativeContext: admission.nativeContext,
-          weightsBytes: admission.sizeBytes,
-          kvBytesPerToken: admission.kvBytesPerToken,
-          totalMemory: this.options.totalMemory?.() ?? totalmem(),
-        })
-      : undefined;
+    const facts = {
+      nativeContext: admission.nativeContext,
+      weightsBytes: admission.sizeBytes,
+      kvBytesPerToken: admission.kvBytesPerToken,
+      totalMemory: this.options.totalMemory?.() ?? totalmem(),
+    };
+    // A size the user set stays: its note (and warning) is for this model.
+    const plan = planned ? planContextSize(facts) : undefined;
+    const note =
+      !planned && this.provider.type === "ollama"
+        ? explicitContextNote(facts, this.provider.context_size)
+        : undefined;
+    const { context_warning: _, ...previous } = this.provider;
     this.provider = {
-      ...this.provider,
+      ...previous,
       model: admission.model,
       ...(plan
         ? { context_size: plan.context, context_plan: plan.reason }
         : {}),
+      ...(note ? { context_plan: note.reason } : {}),
+      ...(note?.warning ? { context_warning: note.warning } : {}),
     };
     await this.write([
-      { path: "status", value: `Model changed to ${admission.model}` },
+      {
+        path: "status",
+        value: note?.warning
+          ? oneLine(`Model changed to ${admission.model} · ${note.warning}`)
+          : `Model changed to ${admission.model}`,
+      },
       { path: "header.model", value: clip(cleanText(admission.model), 40) },
       ...this.ctxWrites(this.ctx.current),
     ]);

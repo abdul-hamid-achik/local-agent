@@ -32,6 +32,7 @@ export {
 } from "#runtime/config";
 export {
   type ContextPlan,
+  explicitContextNote,
   PLANNED_CONTEXT_MAX,
   planContext,
   planContextSize,

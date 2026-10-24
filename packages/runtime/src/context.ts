@@ -65,8 +65,39 @@ export function planContextSize(facts: {
 }
 
 /**
+ * What a size the user set (--context, LOCAL_AGENT_CONTEXT) costs: it is
+ * kept, and a warning says when its KV cache needs more than the memory
+ * left after the weights (Ollama then runs part of the model on the CPU,
+ * or fails to load it).
+ */
+export function explicitContextNote(
+  facts: {
+    weightsBytes: number;
+    kvBytesPerToken?: number;
+    totalMemory: number;
+  },
+  context: number,
+): { reason: string; warning?: string } {
+  const kv = facts.kvBytesPerToken;
+  if (kv === undefined)
+    return { reason: "set by --context or LOCAL_AGENT_CONTEXT" };
+  const need = context * kv;
+  const left = Math.max(0, (facts.totalMemory * 11) / 16 - facts.weightsBytes);
+  if (need <= left)
+    return {
+      reason: `set by --context or LOCAL_AGENT_CONTEXT; its KV cache takes ${gib(need)} of the ${gib(left)} left after the weights`,
+    };
+  const warning = `context ${context} needs a ${gib(need)} KV cache, more than the ${gib(left)} left after the weights: Ollama may run part of the model on the CPU, or fail to load it`;
+  return {
+    reason: `set by --context or LOCAL_AGENT_CONTEXT; ${warning}`,
+    warning,
+  };
+}
+
+/**
  * The provider with a planned `context_size`, for a local Ollama model whose
- * size the user did not set (--context, LOCAL_AGENT_CONTEXT). Chalupa and
+ * size the user did not set (--context, LOCAL_AGENT_CONTEXT); a size the
+ * user set is kept, with what it costs (`explicitContextNote`). Chalupa and
  * openai_local keep theirs. When the model cannot be inspected the provider
  * is returned as it is: admission reports why on its own.
  */
@@ -75,7 +106,7 @@ export async function planContext(
   signal: AbortSignal,
   totalMemory = totalmem(),
 ): Promise<Provider> {
-  if (provider.type !== "ollama" || provider.context_explicit) return provider;
+  if (provider.type !== "ollama") return provider;
   // The plan picks the size, so admission is asked only for the model's
   // facts: the smallest size passes its native-context check.
   const admission = await admitOllamaModel(
@@ -83,6 +114,21 @@ export async function planContext(
     signal,
   ).catch(() => undefined);
   if (admission?.status !== "validated") return provider;
+  if (provider.context_explicit) {
+    const note = explicitContextNote(
+      {
+        weightsBytes: admission.sizeBytes,
+        kvBytesPerToken: admission.kvBytesPerToken,
+        totalMemory,
+      },
+      provider.context_size,
+    );
+    return {
+      ...provider,
+      context_plan: note.reason,
+      ...(note.warning ? { context_warning: note.warning } : {}),
+    };
+  }
   const plan = planContextSize({
     nativeContext: admission.nativeContext,
     weightsBytes: admission.sizeBytes,

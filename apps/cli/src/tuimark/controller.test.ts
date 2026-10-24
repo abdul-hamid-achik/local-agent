@@ -2786,7 +2786,24 @@ test("/model plans the new model's context unless the user chose a size", async 
   expect(asked).toEqual([512, 8192]);
   await chosen.ui.fire("send", "hi");
   await chosen.client.idle();
-  expect(providers.at(-1)?.context_size).toBe(8192);
+  expect(providers.at(-1)).toMatchObject({
+    context_size: 8192,
+    context_plan:
+      "set by --context or LOCAL_AGENT_CONTEXT; its KV cache takes 0.3 GiB of the 7.7 GiB left after the weights",
+  });
+  expect(providers.at(-1)?.context_warning).toBeUndefined();
+
+  // A chosen size too large for this machine stays, with a warning.
+  const large = setup(reply("ok"), {
+    admitModel,
+    run,
+    provider: { ...provider, context_size: 262_144, context_explicit: true },
+    totalMemory: () => 16 * GIB,
+  });
+  await large.ui.fire("send", "/model qwen3.5:4b");
+  expect(store(large.ui).status).toBe(
+    "Model changed to qwen3.5:4b · context 262144 needs a 8.0 GiB KV cache, more than the 7.7 GiB left after the weights: Ollama may run part of the model on the CPU, or fail to load it",
+  );
 });
 
 test("a model the Ollama inventory rejects is refused: no switch, no header write", async () => {
