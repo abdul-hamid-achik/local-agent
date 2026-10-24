@@ -111,6 +111,69 @@ test.each(["chalupa", "ollama"])(
   },
 );
 
+test("a hang-up stops a running turn and exits, as SIGTERM does", async () => {
+  const asked = Promise.withResolvers<void>();
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    async fetch(request) {
+      const path = new URL(request.url).pathname;
+      if (path === "/api/tags")
+        return Response.json({ models: [{ name: "fixture", size: 1000 }] });
+      if (path === "/api/show")
+        return Response.json({
+          capabilities: ["completion", "tools"],
+          model_info: { "fixture.context_length": 16384 },
+        });
+      asked.resolve();
+      // A reply that never finishes: one piece, then the stream stays open.
+      return new Response(
+        new ReadableStream({
+          start(stream) {
+            stream.enqueue(
+              new TextEncoder().encode(
+                `${JSON.stringify({ message: { role: "assistant", content: "Hel" }, done: false })}\n`,
+              ),
+            );
+          },
+        }),
+      );
+    },
+  });
+  try {
+    const child = Bun.spawn(
+      [
+        process.execPath,
+        "apps/cli/src/main.ts",
+        "--mode",
+        "headless",
+        "-p",
+        "Hello",
+        "--json",
+      ],
+      {
+        cwd: join(directory, "../../.."),
+        env: {
+          OLLAMA_HOST: `127.0.0.1:${server.port}`,
+          LOCAL_AGENT_MODEL: "fixture",
+          XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME ?? "",
+        },
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    );
+    await asked.promise;
+    const started = Date.now();
+    child.kill("SIGHUP");
+    await child.exited;
+    // It exited on its own path, not killed by the signal's default.
+    expect(child.signalCode).toBeNull();
+    expect(Date.now() - started).toBeLessThan(5_000);
+  } finally {
+    await server.stop(true);
+  }
+});
+
 test("production bundle keeps native rendering behind a dynamic import", async () => {
   const result = await Bun.build({
     entrypoints: [join(directory, "main.ts")],

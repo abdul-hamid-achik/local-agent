@@ -70,6 +70,9 @@ async function mcpSource(values: {
     : undefined;
 }
 
+/** How long a hung-up client may take to stop before it exits anyway. */
+const HANGUP_GRACE_MS = 5_000;
+
 const unavailable = (failed: { name: string; error: string }) =>
   `MCP server ${failed.name} unavailable: ${failed.error}`;
 
@@ -402,8 +405,16 @@ A resumed session first closes the calls it was interrupted before running.`);
           : undefined;
         const controller = new AbortController();
         const stop = () => controller.abort();
+        // The terminal went away (its window closed): stop as for SIGTERM,
+        // the turn's calls closed and the servers too, but do not outlive
+        // the terminal by long when something will not let go.
+        const hangup = () => {
+          stop();
+          setTimeout(() => process.exit(129), HANGUP_GRACE_MS).unref();
+        };
         process.once("SIGINT", stop);
         process.once("SIGTERM", stop);
+        process.once("SIGHUP", hangup);
         // Filled as servers connect (the Tuimark client opens first and
         // shows them arriving); every one is closed on the way out.
         const mcp: McpConnection[] = [];
@@ -615,6 +626,7 @@ A resumed session first closes the calls it was interrupted before running.`);
           await Promise.allSettled(mcp.map((connection) => connection.close()));
           process.off("SIGINT", stop);
           process.off("SIGTERM", stop);
+          process.off("SIGHUP", hangup);
         }
       }
     } finally {
