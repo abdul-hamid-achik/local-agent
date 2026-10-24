@@ -211,6 +211,7 @@ test("the slash catalog lists exactly the commands the parser knows", () => {
     "/find",
     "/export",
     "/mcp",
+    "/goal",
     "/help",
   ]);
   for (const command of SLASH_COMMANDS) {
@@ -262,7 +263,7 @@ test("the slash catalog lists exactly the commands the parser knows", () => {
     "/find TEXT",
     "/export [json]",
     "/mcp",
-    "/help",
+    "/goal [OBJECTIVE|stop]",
   ]);
   expect(slashMatches("/p")?.map((c) => c.name)).toEqual([
     "/permissions",

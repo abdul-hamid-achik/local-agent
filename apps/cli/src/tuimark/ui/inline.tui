@@ -205,8 +205,13 @@
     </use>
     <!-- A tool result's images (read_image, a fetched image) and links. -->
     <use template="la-media" with="msg as lm" if="msg.is_tool"/>
-    <!-- A UI-local notice (a failed turn's error): the client's words, never the model's. -->
-    <use template="la-message" label="Error" class="notice" if="msg.is_notice">
+    <!-- UI-local views, the client's words and never the model's: a failed
+         turn's error, and a notice (a goal's turn, a window note, a warning). -->
+    <use template="la-message" label="Error" class="error" if="msg.is_error">
+      <use template="la-blocks" with="msg.blocks as blocks"/>
+      <use template="la-media" with="msg as lm"/>
+    </use>
+    <use template="la-message" label="Notice" class="notice" if="msg.is_notice">
       <use template="la-blocks" with="msg.blocks as blocks"/>
       <use template="la-media" with="msg as lm"/>
     </use>
@@ -236,13 +241,15 @@
       <use template="k-appbar" brand="Local Agent" title="">
         <text class="la-muted la-provider">{header.provider}</text>
         <text class="la-model">{header.model}</text>
-        <text class="la-mode">{header.mode}</text>
+        <!-- A goal runs only in build: while it runs, its turn takes the mode's place. -->
+        <text if="!header.goal_on" class="la-mode">{header.mode}</text>
+        <text if="header.goal_on" class="la-goal">{header.goal}</text>
         <text if="header.sandbox_on" class="la-sandbox">sandbox</text>
         <spacer/>
         <text if="header.grants_on" class="la-muted la-grants">{header.grants}</text>
-        <text class="la-muted la-session">{header.session}</text>
+        <text class="la-muted la-session" class:crowded="header.grants_on">{header.session}</text>
         <text class="la-muted la-ctx" class:warn="header.ctx_warn" class:danger="header.ctx_danger">ctx {header.ctx_label}</text>
-        <progress id="ctx" class="la-ctxbar" class:warn="header.ctx_warn" class:danger="header.ctx_danger" bind="header.ctx_pct"/>
+        <progress id="ctx" class="la-ctxbar" class:warn="header.ctx_warn" class:danger="header.ctx_danger" class:crowded="header.grants_on" bind="header.ctx_pct"/>
       </use>
 
       <!-- What is still live: the uncommitted final blocks and the tail of

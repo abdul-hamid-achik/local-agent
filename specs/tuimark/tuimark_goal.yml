@@ -1,0 +1,91 @@
+version: 1
+name: bun_tuimark_goal
+intent: |
+    /goal runs turns toward an objective in the Tuimark client: each turn's
+    host-written message shows as a notice labelled Notice (never Error),
+    the header shows the goal's turn in the mode's place, an edit in the
+    second turn still asks for approval (approved with y), and the goal ends
+    when the model reports done, with a notice that names no evidence (the
+    report named only a file). A second goal stopped with esc ends at once;
+    its notice and partial reply stay.
+target:
+    cmd: ["bun", "specs/tuimark/fixture.ts", "goal"]
+    cwd: "${projectRoot}"
+terminal:
+    cols: 100
+    rows: 32
+    alternateScreen: require
+steps:
+    - wait:
+        screen:
+            contains: "Message the model"
+        timeoutMs: 15000
+    - type: "/goal tidy the notes"
+    - press: enter
+    - wait:
+        screen:
+            contains: "Edit notes.txt?"
+        timeoutMs: 15000
+    - wait:
+        screen:
+            contains: "fixture-model  goal 2/8"
+        timeoutMs: 10000
+    - snapshot: approval
+    - wait:
+        screen:
+            contains: "y allow"
+        timeoutMs: 10000
+    - press: y
+    - wait:
+        screen:
+            contains: "Goal reported done without evidence"
+        timeoutMs: 15000
+    - wait:
+        screen:
+            notContains: "Edit notes.txt?"
+        timeoutMs: 10000
+    - wait:
+        screen:
+            notContains: "Error"
+        timeoutMs: 10000
+    - wait:
+        screen:
+            contains: "Notice"
+        timeoutMs: 10000
+    - wait:
+        screen:
+            contains: "fixture-model  build"
+        timeoutMs: 10000
+    - snapshot: done
+    - type: "/goal slow goal"
+    - press: enter
+    - wait:
+        screen:
+            contains: "this takes a while"
+        timeoutMs: 15000
+    - press: esc
+    - wait:
+        screen:
+            contains: "Goal stopped: you cancelled its turn"
+        timeoutMs: 10000
+    - wait:
+        screen:
+            contains: "[goal 1/8] Goal: slow goal"
+        timeoutMs: 10000
+    - wait:
+        screen:
+            contains: "this takes a while"
+        timeoutMs: 10000
+    - snapshot: stopped
+    - press: ctrl+c
+    - wait:
+        process:
+            exitCode: 0
+        timeoutMs: 10000
+outcomes:
+    - id: tuimark_goal_done
+      description: the goal ran three turns, applied the approved edit and ended on the model's done report
+      verify:
+        process:
+            exitCode: 0
+contractHash: sha256:ce85e74e50c3cfab2d8556345fba37b9f20b0d20b44d84e725323210a787cb0e

@@ -5,6 +5,8 @@
 // compared. /theme and /mouse are Tuimark-only (the Vue client says so):
 // they drive the host's reserved `@theme` path and `<tui mouse>` flag.
 
+import { type GoalCommand, parseGoal } from "#cli/tuimark/goal";
+
 export type Intent = "plan" | "build" | "chat";
 
 /** The session theme, written to the host's reserved `@theme` path. */
@@ -88,10 +90,12 @@ export interface CommandOutcome {
    * The controller searches the workspace's saved sessions with it.
    */
   find?: string;
+  /** Set by `/goal …`: what it asked for (see goal.ts). The controller runs it. */
+  goal?: GoalCommand;
 }
 
 export const HELP_STATUS =
-  "/mode plan|build|chat · /model [NAME] · /theme dark|light|auto · /mouse on|off · /permissions [clear|trust] · /sandbox on|off · /details · /status · /sessions · /find TEXT · /export [json] · /mcp · /help · Esc cancel · Ctrl+C exit";
+  "/mode plan|build|chat · /model [NAME] · /theme dark|light|auto · /mouse on|off · /permissions [clear|trust] · /sandbox on|off · /details · /status · /sessions · /find TEXT · /export [json] · /mcp · /goal OBJECTIVE · /help · Esc cancel · Ctrl+C exit";
 
 /** Inline has no mouse (the engine ignores it there): the controller refuses with this. */
 export const MOUSE_INLINE_STATUS = "Mouse is not available in inline mode";
@@ -248,6 +252,21 @@ export function runSlash(text: string, state: CommandState): CommandOutcome {
     if (!query) return { status: "Search the saved sessions. Use /find TEXT" };
     return { status: `Searching sessions for ${query}…`, find: query };
   }
+  const goal = command.match(/^\/goal(?:\s+([\s\S]*))?$/i);
+  if (goal) {
+    const parsed = parseGoal(goal[1] ?? "");
+    return parsed.kind === "error"
+      ? { status: parsed.status, unknown: true }
+      : {
+          status:
+            parsed.kind === "start"
+              ? "Starting the goal…"
+              : parsed.kind === "stop"
+                ? "Stopping the goal…"
+                : "Goal",
+          goal: parsed,
+        };
+  }
   if (command === "/help") return { status: HELP_STATUS, help: true };
   if (command === "/mcp")
     return {
@@ -367,6 +386,12 @@ export const SLASH_COMMANDS: readonly SlashCommand[] = [
     insert: "/mcp",
   },
   {
+    name: "/goal",
+    usage: "/goal [OBJECTIVE|stop]",
+    description: "run turns toward an objective until done or a limit",
+    insert: "/goal ",
+  },
+  {
     name: "/help",
     usage: "/help",
     description: "show the commands and the keys",
@@ -418,13 +443,18 @@ export interface HelpRow {
   desc: string;
 }
 
-/** Every slash command as a help row, in catalog order. */
+/**
+ * Every slash command as a help row, in catalog order, but `/help`: the
+ * overlay is what it opens, and its first row already says how to close it.
+ */
 export function helpRows(): HelpRow[] {
-  return SLASH_COMMANDS.map((command) => ({
-    id: command.name,
-    cmd: command.usage,
-    desc: command.description,
-  }));
+  return SLASH_COMMANDS.filter((command) => command.name !== "/help").map(
+    (command) => ({
+      id: command.name,
+      cmd: command.usage,
+      desc: command.description,
+    }),
+  );
 }
 
 // ------------------------------------------------------------------ the palette
@@ -479,6 +509,8 @@ export const PALETTE: readonly PaletteItem[] = [
     hint: "/export json",
   },
   { id: "mcp", label: "MCP servers", hint: "/mcp" },
+  { id: "goal", label: "Goal: show the running goal", hint: "/goal" },
+  { id: "goal-stop", label: "Goal: stop it", hint: "/goal stop" },
   { id: "help", label: "Help, commands and keys", hint: "/help" },
   // Two rows stand for keys, not slash commands: the controller runs them
   // itself (the hint only names the key that does the same). Load-earlier

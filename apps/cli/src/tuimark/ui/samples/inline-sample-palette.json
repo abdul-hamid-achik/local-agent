@@ -11,7 +11,9 @@
     "ctx_danger": false,
     "grants": "",
     "grants_on": false,
-    "sandbox_on": false
+    "sandbox_on": false,
+    "goal": "",
+    "goal_on": false
   },
   "empty": false,
   "mouse_on": true,
@@ -25,6 +27,7 @@
     "is_asst": true,
     "is_tool": false,
     "is_notice": false,
+    "is_error": false,
     "blocks": [],
     "card": {
       "name": "",
@@ -187,9 +190,9 @@
         "desc": "show connected MCP servers and their tools"
       },
       {
-        "id": "/help",
-        "cmd": "/help",
-        "desc": "show the commands and the keys"
+        "id": "/goal",
+        "cmd": "/goal [OBJECTIVE|stop]",
+        "desc": "run turns toward an objective until done or a limit"
       }
     ]
   },
@@ -204,6 +207,7 @@
     "is_asst": false,
     "is_tool": false,
     "is_notice": false,
+    "is_error": false,
     "blocks": [],
     "card": {
       "name": "",

@@ -16,7 +16,7 @@
 │ │ ✓ succee│  /find TEXT search saved session messages (needs -…  │         │ ┃
 │ │ src/fetc│  /export [json] write the conversation to a markdo…  │         │ ┃
 │ │ Updated │  /mcp show connected MCP servers and their tools     │         │ ┃
-│ │   import│  /help show the commands and the keys                │         │ ┃
+│ │   import│  /goal [OBJECTIVE|stop] run turns toward an object…  │         │ ┃
 │ │ - export│  Keys                                                │         │ ┃
 │ │ + export│  enter send                                          │         │ ┃
 │ ╰─────────│  shift/alt+enter new line                            │─────────╯ ┃

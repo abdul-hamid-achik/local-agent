@@ -50,14 +50,19 @@ test("the export is the rendered conversation as markdown, never raw JSON", () =
   expect(markdown).not.toContain("tool_call_id");
 });
 
-test("an error notice exports under its own heading", () => {
+test("an error and a notice export under their own headings", () => {
   const builder = new ViewBuilder();
   const views = [
     ...viewsOf([{ role: "user", content: "go" }]),
-    builder.notice("Ollama request failed: connection refused"),
+    builder.error("Ollama request failed: connection refused"),
+    builder.notice("Goal stopped: its 8 turns are used"),
   ];
-  expect(transcriptMarkdown(views)).toContain(
+  const markdown = transcriptMarkdown(views);
+  expect(markdown).toContain(
     "## Error\n\n> Ollama request failed: connection refused",
+  );
+  expect(markdown).toContain(
+    "## Notice\n\n> Goal stopped: its 8 turns are used",
   );
 });
 

@@ -28,11 +28,18 @@
 .la-model { bold: true; width: auto; }
 .la-mode { color: $warn; width: auto; }
 .la-sandbox { color: $ok; width: auto; }
+.la-goal { color: $accent; width: auto; }
 .la-provider, .la-session, .la-ctx, .la-grants { width: auto; }
 @media (max-cols: 110) {
   .la-provider { display: none; }
 }
+/* The grants label is long: the session id and then the ctx bar (the
+ * label keeps the numbers) give it room before the ctx label is cut. */
+@media (max-cols: 130) {
+  .la-session.crowded { display: none; }
+}
 @media (max-cols: 90) {
+  .la-ctxbar.crowded { display: none; }
   .la-session { display: none; }
 }
 /* Eighths: the meter moves by an eighth of a cell, not a whole one. */
@@ -55,7 +62,8 @@
 .la-role { bold: true; }
 .la-msg.user > .la-role { color: $user; }
 .la-msg.asst > .la-role { color: $accent; }
-.la-msg.notice > .la-role { color: $danger; }
+.la-msg.error > .la-role { color: $danger; }
+.la-msg.notice > .la-role { color: $warn; }
 /* The reply being written: its label and a spinner (app.tui #live). */
 .la-live-head { height: 1; gap: 1; }
 .la-live-head > .la-role { width: auto; color: $accent; }

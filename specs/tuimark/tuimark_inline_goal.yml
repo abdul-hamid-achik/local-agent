@@ -1,0 +1,76 @@
+version: 1
+name: bun_tuimark_inline_goal
+intent: |
+    /goal in the Tuimark inline client: the goal's turns print into the
+    scrollback as notices, the header shows the goal's turn, its edit asks
+    for approval in flow (approved with y), and the goal ends on the model's
+    done report. A second goal stopped
+    with esc prints its notice, its partial reply and why it stopped, and
+    they stay in the scrollback after the client exits.
+target:
+    cmd: ["bun", "specs/tuimark/fixture.ts", "goal-inline"]
+    cwd: "${projectRoot}"
+terminal:
+    cols: 100
+    rows: 40
+    alternateScreen: forbid
+steps:
+    - wait:
+        screen:
+            contains: "Message the model"
+        timeoutMs: 15000
+    - type: "/goal tidy the notes"
+    - press: enter
+    - wait:
+        screen:
+            contains: "Edit notes.txt?"
+        timeoutMs: 15000
+    - wait:
+        screen:
+            contains: "fixture-model  goal 2/8"
+        timeoutMs: 10000
+    - snapshot: approval
+    - wait:
+        screen:
+            contains: "Waiting for approval · y allow"
+        timeoutMs: 10000
+    - press: y
+    - wait:
+        screen:
+            contains: "Goal reported done without evidence"
+        timeoutMs: 15000
+    - snapshot: done
+    - type: "/goal slow goal"
+    - press: enter
+    - wait:
+        screen:
+            contains: "this takes a while"
+        timeoutMs: 15000
+    - press: esc
+    - wait:
+        screen:
+            contains: "Goal stopped: you cancelled its turn"
+        timeoutMs: 10000
+    - snapshot: stopped
+    - press: ctrl+c
+    - wait:
+        process:
+            exitCode: 0
+        timeoutMs: 10000
+outcomes:
+    - id: tuimark_inline_goal_scrollback
+      description: the stopped goal's notice, partial reply and stop notice remain in the scrollback after exit
+      verify:
+        screen:
+            contains: "[goal 1/8] Goal: slow goal"
+    - id: tuimark_inline_goal_partial
+      description: the cancelled goal turn's partial reply remains in the scrollback
+      verify:
+        screen:
+            contains: "this takes a while"
+    - id: tuimark_inline_goal_exits
+      description: the goal applied its approved edit and the inline client exits cleanly
+      verify:
+        process:
+            exitCode: 0
+contractHash: sha256:c839951273e5694e5dfaaddbd1822c4f39475d0918936d3f658f7659fc252ebf

@@ -11,7 +11,9 @@
     "ctx_danger": false,
     "grants": "",
     "grants_on": false,
-    "sandbox_on": false
+    "sandbox_on": false,
+    "goal": "",
+    "goal_on": false
   },
   "empty": false,
   "mouse_on": true,
@@ -22,6 +24,7 @@
       "is_asst": false,
       "is_tool": false,
       "is_notice": false,
+      "is_error": false,
       "blocks": [
         {
           "id": "b0",
@@ -63,6 +66,7 @@
       "is_asst": false,
       "is_tool": true,
       "is_notice": false,
+      "is_error": false,
       "blocks": [],
       "card": {
         "name": "read",
@@ -95,6 +99,7 @@
       "is_asst": true,
       "is_tool": false,
       "is_notice": false,
+      "is_error": false,
       "blocks": [
         {
           "id": "b0",
@@ -140,6 +145,7 @@
     "is_asst": true,
     "is_tool": false,
     "is_notice": false,
+    "is_error": false,
     "blocks": [],
     "card": {
       "name": "",
@@ -454,6 +460,16 @@
         "hint": "/mcp"
       },
       {
+        "id": "goal",
+        "label": "Goal: show the running goal",
+        "hint": "/goal"
+      },
+      {
+        "id": "goal-stop",
+        "label": "Goal: stop it",
+        "hint": "/goal stop"
+      },
+      {
         "id": "help",
         "label": "Help, commands and keys",
         "hint": "/help"
@@ -543,9 +559,9 @@
         "desc": "show connected MCP servers and their tools"
       },
       {
-        "id": "/help",
-        "cmd": "/help",
-        "desc": "show the commands and the keys"
+        "id": "/goal",
+        "cmd": "/goal [OBJECTIVE|stop]",
+        "desc": "run turns toward an objective until done or a limit"
       }
     ]
   },
@@ -560,6 +576,7 @@
     "is_asst": false,
     "is_tool": false,
     "is_notice": false,
+    "is_error": false,
     "blocks": [],
     "card": {
       "name": "",

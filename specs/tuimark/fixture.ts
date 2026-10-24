@@ -1,6 +1,6 @@
 // Deterministic loopback Ollama for the Tuimark client specs (--ui tuimark).
 //
-//   bun specs/tuimark/fixture.ts chat|edit-approve|edit-deny|session[-inline]
+//   bun specs/tuimark/fixture.ts chat|edit-approve|edit-deny|session|goal[-inline]
 //
 // A mode ending in -inline runs the same flow with --mode inline (the opt-in
 // Tuimark inline client); its port is the fullscreen one plus 100.
@@ -8,7 +8,10 @@
 // The reply depends only on the last message, so one run can hold several turns:
 //
 //   last message is a tool result  -> "edit applied N" (N counts tool replies) or "edit denied";
-//                                      an ask_user answer -> "noted: " and the answer, on one line
+//                                      an ask_user answer -> "noted: " and the answer, on one line;
+//                                      a goal_status receipt -> "status recorded: STATE"
+//   a goal message on "tidy the notes" ([goal N/M] …) -> by N: 1, a goal_status continue;
+//                                      2, an edit of notes.txt and a continue; 3 on, a done
 //   prompt starts with "count"     -> "The message had N lines: FIRST LINE" (one message,
 //                                      however it was typed or pasted)
 //   prompt contains "ask me"       -> one ask_user call: a choice of three stores
@@ -46,6 +49,7 @@ const basePort = {
   session: 19213,
   "edit-session": 19214,
   sessions: 19215,
+  goal: 19216,
 }[mode];
 if (!basePort) throw new Error(`unknown mode: ${rawMode}`);
 const port = inline ? basePort + 100 : basePort;
@@ -123,6 +127,22 @@ function askAnswer(content: string): string | undefined {
   }
 }
 
+/** The state a goal_status receipt recorded, or undefined for another tool's. */
+function recorded(content: string): string | undefined {
+  try {
+    const output = (JSON.parse(content) as { output?: unknown }).output;
+    return typeof output === "string"
+      ? /^Recorded: (\w+)\./u.exec(output)?.[1]
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+const goalStatus = (args: object) => ({
+  function: { name: "goal_status", arguments: args },
+});
+
 /** Tool-result replies so far: "edit applied 2" proves a second edit landed. */
 let toolReplies = 0;
 
@@ -152,6 +172,10 @@ const server = Bun.serve({
       last?.role === "tool" ? askAnswer(last.content ?? "") : undefined;
     if (answered !== undefined)
       return stream([assistant(`noted: ${answered}`), done], 5);
+    const state =
+      last?.role === "tool" ? recorded(last.content ?? "") : undefined;
+    if (state !== undefined)
+      return stream([assistant(`status recorded: ${state}`), done], 5);
     if (last?.role === "tool")
       return stream(
         [
@@ -165,6 +189,35 @@ const server = Bun.serve({
         5,
       );
     const prompt = last?.content ?? "";
+    const goalTurn = /^\[goal (\d+)\/\d+\] .*tidy the notes/u.exec(prompt)?.[1];
+    if (goalTurn !== undefined) {
+      const step = Number(goalTurn);
+      const calls =
+        step === 1
+          ? [goalStatus({ state: "continue", summary: "read the notes" })]
+          : step === 2
+            ? [
+                {
+                  function: {
+                    name: "edit",
+                    arguments: {
+                      path: "notes.txt",
+                      old_string: "before",
+                      new_string: "after",
+                    },
+                  },
+                },
+                goalStatus({ state: "continue", summary: "notes.txt says after" }),
+              ]
+            : [
+                goalStatus({
+                  state: "done",
+                  summary: "the notes are tidy",
+                  evidence: [{ kind: "file", ref: "notes.txt" }],
+                }),
+              ];
+      return stream([assistant("", { tool_calls: calls }), done], 5);
+    }
     if (prompt.startsWith("count"))
       return stream(
         [
@@ -379,12 +432,12 @@ async function shutdown(exitCode: number) {
   server.stop(true);
   const contents = await readFile(join(workspaceRoot, "notes.txt"), "utf8");
   // Approved: the exact edit landed (twice for edit-session: the second
-  // edit only lands if the session grant let it through). Otherwise
-  // nothing may have changed.
+  // edit only lands if the session grant let it through; once for goal,
+  // in its second turn). Otherwise nothing may have changed.
   const expected =
     mode === "edit-session"
       ? "final\n"
-      : mode === "edit-approve"
+      : mode === "edit-approve" || mode === "goal"
         ? "after\n"
         : "before\n";
   if (contents !== expected) exitCode = 1;

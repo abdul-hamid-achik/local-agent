@@ -7,6 +7,7 @@ import type {
   Answer,
   Approval,
   ApprovalRequest,
+  GoalReport,
   McpConnection,
   Message,
   OllamaAdmission,
@@ -15,7 +16,7 @@ import type {
   SessionContext,
   Workspace,
 } from "@local-agent/runtime";
-import { ConversationFullError } from "@local-agent/runtime";
+import { ConversationFullError, StepLimitError } from "@local-agent/runtime";
 import { expect, test } from "vitest";
 import {
   type Block,
@@ -385,7 +386,7 @@ test("a queued prompt runs after a failed turn too, without duplicating the fail
   // Prompt, its error notice, then the queued turn and its reply.
   const views = store(ui).messages;
   expect(
-    views.map((m: MessageView) => [m.is_user, m.is_notice, m.is_asst]),
+    views.map((m: MessageView) => [m.is_user, m.is_error, m.is_asst]),
   ).toEqual([
     [true, false, false],
     [false, true, false],
@@ -946,7 +947,7 @@ test("fullscreen: a cancelled or failed reply keeps what had arrived", async () 
   await failed.client.idle();
   const views = store(failed.ui).messages;
   expect(views.map(viewText)).toEqual(["go", "partway", "connection reset"]);
-  expect(views[2]?.is_notice).toBe(true);
+  expect(views[2]?.is_error).toBe(true);
 });
 
 test("fullscreen: a stopped reply past the view's bounds does not promise the rest", async () => {
@@ -1152,7 +1153,7 @@ test("a multi-line error is one line on the status row and whole in its notice",
   await ui.fire("send", "go");
   await client.idle();
   expect(store(ui).status).toBe('[ { "code": "too_big" } ]');
-  const notice = store(ui).messages.find((m: MessageView) => m.is_notice);
+  const notice = store(ui).messages.find((m: MessageView) => m.is_error);
   expect(notice).toBeDefined();
   // The notice keeps the error's own lines, not the clipped status form.
   expect(viewText(notice as MessageView)).toContain('"code": "too_big"');
@@ -1209,7 +1210,7 @@ test("a failed request shows its message and keeps a typed draft", async () => {
   expect(store(ui).draft).toBe("typing already");
   // The failed prompt stays visible, with its error notice under it.
   const views = store(ui).messages;
-  expect(views.map((m: MessageView) => [m.is_user, m.is_notice])).toEqual([
+  expect(views.map((m: MessageView) => [m.is_user, m.is_error])).toEqual([
     [true, false],
     [false, true],
   ]);
@@ -1236,7 +1237,7 @@ test("a failed request with an empty composer gives the prompt back", async () =
     1,
   );
   expect(
-    store(ui).messages.filter((m: MessageView) => m.is_notice),
+    store(ui).messages.filter((m: MessageView) => m.is_error),
   ).toHaveLength(1);
 });
 
@@ -1267,7 +1268,7 @@ test("with a session, a failed request keeps the completed messages", async () =
   await client.idle();
   // The saved pair, the failed prompt, and its notice.
   expect(
-    store(ui).messages.map((m: MessageView) => [m.is_user, m.is_notice]),
+    store(ui).messages.map((m: MessageView) => [m.is_user, m.is_error]),
   ).toEqual([
     [true, false],
     [false, false],
@@ -1872,9 +1873,11 @@ function printed(ui: FakeHost): string[] {
         if (view.is_tool) return `tool ${view.card.name} ${view.card.status}`;
         const label = view.is_user
           ? "You"
-          : view.is_notice
+          : view.is_error
             ? "Error"
-            : "Assistant";
+            : view.is_notice
+              ? "Notice"
+              : "Assistant";
         return `${label}: ${view.blocks.map((b) => runsText(b.runs)).join("\n")}`;
       }
       return (c.buf as Block[]).map((b) => runsText(b.runs)).join("\n");
@@ -2203,7 +2206,7 @@ test("the welcome (empty) goes with the first message and never returns", async 
   await failed.ui.fire("send", "hi");
   await failed.client.idle();
   expect(
-    store(failed.ui).messages.map((m: MessageView) => [m.is_user, m.is_notice]),
+    store(failed.ui).messages.map((m: MessageView) => [m.is_user, m.is_error]),
   ).toEqual([
     [true, false],
     [false, true],
@@ -2234,6 +2237,7 @@ test("typing / opens the command popup; it filters, moves and completes", async 
     "/find",
     "/export",
     "/mcp",
+    "/goal",
     "/help",
   ]);
   expect(store(ui).slash.rows[0]).toMatchObject({ sel: true, mark: "›" });
@@ -2438,8 +2442,9 @@ test("the help overlay's store carries the slash commands", () => {
     "/find TEXT",
     "/export [json]",
     "/mcp",
-    "/help",
+    "/goal [OBJECTIVE|stop]",
   ]);
+  // Not /help: the overlay is what it opens, and "? close help" heads it.
   expect(store(ui).help.cmds[0]?.desc).toContain("plan reads only");
 });
 
@@ -3334,7 +3339,7 @@ test("a full conversation says so, and how to start a new one", async () => {
   );
   await ui.fire("send", "one more");
   await client.idle();
-  const notice = store(ui).messages.find((m: MessageView) => m.is_notice);
+  const notice = store(ui).messages.find((m: MessageView) => m.is_error);
   expect(viewText(notice as MessageView)).toBe(
     "This conversation is full: it has 1000 messages, and a request carries at most 999 besides the system prompt. /sessions new starts a new one.",
   );
@@ -3541,7 +3546,7 @@ test("a failed export lands as an error notice, not a model message", async () =
   await client.idle();
   await ui.fire("send", "/export");
   expect(store(ui).status).toBe("Export failed: disk is full");
-  expect(store(ui).messages.at(-1)?.is_notice).toBe(true);
+  expect(store(ui).messages.at(-1)?.is_error).toBe(true);
   await ui.fire("send", "next");
   await client.idle();
   expect(JSON.stringify(seen)).not.toContain("Export failed");
@@ -4056,7 +4061,7 @@ test("F9: the export suffix loop is bounded at 100 attempts", async () => {
   await ui.fire("send", "/export");
   expect(attempts).toBe(100);
   expect(store(ui).status).toContain("Export failed");
-  expect(store(ui).messages.at(-1)?.is_notice).toBe(true);
+  expect(store(ui).messages.at(-1)?.is_error).toBe(true);
 });
 
 test("F9: a real export file is created with mode 0o600", async () => {
@@ -4609,4 +4614,502 @@ test("sandbox: a sandbox that stops being available makes the next command ask, 
   await ui.fire("dialog_cancel");
   await client.idle();
   expect(decisions).toEqual(["sandbox", false]);
+});
+
+// ------------------------------------------------------------------ the goal loop
+
+/** One script per turn, in order; past the last, a plain reply. */
+const turnsOf = (...scripts: Script[]): Script => {
+  let n = 0;
+  return (ctx) => (scripts[n++] ?? reply("x"))(ctx);
+};
+
+/** A call of `name` with `args` that ends `status`, as the runtime reports it. */
+function call(
+  id: string,
+  name: string,
+  args: Record<string, unknown>,
+  status: "succeeded" | "denied" | "failed" | "outcome_unknown" = "succeeded",
+): AgentEvent[] {
+  return [
+    {
+      type: "message",
+      message: {
+        role: "assistant",
+        content: "",
+        tool_calls: [{ id, function: { name, arguments: args } }],
+      },
+    },
+    { type: "tool_requested", id, name },
+    { type: "tool_start", id, name },
+    { type: "tool_result", id, name, status, output: "o" },
+    {
+      type: "message",
+      message: {
+        role: "tool",
+        tool_name: name,
+        tool_call_id: id,
+        content: JSON.stringify({ status, output: "o" }),
+      },
+    },
+  ];
+}
+const wrote = (id: string) =>
+  call(id, "write", { path: `${id}.ts`, content: "x" });
+const ran = (id: string, argv: string[], status?: "succeeded" | "failed") =>
+  call(id, "run_command", { argv }, status);
+
+/** A goal turn: `events`, then the model's report through the host's goal_status end. */
+const reporting = (
+  report: GoalReport | undefined,
+  events: AgentEvent[] = [],
+): Script =>
+  async function* (ctx) {
+    for (const event of events) yield event;
+    if (report) ctx.options.goal?.(report);
+    yield { type: "done", inputTokens: 100, outputTokens: 20 };
+    yield {
+      type: "message",
+      message: { role: "assistant", content: report?.summary ?? "worked" },
+    };
+    yield { type: "turn_complete", messages: [] };
+  };
+const goes = (summary: string): GoalReport => ({
+  state: "continue",
+  summary,
+  evidence: [],
+});
+
+const notices = (ui: FakeHost) =>
+  store(ui)
+    .messages.filter((m: MessageView) => m.is_notice)
+    .map(viewText);
+
+test("a goal runs its turns until the model reports done, and says what the evidence was", async () => {
+  const options: AgentOptions[] = [];
+  const { ui, client, seen } = setup(
+    turnsOf(
+      (ctx) => {
+        options.push(ctx.options);
+        return reporting(goes("wrote the parser"), wrote("w1"))(ctx);
+      },
+      (ctx) => {
+        options.push(ctx.options);
+        return reporting(goes("tests run"), ran("c1", ["bun", "test"]))(ctx);
+      },
+      (ctx) => {
+        options.push(ctx.options);
+        return reporting({
+          state: "done",
+          summary: "the tests pass",
+          evidence: [{ kind: "command", ref: "bun test" }],
+        })(ctx);
+      },
+    ),
+  );
+  await ui.fire("send", "/goal make the tests pass");
+  expect(store(ui).header.goal_on).toBe(true);
+  expect(store(ui).header.goal).toBe("goal 1/8");
+  await client.idle();
+  // Three turns, each host-written and marked; the second and third carry
+  // the last status.
+  expect(
+    seen.map((turn) =>
+      turn.messages.filter((m) => m.startsWith("user:")).at(-1),
+    ),
+  ).toEqual([
+    "user:[goal 1/8] Goal: make the tests pass",
+    "user:[goal 2/8] Continue toward the goal: make the tests pass. Last status: wrote the parser.",
+    "user:[goal 3/8] Continue toward the goal: make the tests pass. Last status: tests run.",
+  ]);
+  // The goal's messages are the client's notices, never the user's words.
+  expect(store(ui).messages.some((m: MessageView) => m.is_user)).toBe(false);
+  expect(notices(ui)).toEqual([
+    "[goal 1/8] Goal: make the tests pass",
+    "[goal 2/8] Continue toward the goal: make the tests pass. Last status: wrote the parser.",
+    "[goal 3/8] Continue toward the goal: make the tests pass. Last status: tests run.",
+    "Goal reported done — evidence: bun test exited 0 · turn 3 of 8\nLast status (done): the tests pass",
+  ]);
+  expect(store(ui).status).toBe(
+    "Goal reported done — evidence: `bun test` exited 0",
+  );
+  expect(store(ui).header.goal_on).toBe(false);
+  expect(store(ui).busy).toBe(false);
+  // Every turn reports to the client, and refusals share one set.
+  expect(options.every((o) => typeof o.goal === "function")).toBe(true);
+  expect(options[0]?.refused).toBeInstanceOf(Set);
+  expect(options[1]?.refused).toBe(options[0]?.refused);
+  expect(options[2]?.refused).toBe(options[0]?.refused);
+  // A turn after the goal reports to nothing and refuses afresh.
+  const after: AgentOptions[] = [];
+  const plain = setup((ctx) => {
+    after.push(ctx.options);
+    return reply("x")(ctx);
+  });
+  await plain.ui.fire("send", "hi");
+  await plain.client.idle();
+  expect(after[0]?.goal).toBeUndefined();
+  expect(after[0]?.refused).toBeUndefined();
+});
+
+test("done names no evidence unless a command the goal ran succeeded", async () => {
+  const { ui, client } = setup(
+    turnsOf(
+      reporting(goes("ran it"), ran("c1", ["bun", "test"], "failed")),
+      reporting({
+        state: "done",
+        summary: "green",
+        evidence: [{ kind: "command", ref: "bun test" }],
+      }),
+    ),
+  );
+  await ui.fire("send", "/goal go");
+  await client.idle();
+  expect(store(ui).status).toBe("Goal reported done without evidence");
+});
+
+test("blocked ends the goal with what the model needs", async () => {
+  const { ui, client, seen } = setup(
+    turnsOf(
+      reporting(
+        { state: "blocked", summary: "need the API key", evidence: [] },
+        wrote("w1"),
+      ),
+    ),
+  );
+  await ui.fire("send", "/goal deploy");
+  await client.idle();
+  expect(seen).toHaveLength(1);
+  expect(store(ui).status).toBe("Goal blocked: need the API key");
+});
+
+test("two turns that change nothing stop the goal; so does its turn budget", async () => {
+  const idle = setup(
+    turnsOf(
+      reporting(goes("reading"), call("r1", "read", { path: "a" })),
+      reporting(goes("still reading"), call("r2", "read", { path: "b" })),
+    ),
+  );
+  await idle.ui.fire("send", "/goal understand it");
+  await idle.client.idle();
+  expect(idle.seen).toHaveLength(2);
+  expect(store(idle.ui).status).toBe(
+    "Goal stopped: two turns in a row changed nothing (no edit, write, command or MCP call succeeded)",
+  );
+  const budget = setup(
+    turnsOf(
+      reporting(goes("a"), wrote("w1")),
+      reporting(goes("b"), wrote("w2")),
+      reporting(goes("c"), wrote("w3")),
+    ),
+  );
+  await budget.ui.fire("send", "/goal ship --turns 2");
+  await budget.client.idle();
+  expect(budget.seen).toHaveLength(2);
+  expect(store(budget.ui).status).toBe("Goal stopped: its 2 turns are used");
+});
+
+test("the step limit is a turn boundary; a failed turn or an uncertain outcome stops the goal", async () => {
+  const limited = setup(
+    turnsOf(
+      async function* () {
+        for (const event of wrote("w1")) yield event;
+        throw new StepLimitError("Agent reached the 20-step limit");
+      },
+      async function* () {
+        for (const event of wrote("w2")) yield event;
+        throw new Error("provider down");
+      },
+    ),
+  );
+  await limited.ui.fire("send", "/goal big refactor");
+  await limited.client.idle();
+  expect(limited.seen).toHaveLength(2);
+  expect(store(limited.ui).status).toBe(
+    "Goal stopped: its turn failed (provider down)",
+  );
+  const uncertain = setup(
+    turnsOf(async function* () {
+      for (const event of call(
+        "c1",
+        "run_command",
+        { argv: ["make"] },
+        "outcome_unknown",
+      ))
+        yield event;
+      throw new Error(
+        "Tool outcome is uncertain; review the workspace before continuing",
+      );
+    }),
+  );
+  await uncertain.ui.fire("send", "/goal build it");
+  await uncertain.client.idle();
+  expect(uncertain.seen).toHaveLength(1);
+  expect(store(uncertain.ui).status).toBe(
+    "Goal stopped: an action's outcome is uncertain; review the workspace before going on",
+  );
+});
+
+/** A turn that waits for its abort, as a long generation would. */
+const waiting: Script = (ctx) =>
+  quiet(
+    () =>
+      new Promise<void>((_, reject) =>
+        ctx.options.signal.addEventListener("abort", () =>
+          reject(ctx.options.signal.reason),
+        ),
+      ),
+  )(ctx);
+
+test("esc cancels the goal's turn and the goal; /goal stop does too, and is never queued", async () => {
+  const esc = setup(
+    turnsOf(async function* (ctx) {
+      yield { type: "text", text: "half way there" };
+      yield* waiting(ctx);
+    }),
+  );
+  await esc.ui.fire("send", "/goal long job");
+  await until(() => esc.seen.length === 1);
+  await esc.ui.fire("cancel");
+  await esc.client.idle();
+  expect(esc.seen).toHaveLength(1);
+  expect(store(esc.ui).status).toBe("Goal stopped: you cancelled its turn");
+  // The goal's message never lands in the draft, so its notice stays, and
+  // the reply under it: what the goal was and how far it got.
+  expect(store(esc.ui).draft).toBe("");
+  expect(store(esc.ui).messages.map(viewText)).toEqual([
+    "[goal 1/8] Goal: long job",
+    "half way there",
+    "Goal stopped: you cancelled its turn · turn 1 of 8",
+  ]);
+  const stop = setup(turnsOf(waiting));
+  await stop.ui.fire("send", "/goal long job");
+  await until(() => stop.seen.length === 1);
+  await stop.ui.fire("send", "/goal");
+  expect(notices(stop.ui).at(-1)).toContain("Turn 1 of 8");
+  await stop.ui.fire("send", "/goal stop");
+  await stop.client.idle();
+  expect(stop.seen).toHaveLength(1);
+  expect(store(stop.ui).status).toBe("Goal stopped: you ended it (/goal stop)");
+  expect(store(stop.ui).header.goal_on).toBe(false);
+  await stop.ui.fire("send", "/goal stop");
+  expect(store(stop.ui).status).toBe(
+    "No goal is running. /goal OBJECTIVE starts one",
+  );
+});
+
+test("esc in a goal turn's tail, where no cancel reaches a turn, still ends the goal before its next turn", async () => {
+  const { ui, client, seen } = setup(
+    turnsOf(
+      reporting(goes("first part"), wrote("w1")),
+      reporting(goes("second part"), wrote("w2")),
+    ),
+  );
+  // Esc lands while the first turn's final publish (busy false) is in
+  // flight: its turn is over, the goal has said it goes on.
+  let pressed = false;
+  ui.refuse = (writes) => {
+    if (
+      !pressed &&
+      writes.some((w) => w.path === "busy" && w.value === false)
+    ) {
+      pressed = true;
+      void ui.fire("cancel");
+    }
+    return undefined;
+  };
+  await ui.fire("send", "/goal two parts");
+  await client.idle();
+  expect(pressed).toBe(true);
+  expect(seen).toHaveLength(1);
+  expect(store(ui).status).toBe("Goal stopped: you cancelled its turn");
+  expect(store(ui).header.goal_on).toBe(false);
+  expect(notices(ui).at(-1)).toBe(
+    "Goal stopped: you cancelled its turn · turn 1 of 8\nLast status (continue): first part",
+  );
+});
+
+test("a typed message that starts like a goal's is still the user's", async () => {
+  let release: () => void = () => {};
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const { ui, client, seen } = setup(
+    turnsOf(
+      async function* (ctx) {
+        await gate;
+        yield* reporting(goes("first"), wrote("w1"))(ctx);
+      },
+      // The typed turn: no report, nothing changed.
+      reporting(undefined),
+      reporting({ state: "done", summary: "all of it", evidence: [] }),
+    ),
+  );
+  await ui.fire("send", "/goal long job");
+  await until(() => seen.length === 1);
+  const typed = "[goal 2/8] Continue toward the goal: mine\nsecond line";
+  await ui.fire("send", typed);
+  release();
+  await client.idle();
+  expect(seen).toHaveLength(3);
+  // Shown as the user's, whole.
+  const mine = store(ui).messages.filter((m: MessageView) => m.is_user);
+  expect(mine.map(viewText).join("\n")).toContain("second line");
+  // Not one of the goal's turns: its missing report asks for nothing, and
+  // the goal's next turn is turn 2.
+  expect(seen[2]?.messages.at(-1)).toBe(
+    "user:[goal 2/8] Continue toward the goal: long job. Last status: first.",
+  );
+});
+
+test("the goal stops when the conversation could not take another whole turn", async () => {
+  const session = {
+    store: {},
+    state: {
+      messages: Array.from({ length: 9_334 }, (_, i) => ({
+        role: i % 2 ? "assistant" : "user",
+        content: `m${i}`,
+      })),
+    },
+  } as unknown as SessionContext;
+  const { ui, client, seen } = setup(
+    turnsOf(
+      reporting(goes("a"), wrote("w1")),
+      reporting(goes("b"), wrote("w2")),
+      reporting(goes("c"), wrote("w3")),
+    ),
+    { session },
+  );
+  await ui.fire("send", "/goal fill it");
+  await client.idle();
+  // Four messages a turn: 661 left after the first, 657 after the second.
+  expect(seen).toHaveLength(2);
+  expect(store(ui).status).toBe(
+    "Goal stopped: the conversation is nearly full; /sessions new starts over",
+  );
+});
+
+test("a provider that streams but reports no usage leaves the goal's tokens unmeasured", async () => {
+  const { ui, client, seen } = setup(
+    turnsOf(async function* (ctx) {
+      yield { type: "text", text: "working" };
+      for (const event of wrote("w1")) yield event;
+      ctx.options.goal?.(goes("half"));
+      yield { type: "done", inputTokens: 0, outputTokens: 0 };
+      yield { type: "turn_complete", messages: [] };
+    }, waiting),
+  );
+  await ui.fire("send", "/goal measure it");
+  await until(() => seen.length === 2);
+  await ui.fire("send", "/goal");
+  expect(notices(ui).at(-1)).toContain("output tokens unmeasured");
+  await ui.fire("cancel");
+  await client.idle();
+});
+
+test("with a question open, /goal stop is never its answer, and esc on it stops the goal", async () => {
+  const answers: Answer[] = [];
+  const open = setup(
+    turnsOf(asking(STORE_QUESTION, answers, Promise.resolve())),
+  );
+  await open.ui.fire("send", "/goal choose a store");
+  await untilQuestion(open.ui);
+  await open.ui.fire("send", "/goal stop");
+  await open.client.idle();
+  expect(answers).toEqual([]);
+  expect(store(open.ui).status).toBe("Goal stopped: you ended it (/goal stop)");
+  const skipped = setup(
+    turnsOf(asking(STORE_QUESTION, answers, Promise.resolve())),
+  );
+  await skipped.ui.fire("send", "/goal choose a store");
+  await untilQuestion(skipped.ui);
+  await skipped.ui.fire("question_skip");
+  await skipped.client.idle();
+  expect(answers).toEqual([{ kind: "declined" }]);
+  expect(skipped.seen).toHaveLength(1);
+  expect(store(skipped.ui).status).toBe(
+    "Goal stopped: you skipped its question",
+  );
+});
+
+test("a message typed during a goal runs next, and the goal goes on after it", async () => {
+  let release: () => void = () => {};
+  const gate = new Promise<void>((r) => {
+    release = r;
+  });
+  const { ui, client, seen } = setup(
+    turnsOf(
+      async function* (ctx) {
+        await gate;
+        yield* reporting(goes("first part"), wrote("w1"))(ctx);
+      },
+      reporting(undefined, wrote("w2")),
+      reporting({ state: "done", summary: "all of it", evidence: [] }),
+    ),
+  );
+  await ui.fire("send", "/goal two parts");
+  await ui.fire("send", "and update the docs");
+  expect(store(ui).status).toContain("Queued");
+  release();
+  await client.idle();
+  const last = (n: number) =>
+    seen[n]?.messages.filter((m) => m.startsWith("user:")).at(-1);
+  expect(last(1)).toBe("user:and update the docs");
+  // The typed turn is not one of the goal's: the next is its second.
+  expect(last(2)).toBe(
+    "user:[goal 2/8] Continue toward the goal: two parts. Last status: first part.",
+  );
+  expect(store(ui).status).toBe("Goal reported done without evidence");
+});
+
+test("/goal starts only in build, idle and alone, and says how", async () => {
+  const plan = setup(reply("x"), { intent: "plan" });
+  await plan.ui.fire("send", "/goal fix it");
+  expect(plan.seen).toEqual([]);
+  expect(store(plan.ui).status).toBe(
+    "A goal runs in build mode, not plan: /mode build first",
+  );
+  const bad = setup(reply("x"));
+  store(bad.ui).draft = "/goal fix it --turns 99";
+  await bad.ui.fire("send", "/goal fix it --turns 99");
+  expect(bad.seen).toEqual([]);
+  expect(store(bad.ui).status).toBe(
+    "--turns takes one whole number from 1 to 50",
+  );
+  // The line stays to fix.
+  expect(store(bad.ui).draft).toBe("/goal fix it --turns 99");
+  await bad.ui.fire("send", "/goal");
+  expect(store(bad.ui).status).toBe(
+    "No goal is running. /goal OBJECTIVE starts one",
+  );
+  const twice = setup(turnsOf(waiting));
+  await twice.ui.fire("send", "/goal one");
+  await until(() => twice.seen.length === 1);
+  await twice.ui.fire("send", "/goal two");
+  expect(store(twice.ui).status).toBe(
+    "A goal is running: /goal shows it, /goal stop ends it",
+  );
+  await twice.ui.fire("cancel");
+  await twice.client.idle();
+  expect(twice.seen).toHaveLength(1);
+});
+
+test("the goal adds up the turns' output tokens and stops at its budget", async () => {
+  const spending = (tokens: number, id: string): Script =>
+    async function* (ctx) {
+      for (const event of wrote(id)) yield event;
+      ctx.options.goal?.(goes(`spent ${tokens}`));
+      yield { type: "text", text: "working" };
+      yield { type: "done", inputTokens: 100, outputTokens: tokens };
+      yield { type: "message", message: { role: "assistant", content: "ok" } };
+    };
+  const { ui, client, seen } = setup(
+    turnsOf(spending(150_000, "w1"), spending(60_000, "w2"), spending(1, "w3")),
+  );
+  await ui.fire("send", "/goal write the book");
+  await client.idle();
+  expect(seen).toHaveLength(2);
+  expect(store(ui).status).toBe(
+    "Goal stopped: its 200k output tokens are spent",
+  );
 });

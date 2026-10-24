@@ -41,7 +41,8 @@ export function transcriptMarkdown(views: readonly MessageView[]): string {
     const note = imagesNote(view);
     if (view.is_user) parts.push("## You", "", viewText(view), "");
     else if (view.is_asst) parts.push("## Assistant", "", viewText(view), "");
-    else if (view.is_notice) parts.push("## Error", "", viewText(view), "");
+    else if (view.is_error) parts.push("## Error", "", viewText(view), "");
+    else if (view.is_notice) parts.push("## Notice", "", viewText(view), "");
     else if (view.is_tool) {
       const { card } = view;
       parts.push(`## Tool · ${card.name} · ${card.status}`, "");

@@ -181,6 +181,9 @@ export interface Store {
     grants_on: boolean;
     /** Commands no rule decides run in the sandbox, without a card (`/sandbox`). */
     sandbox_on: boolean;
+    /** The running goal's turn of its most ("goal 3/8"), shown only while it runs. */
+    goal: string;
+    goal_on: boolean;
   };
   /** True only before the first message: the welcome shows. Never true again. */
   empty: boolean;
@@ -247,6 +250,7 @@ export const EMPTY_COMMIT_VIEW: MessageView = Object.freeze({
   is_asst: false,
   is_tool: false,
   is_notice: false,
+  is_error: false,
   blocks: [],
   card: NO_CARD,
   links: [],
@@ -547,6 +551,8 @@ export function initialStore(init: StoreInit): Store {
       grants: "",
       grants_on: false,
       sandbox_on: init.sandbox ?? false,
+      goal: "",
+      goal_on: false,
     },
     empty:
       init.empty ??

@@ -16,7 +16,7 @@
                                 │  /find TEXT search saved session messages (needs -…  │                                
                                 │  /export [json] write the conversation to a markdo…  │                                
                                 │  /mcp show connected MCP servers and their tools     │                                
-                                │  /help show the commands and the keys                │                                
+                                │  /goal [OBJECTIVE|stop] run turns toward an object…  │                                
                                 │  Keys                                                │                                
 ╭───────────────────────────────│  enter send                                          │───────────────────────────────╮
 │ Message the model             │  shift/alt+enter new line                            │                               │

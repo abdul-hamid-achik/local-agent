@@ -12,6 +12,7 @@ const make = (n: number): MessageView => ({
   is_asst: false,
   is_tool: false,
   is_notice: false,
+  is_error: false,
   blocks: [],
   card: NO_CARD,
   links: [],

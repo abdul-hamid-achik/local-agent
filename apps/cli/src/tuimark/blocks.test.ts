@@ -20,6 +20,7 @@ import {
   MAX_LINKS,
   MAX_MESSAGE_BLOCKS,
   MAX_MESSAGE_CHARS,
+  type MessageView,
   messageImages,
   outputRuns,
   parseBlocks,
@@ -328,6 +329,15 @@ test("a call summary names the path, the command or the arguments", () => {
   expect(named("ask_user", { question: "Which store?\nIt matters" })).toBe(
     "Which store?",
   );
+  expect(
+    named("goal_status", {
+      state: "done",
+      summary: " tests pass\nall of them",
+    }),
+  ).toBe("done · tests pass");
+  expect(named("goal_status", { state: "blocked", summary: "  " })).toBe(
+    "blocked",
+  );
   expect(named("todo_write", { todos: [{}, {}] })).toBe("2 items");
   expect(named("todo_write", { todos: [{}] })).toBe("1 item");
   // A wrong-typed argument falls back to the generic line.
@@ -337,6 +347,7 @@ test("a call summary names the path, the command or the arguments", () => {
 test("a card names its tool as a reader says it", () => {
   expect(toolTitle("run_command")).toBe("Command");
   expect(toolTitle("ask_user")).toBe("Question");
+  expect(toolTitle("goal_status")).toBe("Goal status");
   expect(toolTitle("web_search")).toBe("Web search");
   expect(toolTitle("cortex__status")).toBe("MCP · cortex · status");
   expect(toolTitle("custom")).toBe("custom");
@@ -630,25 +641,28 @@ test("live tool calls come in call order, one per tool_requested event", () => {
   });
 });
 
-test("a notice is a quoted UI-local view: no other role flag, every line kept", () => {
+test("a notice and an error are quoted UI-local views: one role flag each, every line kept", () => {
   const builder = new ViewBuilder();
+  const flags = (view: MessageView) => [
+    view.is_user,
+    view.is_asst,
+    view.is_tool,
+    view.is_notice,
+    view.is_error,
+  ];
+  expect(flags(builder.error("x"))).toEqual([false, false, false, false, true]);
   const notice = builder.notice("first line\nsecond line");
-  expect([
-    notice.is_user,
-    notice.is_asst,
-    notice.is_tool,
-    notice.is_notice,
-  ]).toEqual([false, false, false, true]);
+  expect(flags(notice)).toEqual([false, false, false, true, false]);
   // Quoted, so it reads as the client's words; the text itself is whole.
   expect(notice.blocks.length).toBeGreaterThan(0);
   expect(notice.blocks.every((b) => b.quote)).toBe(true);
   const text = notice.blocks.map((b) => runsText(b.runs)).join("\n");
   expect(text).toContain("first line");
   expect(text).toContain("second line");
-  // Every other view the builder makes carries is_notice false.
+  // Every other view the builder makes carries both false.
   const user = builder.fromMessage({ role: "user", content: "hi" });
-  expect(user?.is_notice).toBe(false);
-  expect(IDLE_LIVE.is_notice).toBe(false);
+  expect(user && flags(user).slice(3)).toEqual([false, false]);
+  expect(flags(IDLE_LIVE).slice(3)).toEqual([false, false]);
 });
 
 test("the idle and streaming live views have the same keys", () => {
@@ -1123,4 +1137,25 @@ test("a tool message's images reach its view, and every view carries the flags",
   ]);
   expect(assistant?.images).toEqual([]);
   expect(assistant?.images_more).toBe(0);
+});
+
+test("a goal's host-written message is the client's notice, live and on resume", () => {
+  const builder = new ViewBuilder();
+  const goal = builder.fromMessage({
+    role: "user",
+    content:
+      "[goal 2/8] Continue toward the goal: ship it. Last status: half way.\nYou ended the last turn without goal_status: call it before you end this one.",
+  });
+  expect(goal).toMatchObject({ is_notice: true, is_user: false });
+  // Its first line only: the note to the model is not the user's to read.
+  expect(goal?.blocks.map((block) => runsText(block.runs))).toEqual([
+    "[goal 2/8] Continue toward the goal: ship it. Last status: half way.",
+  ]);
+  // The user's own words stay theirs, a marker inside them too.
+  expect(
+    builder.fromMessage({
+      role: "user",
+      content: "what does [goal 1/8] mean?",
+    }),
+  ).toMatchObject({ is_user: true, is_notice: false });
 });

@@ -18,6 +18,7 @@
 
 import { changeLines, type Message, type ToolCall } from "@local-agent/runtime";
 import { terminalText } from "#cli/text";
+import { goalNotice } from "#cli/tuimark/goal";
 
 // ---------------------------------------------------------------- text hygiene
 
@@ -958,6 +959,7 @@ const TOOL_TITLES: Record<string, string> = {
   task: "Subagent",
   todo_write: "Todo",
   ask_user: "Question",
+  goal_status: "Goal status",
   edit: "Edit",
   write: "Write",
   run_command: "Command",
@@ -1049,6 +1051,13 @@ function callLine(call: ToolCall | undefined): { text: string; path: boolean } {
       const question = str(args.question);
       if (question !== undefined)
         return line(question.trim().split("\n")[0] ?? "");
+      break;
+    }
+    case "goal_status": {
+      const state = str(args.state);
+      const summary = str(args.summary)?.trim().split("\n")[0];
+      if (state !== undefined)
+        return line(summary ? `${state} · ${summary}` : state);
       break;
     }
     case "todo_write":
@@ -1265,8 +1274,13 @@ export interface MessageView {
   is_user: boolean;
   is_asst: boolean;
   is_tool: boolean;
-  /** A UI-local notice (a failed turn's error): shown, never sent to the model. */
+  /**
+   * A UI-local notice (a goal's turn, a window or compaction note, a
+   * warning): the client's words, shown and never sent to the model.
+   */
   is_notice: boolean;
+  /** A UI-local error (a failed turn's full error): a notice labelled Error. */
+  is_error: boolean;
   blocks: Block[];
   card: Card;
   /** The message's link targets, numbered as the body's `[n]` markers ([] for none). */
@@ -1286,7 +1300,7 @@ export type LiveView = MessageView & { active: boolean; tail: Block[] };
 
 function view(
   id: string,
-  role: "user" | "asst" | "tool" | "notice",
+  role: "user" | "asst" | "tool" | "notice" | "error",
   blocks: Block[],
   card: Card = NO_CARD,
   links: LinkRef[] = [],
@@ -1298,6 +1312,7 @@ function view(
     is_asst: role === "asst",
     is_tool: role === "tool",
     is_notice: role === "notice",
+    is_error: role === "error",
     blocks,
     card,
     links,
@@ -1383,8 +1398,13 @@ export class ViewBuilder {
     return this.pending.shift();
   }
 
-  /** The view of a message, or undefined when it shows nothing (system, empty assistant). */
-  fromMessage(message: Message): MessageView | undefined {
+  /**
+   * The view of a message, or undefined when it shows nothing (system,
+   * empty assistant). `typed`: a user message the user typed in this
+   * process, theirs whatever it starts with; otherwise (a saved one) its
+   * text alone says whether a goal wrote it.
+   */
+  fromMessage(message: Message, typed = false): MessageView | undefined {
     if (message.role === "system") return undefined;
     if (message.role === "assistant") {
       this.pending = (message.tool_calls ?? []).slice();
@@ -1393,7 +1413,11 @@ export class ViewBuilder {
       if (!message.content.trim()) return undefined;
       return this.text("asst", message.content);
     }
-    if (message.role === "user") return this.text("user", message.content);
+    if (message.role === "user") {
+      // A goal's host-written turn is the client's words, not the user's.
+      const goal = typed ? undefined : goalNotice(message.content);
+      return goal ? this.notice(goal) : this.text("user", message.content);
+    }
     const name = message.tool_name ?? "result";
     const call = message.tool_call_id
       ? this.calls.get(message.tool_call_id)
@@ -1469,17 +1493,26 @@ export class ViewBuilder {
   }
 
   /**
-   * A UI-local notice: a failed turn's full error, as a quote so it reads as
-   * the client's words, not the model's. Bounded like any message by
-   * parseBlocks. It is only ever a transcript view: no Message is made from
-   * it, so it is never sent to the model or persisted as one.
+   * A UI-local notice, as a quote so it reads as the client's words, not
+   * the model's. Bounded like any message by parseBlocks. It is only ever
+   * a transcript view: no Message is made from it, so it is never sent to
+   * the model or persisted as one.
    */
   notice(text: string): MessageView {
+    return this.quoted("notice", text);
+  }
+
+  /** A UI-local error: a failed turn's full error, as a notice labelled Error. */
+  error(text: string): MessageView {
+    return this.quoted("error", text);
+  }
+
+  private quoted(role: "notice" | "error", text: string): MessageView {
     const quoted = cleanText(text)
       .split("\n")
       .map((line) => `> ${line}`)
       .join("\n");
-    return view(this.id(), "notice", parseBlocks(quoted));
+    return view(this.id(), role, parseBlocks(quoted));
   }
 
   private id(): string {

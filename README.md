@@ -10,8 +10,9 @@ is complete. Historical tagged releases remain separate from the Bun client.
 
 The current client supports fullscreen panels, inline native terminal scrollback,
 headless JSON events, local Ollama and Chalupa process profiles, bounded file
-reads, approved exact edits and commands, MCP tools, and optional SQLite sessions.
-Recovery reconciliation, durable goals/memory, the full tool catalog and standalone
+reads, approved exact edits and commands, MCP tools, optional SQLite sessions,
+and a bounded foreground goal loop (`/goal`, Tuimark client only). Recovery
+reconciliation, durable goals/memory, the full tool catalog and standalone
 distribution remain incomplete. Root `AGENTS.md` is loaded; full skills/profile
 and nested-instruction parity is still pending.
 
@@ -153,6 +154,24 @@ a child and draws the whole screen from `apps/cli/src/tuimark/ui/app.tui`.
   `local-agent-transcript-YYYYMMDD-HHMMSS.md` in the workspace (never
   overwriting: a taken name gets a numeric suffix) and names the file on
   the status line.
+  `/goal OBJECTIVE [--turns N]` runs turns toward an objective until the
+  model reports it done or blocked, or a limit stops it: 8 turns (`--turns`
+  takes 1 to 50), 30 minutes, 200k output tokens when the provider reports
+  them, two turns in a row that change nothing (no edit, write, command or
+  MCP call succeeded), a failed turn, an uncertain outcome, a skipped
+  question, or a mode other than build. Each turn is an ordinary turn:
+  approvals, rules and the sandbox apply as always, and a call you refused
+  stays refused for the rest of the goal. The client writes each turn's
+  message (`[goal 2/8] Continue toward the goal: …`) and shows it as a
+  notice; the header shows the turn in the mode's place. `/goal` shows the
+  goal, and `/goal stop` or `esc` ends it (on an approval card `esc` denies
+  that call, as always, and the goal goes on). A message you type during a
+  goal runs next, and the goal goes on after it; its report counts, but it
+  is not one of the goal's turns. A done report is the model's word:
+  the closing notice says "evidence" only when the report names, as a
+  command, one that exited 0 during the goal, and it never says anything
+  was verified. A goal runs only in build mode, and nothing about it is
+  saved: it ends with the process.
 
 ## Local model
 
@@ -233,6 +252,7 @@ of the workspace stay forbidden.
 | `task` | none | Delegate a bounded read-only investigation to a fresh subagent (read, list, search, fetch, web_search, read_image only) and get its final answer |
 | `todo_write` | none | Replace the session's todo list (up to 50 items, each `pending`, `in_progress` or `done`, at most one `in_progress`); build and plan only |
 | `ask_user` | none (you answer it) | Ask you one question and wait: a choice of 2 to 8 options, yes/no, or free text. Only the Tuimark client offers it, never to a subagent, and never in a parallel batch; a question you skipped is not asked again in that turn. An answer is not an approval: a later edit or command still asks |
+| `goal_status` | none | Report on a running `/goal`: continue, done or blocked, a summary, and up to 8 pieces of evidence (a command, a file or a note). Offered only while a goal runs in the Tuimark client, never to a subagent, and never in a parallel batch. A report is the model's word, not a verification |
 | `edit` | `--approve-edits` | Replace one exact occurrence in an existing file |
 | `write` | `--approve-edits` | Create a file (creating directories) or replace one; the approval shows the content as added lines, or the diff for a replacement |
 | `run_command` | `--approve-commands` or `--sandbox-commands` | Run one program from an `argv` array, with no shell |

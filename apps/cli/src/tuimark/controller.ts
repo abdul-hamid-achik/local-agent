@@ -26,8 +26,10 @@ import {
   clearRules,
   evaluate,
   explicitContextNote,
+  type GoalReport,
   type LoadedModel,
   loadPermissionFile,
+  MAX_HISTORY_MESSAGES,
   type McpConnection,
   type Message,
   type OllamaAdmission,
@@ -44,6 +46,7 @@ import {
   type Question,
   runAgent,
   type SessionContext,
+  StepLimitError,
   sandboxUnavailable,
   trustRules,
   trustStorePath,
@@ -82,6 +85,14 @@ import {
   transcriptJson,
   transcriptMarkdown,
 } from "#cli/tuimark/export";
+import {
+  commandLine,
+  effectful,
+  type GoalCommand,
+  GoalRun,
+  type GoalTurn,
+  newGoalTurn,
+} from "#cli/tuimark/goal";
 import {
   APPROVAL_SANDBOX_SESSION_STATUS,
   APPROVAL_STATUS,
@@ -298,6 +309,14 @@ export function formatElapsed(totalSeconds: number): string {
 
 /** The refused writes the client remembers. */
 const MAX_WRITE_ERRORS = 20;
+
+/** `/goal …` as typed: one line. It stays a command while busy or asking. */
+function isGoalCommand(raw: string): boolean {
+  const text = raw.trim();
+  return !text.includes("\n") && /^\/goal(\s|$)/i.test(text);
+}
+
+const NO_GOAL_STATUS = "No goal is running. /goal OBJECTIVE starts one";
 /**
  * How long a finished turn waits for its placement read before it clears
  * busy; a read slower than this is shown after a later turn instead.
@@ -467,6 +486,23 @@ export class TuimarkClient {
   private queued?: string;
   /** Esc dropped the queue with the cancel: the final status says both. */
   private cancelDroppedQueue = false;
+  /** The running goal (see goal.ts); it ends with the process. */
+  private goal?: GoalRun;
+  /** What the running turn of a goal has done, for the stop rules. */
+  private goalTurn?: GoalTurn;
+  /** The goal's last turn left it open: its next turn follows. */
+  private goalContinues = false;
+  /**
+   * Why the goal ends at its turn's end, when the user asked: `/goal stop`
+   * or esc. Its turn is cancelled when one runs; asked in a turn's tail,
+   * after the cancel can reach it, it still keeps the next turn from
+   * starting (runTurn).
+   */
+  private goalStop?: string;
+  /** The host's end of goal_status: the report joins the turn's record. */
+  private readonly reportGoal = (report: GoalReport): void => {
+    if (this.goalTurn) this.goalTurn.report = report;
+  };
   /** Quit was answered: a queued message must not start after it. */
   private quitting = false;
   /** What the busy status names: waiting, generating, or the last tool result. */
@@ -562,11 +598,13 @@ export class TuimarkClient {
     ui.on("history_prev", (ev) => this.recallPrev(ev));
     ui.on("history_next", (ev) => this.recallNext(ev));
     ui.on("cancel", () => {
-      // Esc cancels the turn and drops the queue with it.
+      // Esc cancels the turn and drops the queue with it, and a running
+      // goal with them.
       if (this.queued !== undefined) {
         this.queued = undefined;
         this.cancelDroppedQueue = true;
       }
+      if (this.goal) this.goalStop ??= "stopped: you cancelled its turn";
       this.turn?.abort();
     });
     // The binds name this `quit_request`, not `quit`: `quit` is an engine
@@ -1180,6 +1218,115 @@ export class TuimarkClient {
   }
 
   /**
+   * `/goal …`: shows the running goal, stops it (cancelling its turn), or
+   * starts one in build mode, its first turn sent at once.
+   */
+  private async runGoal(command: GoalCommand): Promise<void> {
+    const goal = this.goal;
+    if (command.kind === "error") {
+      await this.write([{ path: "status", value: command.status }]);
+      return;
+    }
+    if (command.kind === "show") {
+      if (!goal) {
+        await this.write([{ path: "status", value: NO_GOAL_STATUS }]);
+        return;
+      }
+      // A notice, not the status line: a running turn's ticker would
+      // paint over it at once.
+      const view = this.builder.notice(goal.describe(this.now()));
+      this.transcript.push(view);
+      if (this.inline) await this.commitView(view);
+      await this.publishMessages([{ path: "status", value: "Goal" }]);
+      return;
+    }
+    if (command.kind === "stop") {
+      if (!goal) {
+        await this.write([{ path: "status", value: NO_GOAL_STATUS }]);
+        return;
+      }
+      // The goal stops when its turn has ended (see settleGoal).
+      this.goalStop = "stopped: you ended it (/goal stop)";
+      this.turn?.abort();
+      await this.write([{ path: "status", value: "Stopping the goal…" }]);
+      return;
+    }
+    if (goal) {
+      await this.write([
+        {
+          path: "status",
+          value: "A goal is running: /goal shows it, /goal stop ends it",
+        },
+      ]);
+      return;
+    }
+    if (
+      this.switching ||
+      this.busy ||
+      this.proposal ||
+      this.queued !== undefined
+    ) {
+      await this.write([{ path: "status", value: BUSY_STATUS }]);
+      return;
+    }
+    if (this.intent !== "build") {
+      await this.write([
+        {
+          path: "status",
+          value: `A goal runs in build mode, not ${this.intent}: /mode build first`,
+        },
+      ]);
+      return;
+    }
+    this.goal = new GoalRun(command.objective, command.turns, this.now());
+    this.goalStop = undefined;
+    await this.beginTurn(this.goal.nextMessage(), true);
+  }
+
+  /**
+   * After each turn while a goal runs: the stop rules (goal.ts) on what
+   * the turn did. A goal that stops leaves a notice after the turn and
+   * returns the status line's words; one that goes on sets goalContinues.
+   */
+  private async settleGoal(): Promise<string | undefined> {
+    const goal = this.goal;
+    const turn = this.goalTurn;
+    this.goalTurn = undefined;
+    this.goalContinues = false;
+    if (!goal || !turn) return undefined;
+    // The turn's record counts (its report is the last status) even when
+    // the user's stop is the reason.
+    const ruled = goal.afterTurn(turn, {
+      now: this.now(),
+      historyLeft: MAX_HISTORY_MESSAGES - 1 - this.history.length,
+      build: this.intent === "build",
+    });
+    const reason = this.goalStop ?? ruled?.reason;
+    if (reason === undefined) {
+      this.goalContinues = true;
+      return undefined;
+    }
+    return this.endGoal(goal, reason);
+  }
+
+  /** Ends `goal` for `reason`: a notice after its turn, and the status line's words. */
+  private async endGoal(goal: GoalRun, reason: string): Promise<string> {
+    this.goal = undefined;
+    this.goalStop = undefined;
+    this.goalContinues = false;
+    const line = `Goal ${reason}`;
+    const last = goal.last
+      ? `\nLast status (${goal.last.state}): ${oneLine(goal.last.summary)}`
+      : "";
+    const view = this.builder.notice(
+      `${line} · turn ${goal.turnsUsed} of ${goal.turnsMax}${last}`,
+    );
+    this.transcript.push(view);
+    if (this.inline) await this.commitView(view);
+    return oneLine(line);
+  }
+
+  /**
    * Makes `context` (undefined: a temporary conversation) the live one,
    * with `status`: history, transcript, builder and the checkpoint target
    * change together, so the next turn can only continue that session.
@@ -1286,7 +1433,7 @@ export class TuimarkClient {
       throw new Error("export file name taken after 100 attempts");
     } catch (error) {
       const message = error instanceof Error ? error.message : "Export failed";
-      const notice = this.builder.notice(`Export failed: ${message}`);
+      const notice = this.builder.error(`Export failed: ${message}`);
       this.transcript.push(notice);
       if (this.inline) await this.commitView(notice);
       await this.publishWindow([
@@ -1654,6 +1801,7 @@ export class TuimarkClient {
       is_asst: true,
       is_tool: false,
       is_notice: false,
+      is_error: false,
       blocks,
       card: NO_CARD,
       links: [],
@@ -2057,9 +2205,10 @@ export class TuimarkClient {
     }
     const raw = typeof ev.value === "string" ? ev.value : "";
     // An open question takes the send: it is the answer, never a message,
-    // a command or the queue.
+    // a command or the queue. `/goal` and `/goal stop` alone stay commands.
     if (this.asking) {
-      await this.answerSend(raw);
+      if (isGoalCommand(raw)) await this.runCommand(raw.trim(), true);
+      else await this.answerSend(raw);
       return;
     }
     // Enter over an open popup completes instead of sending when the
@@ -2091,6 +2240,11 @@ export class TuimarkClient {
     const command = raw.trim();
     const isCommand = command.startsWith("/") && !command.includes("\n");
     if (this.busy) {
+      // A goal is seen and stopped while its turns run.
+      if (isGoalCommand(raw)) {
+        await this.runCommand(command, true);
+        return;
+      }
       if (isCommand) {
         await this.write([{ path: "status", value: BUSY_STATUS }]);
         return;
@@ -2347,6 +2501,10 @@ export class TuimarkClient {
     }
     if (outcome.find !== undefined) {
       await this.findSessions(outcome.find);
+      return;
+    }
+    if (outcome.goal) {
+      await this.runGoal(outcome.goal);
       return;
     }
     // Inline has no mouse, and its document never reads `mouse_on`: refuse
@@ -2790,7 +2948,8 @@ export class TuimarkClient {
     ]);
   }
 
-  private async beginTurn(prompt: string): Promise<void> {
+  /** `hostWritten`: a goal's own message, never the user's words. */
+  private async beginTurn(prompt: string, hostWritten = false): Promise<void> {
     if (this.switching) return;
     this.busy = true;
     const request = new AbortController();
@@ -2813,27 +2972,38 @@ export class TuimarkClient {
     this.rate = [];
     this.rateAt = 0;
     this.cancelDroppedQueue = false;
+    // Every turn while a goal runs is one of its turns for the stop rules,
+    // a typed one too.
+    this.goalTurn = this.goal
+      ? { ...newGoalTurn(), own: hostWritten }
+      : undefined;
     const message: Message = { role: "user", content: prompt };
     this.history.push(message);
-    const view = this.builder.fromMessage(message);
+    // What the user typed is theirs, whatever it starts with.
+    const view = this.builder.fromMessage(message, !hostWritten);
     if (view) this.transcript.push(view);
     // turnDone is set before any await, so idle() can never miss this turn.
     let published: () => void = () => {};
     const promptShown = new Promise<void>((resolve) => {
       published = resolve;
     });
-    this.turnDone = this.runTurn(prompt, request, published, view).catch(
-      (error) => {
-        this.writeErrors.push(
-          error instanceof Error ? error.message : String(error),
-        );
-      },
-    );
+    this.turnDone = this.runTurn(
+      prompt,
+      hostWritten,
+      request,
+      published,
+      view,
+    ).catch((error) => {
+      this.writeErrors.push(
+        error instanceof Error ? error.message : String(error),
+      );
+    });
     await promptShown;
   }
 
   private async runTurn(
     prompt: string,
+    hostWritten: boolean,
     request: AbortController,
     published: () => void,
     userView?: MessageView,
@@ -2852,25 +3022,49 @@ export class TuimarkClient {
         { path: "rate", value: this.rate },
         { path: "placeholder", value: PLACEHOLDER_BUSY },
         { path: "status", value: this.busyStatus() },
+        ...(this.goal
+          ? [
+              { path: "header.goal", value: this.goal.label },
+              { path: "header.goal_on", value: true },
+            ]
+          : []),
       ]);
     } finally {
       published();
     }
     this.timer = setInterval(() => this.tick(), this.options.flushMs ?? 33);
-    await this.loop(prompt, request, userView);
+    await this.loop(prompt, hostWritten, request, userView);
     // A send queued while busy runs now, after success and after an error
     // alike (it is the user's latest intent); esc and quit already dropped
     // it, and a process-level abort makes a new turn impossible.
     const next = this.queued;
     this.queued = undefined;
-    if (next !== undefined && !this.quitting && !this.options.signal.aborted) {
+    const live = !this.quitting && !this.options.signal.aborted;
+    if (next !== undefined && live) {
       await this.beginTurn(next);
+      await this.turnDone;
+    } else if (this.goal && this.goalContinues && live) {
+      if (this.goalStop !== undefined) {
+        // Asked in the tail of the turn that just ended, where no cancel
+        // could reach it: the goal ends here, before another turn.
+        const line = await this.endGoal(this.goal, this.goalStop);
+        await this.publishMessages([
+          { path: "status", value: line },
+          { path: "header.goal_on", value: false },
+        ]);
+        return;
+      }
+      // A goal left open goes on with its next turn: host-written, marked,
+      // shown as a notice. A queued send ran first (above), and the goal
+      // continues after it.
+      await this.beginTurn(this.goal.nextMessage(), true);
       await this.turnDone;
     }
   }
 
   private async loop(
     prompt: string,
+    hostWritten: boolean,
     request: AbortController,
     userView?: MessageView,
   ): Promise<void> {
@@ -2891,6 +3085,13 @@ export class TuimarkClient {
     /** A failed turn's notice view, committed (inline) in the finally below. */
     let notice: MessageView | undefined;
     let finished = false;
+    // A goal's commands: each run_command call's argv, and the calls that
+    // succeeded (matched up when the turn ends; see settleGoal).
+    const commandArgs = new Map<string, unknown>();
+    const commandsOk: string[] = [];
+    const mcpNames = new Set(
+      (mcp ?? []).flatMap((server) => server.tools.map((tool) => tool.name)),
+    );
     try {
       const turnSignal = AbortSignal.any([signal, request.signal]);
       // A turn aborted before it started (a signal while its first write was
@@ -2924,21 +3125,30 @@ export class TuimarkClient {
         mcp,
         // This client applies `compacted` below.
         compact: true,
+        // While a goal runs: its report, and its refusals across turns.
+        ...(this.goal
+          ? { goal: this.reportGoal, refused: this.goal.refused }
+          : {}),
       })) {
         switch (event.type) {
           case "thinking":
             this.noteActivity();
             this.pieces++;
+            if (this.goalTurn) this.goalTurn.streamed = true;
             if (!this.liveTool) this.stream.pushThinking(event.text);
             break;
           case "text":
             this.noteActivity();
             this.pieces++;
+            if (this.goalTurn) this.goalTurn.streamed = true;
             if (!this.liveTool) this.stream.pushText(event.text);
             break;
           case "message": {
             receivedMessage = true;
             this.history.push(event.message);
+            for (const call of event.message.tool_calls ?? [])
+              if (call.id && call.function.name === "run_command")
+                commandArgs.set(call.id, call.function.arguments.argv);
             let view = this.builder.fromMessage(event.message);
             // A tool that ran this turn says how long it took (a resumed
             // receipt cannot: the history keeps no timing).
@@ -3045,10 +3255,22 @@ export class TuimarkClient {
             this.noteActivity(
               terminalText(`${event.name || toolName}: ${event.status}`),
             );
+            const goal = this.goalTurn;
+            if (goal) {
+              if (event.status === "outcome_unknown") goal.uncertain = true;
+              // A skipped question, or one answered with nothing.
+              if (event.name === "ask_user" && event.status === "denied")
+                goal.declined = true;
+              if (event.status === "succeeded") {
+                if (effectful(event.name, mcpNames)) goal.effects++;
+                if (event.name === "run_command") commandsOk.push(event.id);
+              }
+            }
             break;
           }
           case "done": {
             this.startPlacement();
+            if (this.goalTurn) this.goalTurn.outputTokens += event.outputTokens;
             // The header ctx moves during the turn, on every usage-bearing
             // event (see CtxMeter for the max-within-the-turn rule).
             const shown = this.ctx.observe(
@@ -3067,6 +3289,15 @@ export class TuimarkClient {
       finished = true;
     } catch (error) {
       const aborted = request.signal.aborted;
+      if (this.goalTurn) {
+        this.goalTurn.end = aborted
+          ? "aborted"
+          : error instanceof StepLimitError
+            ? "step_limit"
+            : "failed";
+        this.goalTurn.error =
+          error instanceof Error ? error.message : String(error);
+      }
       // Keep completed messages and tool receipts even when a later request fails.
       if (!session && !receivedMessage) {
         // Model history only: with no session nothing is durable, so the
@@ -3079,7 +3310,10 @@ export class TuimarkClient {
         // the scrollback either way.
         this.history.pop();
         // The prompt's own view: a compaction note may have followed it.
-        if (aborted && userView) this.transcript.remove(userView);
+        // A goal's own message is never the user's to take back: its
+        // notice stays, as the reply under it does.
+        if (aborted && userView && !hostWritten)
+          this.transcript.remove(userView);
         // The host may be gone already (ctrl+c mid-turn): keep going to the
         // cleanup. A draft typed during the turn is never overwritten, and
         // a queued send (which cleared the draft for its own turn) is the
@@ -3088,13 +3322,14 @@ export class TuimarkClient {
           ?.get("draft")
           .then((result) => result.value)
           .catch(() => "gone");
-        if (!draft && this.queued === undefined)
+        // A goal's own message was never the user's draft.
+        if (!draft && this.queued === undefined && !hostWritten)
           await this.write([{ path: "draft", value: prompt }]);
       }
       // Fullscreen, what arrived of the reply stays where it was read, under
       // a prompt that stays (inline prints it below). A cancelled turn that
       // took its prompt back takes its reply too.
-      const withdrawn = aborted && !session && !receivedMessage;
+      const withdrawn = aborted && !session && !receivedMessage && !hostWritten;
       if (!this.inline && !withdrawn && !this.liveTool) {
         const blocks = this.stream.finishTail(true);
         if (blocks.length > 0)
@@ -3112,9 +3347,9 @@ export class TuimarkClient {
               ? error.message
               : "Inference failed";
         status = oneLine(message);
-        // The full error joins the transcript as a UI-local notice: shown
-        // (and inline, printed below), but never a model message.
-        notice = this.builder.notice(message);
+        // The full error joins the transcript as a UI-local error notice:
+        // shown (and inline, printed below), but never a model message.
+        notice = this.builder.error(message);
         this.transcript.push(notice);
       }
     } finally {
@@ -3138,10 +3373,20 @@ export class TuimarkClient {
       }
       // After the reply is printed, so its warning never comes first.
       if (finished) await this.showPlacement();
+      if (this.goalTurn)
+        this.goalTurn.commands = commandsOk.flatMap(
+          (id) => commandLine(commandArgs.get(id)) ?? [],
+        );
+      // Before busy clears: a goal that stops says why after its turn,
+      // and one that goes on starts its next turn with no gap a send
+      // could take (runTurn).
+      const goalEnd = await this.settleGoal();
+      if (goalEnd) status = goalEnd;
       await this.publishMessages([
         { path: "busy", value: false },
         { path: "placeholder", value: PLACEHOLDER },
         { path: "status", value: status },
+        ...(this.goal ? [] : [{ path: "header.goal_on", value: false }]),
         { path: "approval", value: noApproval() },
         { path: "question", value: noQuestion() },
         // The turn's last observed usage is the resting baseline (CtxMeter).

@@ -1,0 +1,9 @@
+=== grid 120x8 ===
+ Local Agent          Ollama / loopback  qwen3-coder:30b  goal 2/8          session a1b2c3d  ctx 9.6k/32k  ███▋░░░░░░░░ 
+Assistant ⠋                                                                                                             
+Running the fetch tests next.                                                                                           
+                                                                                                                        
+╔══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╗
+║ Generating…                                                                                                          ║
+╚══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╝
+ ⠋  Generating…                    ^P commands  esc cancel  ctrl+c quit  ↑/↓ history  pgup/pgdn scroll  ^L latest       

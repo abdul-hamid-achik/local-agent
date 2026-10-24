@@ -275,7 +275,7 @@ export function errorSample(): Store {
   ]);
   store.messages = [
     ...store.messages,
-    builder.notice(
+    builder.error(
       "Ollama request failed: connection refused\nIs the daemon running on 127.0.0.1:11434?",
     ),
   ];
@@ -447,6 +447,64 @@ export function thinkingSample(): Store {
       "and rethrow the last error so callers still see it.",
     ].join("\n"),
   );
+  store.busy = true;
+  store.placeholder = "Generating…";
+  store.status = BUSY_STATUS_LINE;
+  return store;
+}
+
+/**
+ * A goal at its second turn: the host-written messages are notices, the
+ * header names the turn, and the turn is streaming.
+ */
+export function goalSample(): Store {
+  const { store } = base([
+    { role: "user", content: "[goal 1/8] Goal: make the fetch tests pass" },
+    { role: "assistant", content: "", tool_calls: [EDIT_CALL] },
+    {
+      role: "tool",
+      tool_name: "edit",
+      tool_call_id: "call-1",
+      content: JSON.stringify({
+        status: "succeeded",
+        output: "Updated src/fetch.ts. Verification has not been run.",
+      }),
+    },
+    {
+      role: "assistant",
+      content: "",
+      tool_calls: [
+        {
+          id: "call-goal",
+          function: {
+            name: "goal_status",
+            arguments: {
+              state: "continue",
+              summary: "the retry is in; the tests are next",
+            },
+          },
+        },
+      ],
+    },
+    {
+      role: "tool",
+      tool_name: "goal_status",
+      tool_call_id: "call-goal",
+      content: JSON.stringify({
+        status: "succeeded",
+        output:
+          "Recorded: continue. The host sends the next turn when this one ends.",
+      }),
+    },
+    {
+      role: "user",
+      content:
+        "[goal 2/8] Continue toward the goal: make the fetch tests pass. Last status: the retry is in; the tests are next.",
+    },
+  ]);
+  store.header.goal = "goal 2/8";
+  store.header.goal_on = true;
+  store.live = streamingView("Running the fetch tests next.");
   store.busy = true;
   store.placeholder = "Generating…";
   store.status = BUSY_STATUS_LINE;
@@ -681,6 +739,7 @@ export const SAMPLES = {
   "sample-question-text": questionTextSample,
   "sample-thinking": thinkingSample,
   "sample-streaming": streamingSample,
+  "sample-goal": goalSample,
   "sample-palette": paletteSample,
   "sample-help": helpSample,
   "sample-details": detailsSample,
@@ -731,6 +790,7 @@ export const INLINE_SAMPLES = {
   "inline-sample": () => toInline(idleSample()),
   "inline-sample-empty": () => toInline(emptySample()),
   "inline-sample-streaming": () => toInline(streamingSample()),
+  "inline-sample-goal": () => toInline(goalSample()),
   "inline-sample-thinking": () => toInline(thinkingSample()),
   "inline-sample-approval": inlineApprovalSample,
   "inline-sample-approval-long": inlineLongApprovalSample,
