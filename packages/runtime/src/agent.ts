@@ -134,7 +134,7 @@ async function httpGet(
   const origin = current.origin;
   const deadline = AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]);
   for (let hop = 0; ; hop++) {
-    await assertFetchTarget(current, policy);
+    await assertFetchTarget(current, policy, deadline);
     deadline.throwIfAborted();
     const response = await fetch(current, {
       redirect: "manual",
@@ -1454,7 +1454,7 @@ async function* agentTurn(
             throw new Error(`fetch: HTTP ${response.status} for ${finalUrl}`);
           }
           const contentType = textContentType(response);
-          if (IMAGE_CONTENT_TYPES[contentType]) {
+          if (Object.hasOwn(IMAGE_CONTENT_TYPES, contentType)) {
             // Image branch: reuse read_image's checks (magic bytes, not the
             // content type) and attach through the same pendingImages path.
             const { bytes, truncated } = await readBytesCapped(

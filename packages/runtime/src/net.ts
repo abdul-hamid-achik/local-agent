@@ -47,22 +47,25 @@ function v4Octets(ip: string): number[] | undefined {
     : undefined;
 }
 
+/** IPv4: everything but the IANA special-purpose blocks that are not
+ * globally reachable. */
 function v4Public(octets: readonly number[]): boolean {
   const [a = 0, b = 0, c = 0] = octets;
-  return !(
-    (
-      a === 0 || // "this network"
-      a === 10 ||
-      a === 127 ||
-      (a === 100 && b >= 64 && b <= 127) || // carrier-grade NAT
-      (a === 169 && b === 254) || // link-local, cloud metadata
-      (a === 172 && b >= 16 && b <= 31) ||
-      (a === 192 && b === 168) ||
-      (a === 192 && b === 0 && c === 0) || // IETF protocol assignments
-      (a === 198 && (b === 18 || b === 19)) || // benchmarking
-      a >= 224
-    ) // multicast, reserved, broadcast
-  );
+  const special =
+    a === 0 || // "this network"
+    a === 10 ||
+    a === 127 ||
+    (a === 100 && b >= 64 && b <= 127) || // carrier-grade NAT
+    (a === 169 && b === 254) || // link-local, cloud metadata
+    (a === 172 && b >= 16 && b <= 31) ||
+    (a === 192 && b === 168) ||
+    (a === 192 && b === 0 && (c === 0 || c === 2)) || // IETF, TEST-NET-1
+    (a === 192 && b === 88 && c === 99) || // retired 6to4 relay anycast
+    (a === 198 && (b === 18 || b === 19)) || // benchmarking
+    (a === 198 && b === 51 && c === 100) || // TEST-NET-2
+    (a === 203 && b === 0 && c === 113) || // TEST-NET-3
+    a >= 224; // multicast, reserved, broadcast
+  return !special;
 }
 
 /** The eight 16-bit groups of an IPv6 literal (a dotted IPv4 tail allowed). */
@@ -100,13 +103,18 @@ function embeddedV4(high: number, low: number): number[] {
   return [high >> 8, high & 0xff, low >> 8, low & 0xff];
 }
 
+/** IPv6: forms that carry an IPv4 address are judged by that address;
+ * otherwise only global unicast (2000::/3) outside its special-purpose
+ * blocks is public, so an unlisted range fails closed. */
 function v6Public(groups: readonly number[]): boolean {
   const [g0 = 0, g1 = 0, g2 = 0, g3 = 0, g4 = 0, g5 = 0, g6 = 0, g7 = 0] =
     groups;
   const zeroTo = (n: number) =>
     groups.slice(0, n).every((group) => group === 0);
-  if (zeroTo(5) && g5 === 0xffff) return v4Public(embeddedV4(g6, g7)); // ::ffff:a.b.c.d
-  if (zeroTo(6)) return false; // ::, ::1 and the deprecated IPv4-compatible form
+  // ::ffff:a.b.c.d (mapped) and ::ffff:0:a.b.c.d (SIIT translated).
+  if (zeroTo(5) && g5 === 0xffff) return v4Public(embeddedV4(g6, g7));
+  if (zeroTo(4) && g4 === 0xffff && g5 === 0)
+    return v4Public(embeddedV4(g6, g7));
   if (g0 === 0x64 && g1 === 0xff9b) {
     // NAT64: the well-known prefix carries an IPv4 address; local-use is private.
     return (
@@ -117,16 +125,15 @@ function v6Public(groups: readonly number[]): boolean {
       v4Public(embeddedV4(g6, g7))
     );
   }
+  if ((g0 & 0xe000) !== 0x2000) return false; // ::, ::1, ULA, link-local, multicast, discard, …
   if (g0 === 0x2002) return v4Public(embeddedV4(g1, g2)); // 6to4
-  if (g0 === 0x2001 && g1 === 0) return false; // Teredo tunnels to anywhere
-  return !(
-    (
-      (g0 & 0xfe00) === 0xfc00 || // unique local
-      (g0 & 0xffc0) === 0xfe80 || // link-local
-      (g0 & 0xffc0) === 0xfec0 || // deprecated site-local
-      (g0 & 0xff00) === 0xff00
-    ) // multicast
-  );
+  if (g0 === 0x2001) {
+    if (g1 === 0) return false; // Teredo tunnels to anywhere
+    if (g1 === 0x0db8) return false; // documentation
+    if (g1 >= 0x10 && g1 <= 0x2f) return false; // ORCHID, ORCHIDv2
+  }
+  if (g0 === 0x3fff && g1 <= 0x0fff) return false; // documentation (3fff::/20)
+  return true;
 }
 
 /** Whether an IP literal is a public unicast address. Unparseable is not. */
@@ -153,10 +160,14 @@ export function isPublicAddress(ip: string): boolean {
 export async function assertFetchTarget(
   url: URL,
   policy: FetchPolicy,
+  signal?: AbortSignal,
 ): Promise<void> {
   if (url.protocol !== "http:" && url.protocol !== "https:")
     throw new Error(`fetch: unsupported protocol ${url.protocol}`);
-  const host = url.hostname.replace(/^\[|\]$/g, "");
+  // `docs.example.` is the same host as `docs.example`: rules and the
+  // localhost check see the name without its root dot (the URL parser has
+  // already lowercased it).
+  const host = url.hostname.replace(/^\[|\]$/g, "").replace(/\.+$/, "");
   const rule = await policy.deniedHost?.(host);
   if (rule !== undefined)
     throw new Error(`fetch: ${host} is denied by rule: ${rule}`);
@@ -172,8 +183,21 @@ export async function assertFetchTarget(
   }
   let addresses: string[];
   try {
-    addresses = await policy.resolve(host);
+    // The lookup counts against the caller's deadline: a stalled resolver
+    // must not outlive an abort.
+    addresses = signal
+      ? await Promise.race([
+          policy.resolve(host),
+          new Promise<never>((_, reject) => {
+            signal.throwIfAborted();
+            signal.addEventListener("abort", () => reject(signal.reason), {
+              once: true,
+            });
+          }),
+        ])
+      : await policy.resolve(host);
   } catch (error) {
+    if (signal?.aborted) throw error;
     throw new Error(
       `fetch: cannot resolve ${host} (${error instanceof Error ? error.message : String(error)})`,
     );

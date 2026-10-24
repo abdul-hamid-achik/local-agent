@@ -114,3 +114,74 @@ test("LOCAL_AGENT_FETCH_PRIVATE=1 opts into loopback and private hosts", async (
       .allowPrivate,
   ).toBe(false);
 });
+
+test("special-purpose and translated ranges fail closed", () => {
+  for (const ip of [
+    "192.0.2.1",
+    "198.51.100.7",
+    "203.0.113.9",
+    "192.88.99.1",
+    "240.0.0.1",
+    "::ffff:0:127.0.0.1", // SIIT translated loopback
+    "::ffff:0:a9fe:a9fe", // SIIT translated metadata
+    "100::1", // discard
+    "2001:db8::1",
+    "2001:10::1",
+    "2001:20::1",
+    "3fff::1",
+    "5f00::1",
+    "4000::1", // outside 2000::/3
+    "::2",
+  ])
+    expect(isPublicAddress(ip), ip).toBe(false);
+  expect(isPublicAddress("::ffff:0:808:808")).toBe(true);
+  expect(isPublicAddress("2a00:1450::1")).toBe(true);
+});
+
+test("a trailing root dot changes neither the deny rule nor the localhost check", async () => {
+  const seen: string[] = [];
+  const policy = fetchPolicy(
+    {
+      resolve: async () => ["93.184.215.14"],
+      deniedHost: async (host) => {
+        seen.push(host);
+        return host === "tracker.example"
+          ? "domain:tracker.example"
+          : undefined;
+      },
+    },
+    {},
+  );
+  await expect(
+    assertFetchTarget(new URL("https://tracker.example./x"), policy),
+  ).rejects.toThrow("denied by rule");
+  await expect(
+    assertFetchTarget(new URL("http://localhost./"), policy),
+  ).rejects.toThrow("private or loopback");
+  await expect(
+    assertFetchTarget(new URL("http://app.localhost../"), policy),
+  ).rejects.toThrow("private or loopback");
+  expect(seen).toEqual(["tracker.example", "localhost", "app.localhost"]);
+});
+
+test("an abort ends a stalled lookup at once", async () => {
+  const controller = new AbortController();
+  const policy = fetchPolicy(
+    { resolve: () => new Promise<string[]>(() => {}) }, // never answers
+    {},
+  );
+  const pending = assertFetchTarget(
+    new URL("https://slow.example/"),
+    policy,
+    controller.signal,
+  );
+  controller.abort(new Error("stop"));
+  await expect(pending).rejects.toThrow("stop");
+  await expect(
+    assertFetchTarget(
+      new URL("https://slow.example/"),
+      policy,
+      controller.signal,
+    ),
+  ).rejects.toThrow("stop");
+});
