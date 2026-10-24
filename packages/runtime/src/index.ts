@@ -303,7 +303,7 @@ type OpenAIStreamPart = {
  */
 export const INVALID_ARGUMENTS = "__invalid_arguments";
 
-/** A pending SSE event past this many characters fails the request instead of growing in memory. */
+/** A pending SSE event past this many UTF-16 code units fails the request instead of growing in memory. */
 const maxPendingSSEChars = 8 << 20;
 
 /**
@@ -317,8 +317,9 @@ export async function* parseOpenAISSE(
   const reader = body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
-  // A "\r" that ends a chunk waits: a "\n" may open the next one.
-  let heldCR = false;
+  // A "\r" ends a line at once; when it ends a chunk, a "\n" opening the
+  // next one is its CRLF's second half and is dropped.
+  let skipLF = false;
   let finished = false;
   try {
     for (;;) {
@@ -326,9 +327,11 @@ export async function* parseOpenAISSE(
       let text = chunk.done
         ? decoder.decode()
         : decoder.decode(chunk.value, { stream: true });
-      if (heldCR) text = `\r${text}`;
-      heldCR = !chunk.done && text.endsWith("\r");
-      if (heldCR) text = text.slice(0, -1);
+      if (skipLF && text) {
+        if (text.startsWith("\n")) text = text.slice(1);
+        skipLF = false;
+      }
+      if (text) skipLF = text.endsWith("\r");
       buffer += text.replace(/\r\n?/g, "\n");
       // A last event without its blank line still counts.
       if (chunk.done) buffer += "\n\n";
@@ -352,7 +355,7 @@ export async function* parseOpenAISSE(
       buffer = buffer.slice(start);
       if (buffer.length > maxPendingSSEChars)
         throw new Error(
-          "OpenAI-compatible stream event exceeds 8 MiB without a blank line",
+          "OpenAI-compatible stream event exceeds 8 Mi UTF-16 code units without a blank line",
         );
       if (chunk.done) break;
     }

@@ -152,6 +152,23 @@ describe("SSE framing", () => {
     ]);
   });
 
+  test("an event ending in a bare CR CR is not held back while the stream stays open", async () => {
+    const event = delta({ content: "hi" });
+    expect(
+      await incremental([`data: ${event}\r\r`], "data: [DONE]\r\r"),
+    ).toEqual([JSON.parse(event)]);
+  });
+
+  test("an LF opening the next chunk after a chunk-final CR is dropped, not read as a blank line", async () => {
+    // Read as a blank line, it would end the event between its two data lines.
+    expect(
+      await incremental(
+        ['data: {"choices":[{"delta":\r', '\ndata: {"content":"x"}}]}\r\n\r\n'],
+        "data: [DONE]\n\n",
+      ),
+    ).toEqual([{ choices: [{ delta: { content: "x" } }] }]);
+  });
+
   test("a CRLF server streams end to end through chat", async () => {
     let release!: () => void;
     const gate = new Promise<void>((resolve) => {
@@ -208,7 +225,7 @@ describe("SSE framing", () => {
   test("a pending event past the cap fails with a clear error instead of growing", async () => {
     const big = `data: ${"a".repeat(1 << 20)}`;
     await expect(parts(Array.from({ length: 9 }, () => big))).rejects.toThrow(
-      /exceeds 8 MiB/,
+      /exceeds 8 Mi UTF-16 code units/,
     );
   });
 });
