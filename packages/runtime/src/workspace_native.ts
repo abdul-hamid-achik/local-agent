@@ -138,7 +138,11 @@ export function openAt(
     throw new Error("Creating a workspace file requires O_EXCL");
   const bytes = component(name);
   // Whatever `mode` the kernel reads (see below), a new file is created
-  // private to the owner; the umask is restored whatever happens.
+  // private to the owner; the umask is restored whatever happens. The umask
+  // is process-wide while it is set: another native creator in that window
+  // gets owner-only modes, the restrictive direction. The new file is private only
+  // when the umask could be set (not in a worker thread); otherwise it has
+  // whatever mode the kernel read until the fchmod below.
   let umask: number | undefined;
   if (creating) {
     try {
@@ -172,7 +176,9 @@ export function openAt(
     } catch (error) {
       try {
         // Remove only the file this descriptor is: the name may have been
-        // replaced by now, and that is not ours to unlink.
+        // replaced by now, and that is not ours to unlink. The dev/ino check
+        // narrows the window between fstatat and unlinkAt; it does not close
+        // it, since the name can still be swapped in between.
         const created = fstatSync(fd, { bigint: true });
         const entry = entryIdentity(parent, name);
         if (
