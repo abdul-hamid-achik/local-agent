@@ -1185,8 +1185,7 @@ async function* agentTurn(
   const fetchGuard = fetchPolicy({
     ...(deniedRead
       ? {
-          deniedHost: (target: string) =>
-            deniedRead({ tool: "fetch", target }),
+          deniedHost: (target: string) => deniedRead({ tool: "fetch", target }),
         }
       : {}),
     ...options.fetchPolicy,

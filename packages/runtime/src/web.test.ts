@@ -8,9 +8,9 @@ import {
   type ApprovalRequest,
   runAgent,
 } from "#runtime/agent";
-import { evaluate } from "#runtime/permissions";
 import { resolveProvider } from "#runtime/config";
 import type { McpConnection } from "#runtime/mcp";
+import { evaluate } from "#runtime/permissions";
 import { Workspace } from "#runtime/workspace";
 
 type Call = { name: string; arguments: Record<string, unknown> };
