@@ -1,5 +1,5 @@
 import { dlopen, type FFIFunction, ptr, read } from "bun:ffi";
-import { closeSync, constants, openSync } from "node:fs";
+import { closeSync, constants, fchmodSync, openSync } from "node:fs";
 
 // Node does not expose O_CLOEXEC, but native descriptors must not reach children.
 export const CLOEXEC = process.platform === "darwin" ? 0x1000000 : 0x80000;
@@ -74,12 +74,19 @@ export function openRoot(root: string): number {
   return openSync(root, DIRECTORY_FLAGS);
 }
 
+/**
+ * `mode` applies only to a file this call creates (O_CREAT with O_EXCL) and
+ * is exact: the umask does not mask it, as with fchmod.
+ */
 export function openAt(
   parent: number,
   name: string,
   flags: number,
   mode = 0,
 ): number {
+  const creating = (flags & constants.O_CREAT) !== 0;
+  if (creating && (flags & constants.O_EXCL) === 0)
+    throw new Error("Creating a workspace file requires O_EXCL");
   const bytes = component(name);
   const fd = libc().symbols.openat(
     parent,
@@ -95,6 +102,22 @@ export function openAt(
       ),
       { code: code === 2 ? "ENOENT" : "EACCES", errno: code },
     );
+  }
+  if (creating) {
+    // openat is variadic: on Apple arm64 the FFI passes `mode` where the
+    // kernel does not read it, and the file was created with mode 0. Set it
+    // on the descriptor before anything is written.
+    try {
+      fchmodSync(fd, mode);
+    } catch (error) {
+      closeSync(fd);
+      try {
+        unlinkAt(parent, name);
+      } catch {
+        // The file this call created is already gone or unreachable.
+      }
+      throw error;
+    }
   }
   return fd;
 }
