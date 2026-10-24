@@ -149,17 +149,9 @@ export function kvBytesPerToken(
 const maxMetadataBytes = 1 << 20;
 class MetadataError extends Error {}
 
-/** GET or POST JSON metadata, redirects refused and the body capped at 1 MiB. */
-export async function getJSON(
-  url: string,
-  signal: AbortSignal,
-  init?: RequestInit,
-): Promise<unknown> {
-  const response = await fetch(url, { ...init, signal, redirect: "error" });
-  if (!response.ok)
-    throw new Error(`Ollama metadata request failed (${response.status})`);
-  if (!response.body)
-    throw new MetadataError("Ollama metadata response had no body");
+/** Reads a response body, refusing more than 1 MiB. */
+async function readCapped(response: Response, what: string) {
+  if (!response.body) throw new MetadataError(`${what} had no body`);
   const reader = response.body.getReader();
   const chunks: Uint8Array[] = [];
   let total = 0;
@@ -169,7 +161,7 @@ export async function getJSON(
     total += chunk.value.byteLength;
     if (total > maxMetadataBytes) {
       await reader.cancel();
-      throw new MetadataError("Ollama metadata response exceeds size limit");
+      throw new MetadataError(`${what} exceeds size limit`);
     }
     chunks.push(chunk.value);
   }
@@ -179,7 +171,23 @@ export async function getJSON(
     bytes.set(chunk, offset);
     offset += chunk.byteLength;
   }
-  return JSON.parse(new TextDecoder().decode(bytes));
+  return bytes;
+}
+
+/** GET or POST JSON metadata, redirects refused and the body capped at 1 MiB. */
+export async function getJSON(
+  url: string,
+  signal: AbortSignal,
+  init?: RequestInit,
+): Promise<unknown> {
+  const response = await fetch(url, { ...init, signal, redirect: "error" });
+  if (!response.ok)
+    throw new Error(`Ollama metadata request failed (${response.status})`);
+  return JSON.parse(
+    new TextDecoder().decode(
+      await readCapped(response, "Ollama metadata response"),
+    ),
+  );
 }
 
 /**
@@ -373,8 +381,37 @@ export async function admitOpenAILocalModel(
         status: "unverified",
         message: `Model list request failed (${response.status})`,
       };
-    const ModelsSchema = z.object({ data: z.array(z.unknown()).catch([]) });
-    const models = ModelsSchema.parse(await response.json()).data;
+    // A body we cannot read as a model list proves nothing about the model:
+    // say so, instead of "unreachable" or an empty list that rejects it.
+    let payload: unknown;
+    try {
+      payload = JSON.parse(
+        new TextDecoder().decode(
+          await readCapped(response, "Model list response"),
+        ),
+      );
+    } catch (error) {
+      if (error instanceof MetadataError)
+        return {
+          status: "unverified",
+          message: `${error.message}; skipped model validation`,
+        };
+      if (error instanceof SyntaxError)
+        return {
+          status: "unverified",
+          message:
+            "Model list response was not valid JSON; skipped model validation",
+        };
+      throw error;
+    }
+    const listed = z.object({ data: z.array(z.unknown()) }).safeParse(payload);
+    if (!listed.success)
+      return {
+        status: "unverified",
+        message:
+          "Model list response had no `data` array; skipped model validation",
+      };
+    const models = listed.data.data;
     const ids = models
       .map((entry) =>
         typeof entry === "object" && entry !== null && "id" in entry
