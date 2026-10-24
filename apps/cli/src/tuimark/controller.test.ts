@@ -4828,6 +4828,12 @@ test("the step limit is a turn boundary; a failed turn or an uncertain outcome s
   expect(store(limited.ui).status).toBe(
     "Goal stopped: its turn failed (provider down)",
   );
+  // In a goal the step limit reads as a notice; only the failure is an error.
+  const errors = store(limited.ui)
+    .messages.filter((m: MessageView) => m.is_error)
+    .map(viewText);
+  expect(errors).toEqual(["provider down"]);
+  expect(notices(limited.ui)).toContain("Agent reached the 20-step limit");
   const uncertain = setup(
     turnsOf(async function* () {
       for (const event of call(
@@ -4927,6 +4933,31 @@ test("esc in a goal turn's tail, where no cancel reaches a turn, still ends the 
   expect(notices(ui).at(-1)).toBe(
     "Goal stopped: you cancelled its turn · turn 1 of 8\nLast status (continue): first part",
   );
+  // A send right after it: the goal still ends at its first turn, and the
+  // send runs after its end, which never overwrites the send's turn.
+  const late = setup(
+    turnsOf(reporting(goes("first part"), wrote("w1")), reply("sure")),
+  );
+  let again = false;
+  late.ui.refuse = (writes) => {
+    if (!again && writes.some((w) => w.path === "busy" && w.value === false)) {
+      again = true;
+      void late.ui.fire("cancel");
+      void late.ui.fire("send", "and then this");
+    }
+    return undefined;
+  };
+  await late.ui.fire("send", "/goal two parts");
+  await until(() => late.seen.length === 2);
+  await late.client.idle();
+  expect(late.seen[1]?.messages.at(-1)).toBe("user:and then this");
+  expect(notices(late.ui)).toEqual([
+    "[goal 1/8] Goal: two parts",
+    "Goal stopped: you cancelled its turn · turn 1 of 8\nLast status (continue): first part",
+  ]);
+  expect(store(late.ui).status).not.toContain("Goal");
+  expect(store(late.ui).header.goal_on).toBe(false);
+  expect(store(late.ui).busy).toBe(false);
 });
 
 test("a typed message that starts like a goal's is still the user's", async () => {

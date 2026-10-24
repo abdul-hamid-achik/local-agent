@@ -495,8 +495,8 @@ export class TuimarkClient {
   /**
    * Why the goal ends at its turn's end, when the user asked: `/goal stop`
    * or esc. Its turn is cancelled when one runs; asked in a turn's tail,
-   * after the cancel can reach it, it still keeps the next turn from
-   * starting (runTurn).
+   * after the cancel can reach it, it still ends the goal before another
+   * turn (the end of loop).
    */
   private goalStop?: string;
   /** The host's end of goal_status: the report joins the turn's record. */
@@ -3044,16 +3044,6 @@ export class TuimarkClient {
       await this.beginTurn(next);
       await this.turnDone;
     } else if (this.goal && this.goalContinues && live) {
-      if (this.goalStop !== undefined) {
-        // Asked in the tail of the turn that just ended, where no cancel
-        // could reach it: the goal ends here, before another turn.
-        const line = await this.endGoal(this.goal, this.goalStop);
-        await this.publishMessages([
-          { path: "status", value: line },
-          { path: "header.goal_on", value: false },
-        ]);
-        return;
-      }
       // A goal left open goes on with its next turn: host-written, marked,
       // shown as a notice. A queued send ran first (above), and the goal
       // continues after it.
@@ -3348,8 +3338,12 @@ export class TuimarkClient {
               : "Inference failed";
         status = oneLine(message);
         // The full error joins the transcript as a UI-local error notice:
-        // shown (and inline, printed below), but never a model message.
-        notice = this.builder.error(message);
+        // shown (and inline, printed below), but never a model message. In
+        // a goal the step limit is a turn boundary, not a failure: a notice.
+        notice =
+          this.goalTurn && error instanceof StepLimitError
+            ? this.builder.notice(message)
+            : this.builder.error(message);
         this.transcript.push(notice);
       }
     } finally {
@@ -3392,6 +3386,16 @@ export class TuimarkClient {
         // The turn's last observed usage is the resting baseline (CtxMeter).
         ...this.ctxWrites(this.ctx.finishTurn()),
       ]);
+      // Esc or /goal stop that landed after settleGoal, where no cancel
+      // could reach a turn: the goal ends here, before another starts.
+      // Still busy, so a send meanwhile is queued and runs next (runTurn).
+      if (this.goal && this.goalStop !== undefined) {
+        const line = await this.endGoal(this.goal, this.goalStop);
+        await this.publishMessages([
+          { path: "status", value: line },
+          { path: "header.goal_on", value: false },
+        ]);
+      }
       // Busy clears only after the final commits/publish above, so no
       // send or switch can enter while this turn still owes prints.
       this.busy = false;
