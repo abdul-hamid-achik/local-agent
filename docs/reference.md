@@ -103,6 +103,8 @@ commands confined instead. See [Safety](/safety).
 | `/permissions trust confirm` | Trust exactly the rules the last `/permissions trust` listed, if the file still holds them |
 | `/sandbox on\|off` | Tuimark client, macOS: run commands in the sandbox without a card (an ask rule still shows one, and its `y` runs that command outside; so does a command that names a secret path). `/sandbox` alone says whether it is on. Where it is unavailable it stays off and says why |
 | `/details` | Show the last tool output in full |
+| `/copy` | Tuimark client: put the last reply's markdown on the clipboard (also `ctrl+y`). During a turn it copies the last finished reply. With no clipboard tool, the status says how to select text by hand |
+| `/copy code` | Tuimark client: copy the last code block of the last reply |
 | `/status` | Show the effective config panel (model, workspace, session) |
 | `/provider` | Ask the model's endpoint, read-only: answer time, Ollama's version, whether the model is loaded and how much of it is in GPU memory |
 | `/sessions` | Open the session picker; needs `--session-db`. Loading a session closes the calls it stopped before they ran, or that only read, and tells the model; a call of unknown outcome loads but blocks the next prompt until `/recover` |
@@ -123,7 +125,7 @@ An unknown command answers `Unknown command: X. Use /help`; it is never sent
 to the model. In the Tuimark client names match in any case, and a line
 whose first word holds a second slash, such as `/tmp/x.log is empty`, is a
 message, not a command. While a turn is busy, commands report a busy status
-instead of running.
+instead of running; in the Tuimark client `/copy` and `/goal` still run.
 
 ## Keymap
 
@@ -136,6 +138,7 @@ instead of running.
 | `ctrl+o` | Load earlier messages |
 | `pgup`, `pgdn` | Scroll the log |
 | `ctrl+l` | Jump to the latest output |
+| `ctrl+y` | Tuimark client: copy the last reply, as `/copy` |
 | `shift+tab` | Next intent: `build` → `plan` → `chat` → `build` |
 | `enter` | Send the draft |
 | `shift+enter`, `alt+enter` | Insert a newline without sending |

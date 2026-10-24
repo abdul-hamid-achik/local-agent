@@ -76,9 +76,22 @@ Every tool call leaves a card in the transcript. The card names the tool
 it ended (`✓` succeeded, `✗` denied or failed, `!` when the outcome is
 unknown or unverified, as for an MCP call's result), and says how long it
 ran. A successful edit shows the lines it changed, a newly created file
-shows its lines, and `/details` opens the last tool output in full. While a
-turn runs, the status bar shows the elapsed time and a small chart of the
-stream's pace, one bar per second.
+shows its lines, and `/details` opens the last tool output in full.
+
+While a turn runs, the reply being written has a head that says what the
+turn is doing and for how long: `Assistant ⠋ thinking · 12s`. The head reads
+"waiting for the model" (or "connecting MCP servers") or "thinking", and
+only the elapsed time once the reply streams. While an approval or a
+question waits on you, the head stands still, and that wait is not counted.
+The status bar keeps the same facts at rest and during a turn: the mode,
+the MCP servers, and after a turn how long it took and how fast it went
+(`last 1m 06s · 32 tok/s`).
+
+`/copy`, or `ctrl+y`, puts the last reply on the clipboard; `/copy code`
+copies its last code block. It uses `pbcopy` on macOS, or `wl-copy`,
+`xclip` or `xsel` on Linux. With none of them installed, the status says how
+to select text in your terminal: with mouse reporting on, that is
+shift-drag (option-drag in iTerm2, fn-drag in Terminal.app).
 
 The model can also stop and ask you a question. It opens above the
 composer: a list of choices, yes/no, or a free-text answer. Choose with the
