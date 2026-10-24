@@ -5,11 +5,16 @@ const DASH =
   "[\\-=\\u058A\\u05BE\\u1806\\u2010-\\u2015\\u2212\\u2E3A\\u2E3B\\u301C\\u3030\\uFE58\\uFE63]";
 /** Zero-width, soft-hyphen, bidi and variation characters: invisible, so they hide a marker. */
 const INVISIBLE = /\p{Default_Ignorable_Code_Point}/u;
-// A run of dashes, then `AGENTS.md` or `end of AGENTS.md`, then a run of dashes,
-// on one line (blanks and tabs, not newlines). The lookbehind starts a match
-// only at the start of a run, which keeps a long run of dashes linear.
+/** Blanks and tabs, with at most one line break among them. */
+const GAP = "[ \\t]*(?:\\r?\\n[ \\t]*)?";
+// A run of dashes, then `AGENTS.md` or `end of AGENTS.md`, then a run of
+// dashes: on one line, or with the dashes on the lines around the words. The
+// lookbehind starts a match only at the start of a run, which keeps a long
+// run of dashes linear. Look-alike letters (Cyrillic "А" for "A") and
+// combining marks are not folded: such a line reads as a marker to a person,
+// and is passed on as written.
 const MARKER = new RegExp(
-  `(?<!${DASH})(${DASH}{2,})[ \\t]*(?:end[ \\t]+of[ \\t]+)?AGENTS\\.md[ \\t]*${DASH}{2,}`,
+  `(?<!${DASH})(${DASH}{2,})${GAP}(?:end[ \\t]+of[ \\t]+)?AGENTS\\.md${GAP}${DASH}{2,}`,
   "giu",
 );
 
