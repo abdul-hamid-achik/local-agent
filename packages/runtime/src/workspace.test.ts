@@ -10,7 +10,7 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, expect, test } from "vitest";
+import { afterEach, expect, test, vi } from "vitest";
 import { Workspace } from "#runtime/workspace";
 
 const roots: string[] = [];
@@ -357,6 +357,24 @@ test("search caps matches and long lines", async () => {
   const wide = await workspace.search("hit", { path: "wide.txt" });
   expect(wide.length).toBeLessThan(260);
   expect(wide.endsWith("…")).toBe(true);
+});
+
+test("search stops inside a file once its time is up", async () => {
+  const { root, workspace } = await fixture();
+  await writeFile(join(root, "long.txt"), "hit\n".repeat(50));
+  // Each clock read is a second later: a pattern that backtracks badly
+  // spends about that long on a line before the engine gives up.
+  let now = 0;
+  const clock = vi.spyOn(Date, "now").mockImplementation(() => (now += 1_000));
+  try {
+    const lines = (await workspace.search("hit", { path: "long.txt" })).split(
+      "\n",
+    );
+    expect(lines.at(-1)).toBe("… stopped after 10 seconds; narrow the path");
+    expect(lines.length).toBeLessThan(15);
+  } finally {
+    clock.mockRestore();
+  }
 });
 
 test("write creates a file (and its directories) after approval, with a diff of added lines", async () => {

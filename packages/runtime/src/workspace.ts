@@ -548,6 +548,12 @@ export class Workspace implements Disposable {
     }
     const lines = text.split("\n");
     for (const [index, raw] of lines.entries()) {
+      // Per line, not only per file: a pattern that backtracks badly costs
+      // up to a quarter second a line before the engine gives up on it.
+      if (Date.now() > state.deadline) {
+        state.stopped = `stopped after ${SEARCH_MILLISECONDS / 1000} seconds`;
+        return;
+      }
       const line = raw.endsWith("\r") ? raw.slice(0, -1) : raw;
       if (!state.test(line.slice(0, SEARCH_SCAN_CHARS))) continue;
       if (state.matches.length >= SEARCH_MATCH_LIMIT) {
