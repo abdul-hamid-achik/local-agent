@@ -7,6 +7,16 @@ import { writePrivateFile } from "#desktop/main/private-file";
 import { SidecarClient } from "#desktop/main/sidecar-client";
 
 const textFiles = new TextFileGrants();
+// The user's own MCP config, which the CLI loads by default, is editable
+// without Browse; it is per user, never per workspace.
+const xdgConfig = process.env.XDG_CONFIG_HOME;
+textFiles.grant(
+  join(
+    xdgConfig?.startsWith("/") ? xdgConfig : join(homedir(), ".config"),
+    "local-agent",
+    "mcp.json",
+  ),
+);
 
 type Settings = {
   repoRoot?: string;
@@ -23,7 +33,14 @@ function loadSettings(): Settings {
       readFileSync(settingsPath(), "utf8"),
     ) as Settings;
     // providerEnv holds API keys; an older file may have been written 0644.
-    chmodSync(settingsPath(), 0o600);
+    // A file that cannot be tightened still loads.
+    try {
+      chmodSync(settingsPath(), 0o600);
+    } catch (error) {
+      console.error(
+        `[main] cannot tighten settings: ${(error as Error).message}`,
+      );
+    }
     return settings;
   } catch {
     return {};

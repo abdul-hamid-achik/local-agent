@@ -35,8 +35,9 @@
           </label>
         </div>
         <div class="help">
-          Saving writes the file last loaded (Browse or Load); only files chosen with
-          Browse can be read or saved. stdio entries start their commands on check —
+          Saving writes the file last loaded (Browse or Load); only your own
+          <code>~/.config/local-agent/mcp.json</code> and files chosen with Browse can
+          be read or saved. stdio entries start their commands on check —
           use absolute command paths (inherited env, including PATH, is cleared).
           Remote HTTP requires <code>allowRemote: true</code>. Plan intent denies MCP
           calls, including read-only ones.
