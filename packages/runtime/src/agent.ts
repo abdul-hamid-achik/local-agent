@@ -324,25 +324,55 @@ async function htmlToText(html: string): Promise<string> {
     })
     .transform(new Response(html))
     .text();
-  const parts: string[] = [];
+  // Text is kept in runs so whitespace is collapsed only outside <pre>: a
+  // YAML or Python sample is wrong once its indentation is gone.
+  const runs: { text: string; pre: boolean }[] = [];
+  let preDepth = 0;
+  let skipNewline = false;
+  const push = (text: string) => {
+    const pre = preDepth > 0;
+    const last = runs[runs.length - 1];
+    if (last?.pre === pre) last.text += text;
+    else runs.push({ text, pre });
+  };
   await new HTMLRewriter()
     .on("*", {
       element: (el) => {
-        if (HTML_BLOCK_TAGS[el.tagName]) parts.push("\n");
+        skipNewline = false;
+        if (HTML_BLOCK_TAGS[el.tagName]) push("\n");
+        if (el.tagName === "pre") {
+          preDepth++;
+          // HTML drops a newline right after <pre>.
+          skipNewline = true;
+          el.onEndTag(() => {
+            preDepth--;
+          });
+        }
       },
     })
     .onDocument({
       text: (t) => {
-        parts.push(t.text);
+        const text = skipNewline ? t.text.replace(/^\r?\n/, "") : t.text;
+        if (t.text) skipNewline = false;
+        push(text);
       },
     })
     .transform(new Response(stripped))
     .text();
-  return parts
-    .join("")
-    .replace(/[ \t]+/g, " ")
-    .replace(/\n\s*\n+/g, "\n\n")
-    .trim();
+  return (
+    runs
+      .map((run, index) =>
+        run.pre
+          ? run.text.trimEnd()
+          : (index === 0 ? run.text.trimStart() : run.text)
+              .replace(/[ \t]+/g, " ")
+              .replace(/\n\s*\n+/g, "\n\n"),
+      )
+      .join("")
+      // Whole blank lines at the top go, but never a first line's indentation.
+      .replace(/^(?:[ \t]*\n)+/, "")
+      .trimEnd()
+  );
 }
 
 type ExtractedLink = { url: string; text: string; score: number };

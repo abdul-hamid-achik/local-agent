@@ -1270,3 +1270,37 @@ test("web_search falls back to DuckDuckGo when SearXNG answers with zero results
     await run.cleanup();
   }
 });
+test("fetch keeps the whitespace inside pre blocks and collapses it elsewhere", async () => {
+  stubFetch((url) => {
+    if (url.endsWith("/doc"))
+      return htmlPage(
+        `<html><body><p>Run   this    config:</p>
+<pre><code>services:
+  web:
+    image: nginx
+
+    ports:
+      - "80:80"
+</code></pre>
+<p>Then   restart.</p><pre>\n$ bun   run start</pre></body></html>`,
+      );
+    if (url.endsWith("/first"))
+      return htmlPage(`<pre>\n    indented first\n  </pre>`);
+    return undefined;
+  });
+  const run = await session([
+    { name: "fetch", arguments: { url: "http://docs.example/doc" } },
+    { name: "fetch", arguments: { url: "http://docs.example/first" } },
+  ]);
+  try {
+    expect(run.output(0)).toContain(
+      'Run this config:\n\nservices:\n  web:\n    image: nginx\n\n    ports:\n      - "80:80"\n\nThen restart.',
+    );
+    // The newline right after <pre> is not content; spaces inside are.
+    expect(run.output(0)).toContain("Then restart.\n$ bun   run start");
+    expect(run.output(1)).toContain("\n\n    indented first");
+  } finally {
+    restoreFetch();
+    await run.cleanup();
+  }
+});
