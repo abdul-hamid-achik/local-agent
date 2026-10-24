@@ -151,6 +151,49 @@ export function latestTodo(
   return undefined;
 }
 
+/**
+ * The todo list a windowed request carries: the latest, when something on
+ * it is left to do, in at most `limit` characters. Done items give way
+ * first, then pending ones from the end, "…" in their place; the item in
+ * progress and the counts line stay. Only a limit too small for those is
+ * cut mid-line.
+ */
+export function carriedTodo(
+  history: readonly Message[],
+  limit: number,
+): { index: number; text: string } | undefined {
+  const todo = latestTodo(history);
+  if (!todo || !/^- \[[ ~]\] /m.test(todo.text)) return undefined;
+  if (todo.text.length <= limit) return todo;
+  const open = todo.text
+    .split("\n")
+    .filter((line) => !line.startsWith("- [x] "));
+  if (open.join("\n").length <= limit)
+    return { index: todo.index, text: open.join("\n") };
+  const pending = (line: string) => line.startsWith("- [ ] ");
+  // Each line takes its length and a newline, except the last: one more.
+  let room =
+    limit +
+    1 -
+    "\n…".length -
+    open.reduce(
+      (size, line) => (pending(line) ? size : size + line.length + 1),
+      0,
+    );
+  const kept: string[] = [];
+  let cut = false;
+  for (const line of open) {
+    if (pending(line) && (cut || line.length + 1 > room)) {
+      if (!cut) kept.push("…");
+      cut = true;
+      continue;
+    }
+    if (pending(line)) room -= line.length + 1;
+    kept.push(line);
+  }
+  return { index: todo.index, text: kept.join("\n").slice(0, limit) };
+}
+
 function isElided(content: string): boolean {
   try {
     const parsed = JSON.parse(content) as { output?: unknown };

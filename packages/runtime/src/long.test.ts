@@ -193,10 +193,14 @@ test("a todo list the window leaves out rides in the system prompt", async () =>
   ).toBe(true);
   expect(system).toContain(`${TODO}\n${list}`);
   // The list takes its room from the window, not past it.
-  const big = Array.from(
-    { length: 50 },
-    (_, i) => `- [ ] ${`step ${i} `.padEnd(200, "x")}`,
-  ).join("\n");
+  const big = [
+    ...Array.from(
+      { length: 49 },
+      (_, i) => `- [ ] ${`step ${i} `.padEnd(200, "x")}`,
+    ),
+    "- [~] the one in progress",
+    "50 todos: 0 done, 1 in progress, 49 pending",
+  ].join("\n");
   const long = await run([
     ...plan.map((m) =>
       m.role === "tool"
@@ -210,10 +214,17 @@ test("a todo list the window leaves out rides in the system prompt", async () =>
     { role: "user", content: "go on" },
   ]);
   const sent = long.requests[0] ?? [];
-  // Cut to a share of the window, at a line end: what remains to do first.
+  // Cut to a share of the window, at a line end: the first pending items,
+  // and whatever the cut leaves out of them, the item in progress and the
+  // counts stay.
   const carried = (sent[0]?.content ?? "").split(`${TODO}\n`)[1] ?? "";
   expect(carried.startsWith("- [ ] step 0 ")).toBe(true);
-  expect(carried.endsWith("\n…")).toBe(true);
+  expect(
+    carried.endsWith(
+      "x\n…\n- [~] the one in progress\n50 todos: 0 done, 1 in progress, 49 pending",
+    ),
+  ).toBe(true);
+  expect(carried.length).toBeLessThanOrEqual(16_384 * 3 * 0.7 * 0.25);
   expect(carried.length).toBeLessThan(big.length);
   expect(
     (sent[0]?.content.length ?? 0) + promptChars(sent.slice(1) as Message[]),

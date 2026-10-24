@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { expect, test } from "vitest";
 import { type AgentEvent, runAgent, sessionProblem } from "#runtime/agent";
 import {
+  carriedTodo,
   compactHistory,
   compactState,
   promptChars,
@@ -547,4 +548,44 @@ test("the state also sheds the reasoning of earlier turns, which a request never
     reasoned.map((message) => message.content),
   );
   expect(result.elided).toBe(8 - left.length);
+});
+
+test("a carried todo list keeps what is in progress and the first pending items, in order", () => {
+  const list = (lines: string[]): Message[] => [
+    { role: "user", content: "go" },
+    {
+      role: "tool",
+      tool_name: "todo_write",
+      content: receipt("succeeded", lines.join("\n")),
+    },
+  ];
+  const counts = "5 todos: 1 done, 1 in progress, 3 pending";
+  const history = list([
+    "- [x] done",
+    `- [ ] ${"a".repeat(20)}`,
+    `- [ ] ${"b".repeat(60)}`,
+    "- [ ] c",
+    "- [~] now",
+    counts,
+  ]);
+  // Whole when it fits; done items give way first.
+  expect(carriedTodo(history, 1_000)?.text).toBe(
+    JSON.parse(history[1]?.content ?? "").output,
+  );
+  expect(carriedTodo(history, 160)?.text).toBe(
+    `- [ ] ${"a".repeat(20)}\n- [ ] ${"b".repeat(60)}\n- [ ] c\n- [~] now\n${counts}`,
+  );
+  // Then pending items from the first one that does not fit: a shorter one
+  // after it is left out too, so "…" stands for all of them.
+  const cut = `- [ ] ${"a".repeat(20)}\n…\n- [~] now\n${counts}`;
+  expect(cut).toHaveLength(80);
+  for (const limit of [80, 100, 130])
+    expect(carriedTodo(history, limit)?.text).toBe(cut);
+  expect(carriedTodo(history, 79)?.text).toBe(`…\n- [~] now\n${counts}`);
+  // A limit too small for the item in progress and the counts cuts mid-line.
+  expect(carriedTodo(history, 30)?.text).toHaveLength(30);
+  // Nothing left to do: nothing carried.
+  expect(carriedTodo(list(["- [x] done", "1 todos: 1 done"]), 1_000)).toBe(
+    undefined,
+  );
 });

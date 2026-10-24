@@ -13,9 +13,9 @@ import {
   CHARS_PER_TOKEN,
   COMPACT_HIGH,
   COMPACT_LOW,
+  carriedTodo,
   compactHistory,
   compactState,
-  latestTodo,
   promptChars,
   windowStart,
 } from "#runtime/compact";
@@ -1757,30 +1757,6 @@ export const MAX_HISTORY_MESSAGES = 10_000;
 function windowNote(left: number): string {
   return `The oldest ${left} messages of this conversation are not in this request: they no longer fit the context window. If the user refers to something you cannot see, say so rather than guess.`;
 }
-/**
- * The todo list a windowed request carries: the latest, when something on
- * it is left to do, in at most `limit` characters. Done items go first,
- * then the end of what remains.
- */
-function carriedTodo(
-  history: readonly Message[],
-  limit: number,
-): { index: number; text: string } | undefined {
-  const todo = latestTodo(history);
-  if (!todo || !/^- \[[ ~]\] /m.test(todo.text)) return undefined;
-  if (todo.text.length <= limit) return todo;
-  const open = todo.text
-    .split("\n")
-    .filter((line) => !line.startsWith("- [x] "))
-    .join("\n");
-  if (open.length <= limit) return { index: todo.index, text: open };
-  const end = open.lastIndexOf("\n", Math.max(0, limit - 2));
-  return {
-    index: todo.index,
-    text: `${open.slice(0, end > 0 ? end : Math.max(0, limit - 2))}\n…`,
-  };
-}
-
 /** Ahead of the todo list a windowed request carries in its system prompt. */
 const TODO_NOTE =
   "Your todo list, as you last wrote it (that message is no longer in this request):";
