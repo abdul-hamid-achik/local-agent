@@ -1049,6 +1049,109 @@ body {
   color: var(--la-terminal-phosphor);
 }
 
+.la-model-state-warned {
+  border-color: rgba(224, 138, 105, 0.45);
+  color: var(--la-terminal-copper);
+}
+
+/*
+ * The planner's budget as one bar. Its parts grow in turn once, when it
+ * scrolls into view (Home.vue arms it): under 1.5 s. Unarmed, it is static.
+ */
+.la-budget {
+  margin-top: 16px;
+  font-family: var(--vp-font-family-mono);
+  font-size: 9px;
+}
+
+.la-budget-head {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 4px 12px;
+  color: var(--la-terminal-muted);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.la-budget-bar {
+  display: flex;
+  height: 10px;
+  margin-top: 8px;
+  overflow: hidden;
+  border: 1px solid var(--la-terminal-line);
+  border-radius: 5px;
+}
+
+.la-budget-bar i {
+  flex: 0 0 calc(var(--share) * 100%);
+  transform-origin: left center;
+}
+
+.la-budget-weights {
+  --part: var(--la-terminal-muted);
+}
+
+.la-budget-headroom {
+  --part: #7b8175;
+}
+
+.la-budget-kv {
+  --part: var(--la-terminal-phosphor);
+}
+
+.la-budget-free {
+  --part: transparent;
+}
+
+.la-budget-bar i {
+  background: var(--part);
+}
+
+.la-budget-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  margin: 8px 0 0;
+  padding: 0;
+  color: var(--la-terminal-muted);
+  list-style: none;
+}
+
+.la-budget-legend b {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: 5px;
+  border: 1px solid var(--la-terminal-line);
+  border-radius: 2px;
+  background: var(--part);
+  vertical-align: -1px;
+}
+
+.la-budget-legend .la-budget-kv {
+  color: var(--la-terminal-phosphor);
+}
+
+.la-budget.is-armed .la-budget-bar i {
+  transform: scaleX(0);
+}
+
+.la-budget.is-playing .la-budget-bar i {
+  animation: la-grow 360ms var(--la-ease) both;
+  animation-delay: calc(var(--step) * 300ms);
+}
+
+@keyframes la-grow {
+  from {
+    transform: scaleX(0);
+  }
+
+  to {
+    transform: scaleX(1);
+  }
+}
+
 .la-effects {
   padding-bottom: 144px;
 }
@@ -1348,8 +1451,9 @@ body {
 }
 
 /*
- * The goal plays its turns once, when it scrolls into view (Home.vue arms
- * it): about 2.5 s, well under five (WCAG 2.2.2). Unarmed, it is static.
+ * The goal and the tool call play once, when they scroll into view (Home.vue
+ * arms them): about 2.3 s and 1.9 s, well under five (WCAG 2.2.2). Unarmed,
+ * they are static.
  */
 .la-goal-run.is-armed .la-goal-step {
   opacity: 0;
@@ -1922,6 +2026,7 @@ body {
   .la-enter,
   .la-play,
   .la-goal-run .la-goal-step,
+  .la-budget-bar i,
   .la-ctx-meter i,
   .la-pace i,
   .la-cursor,
@@ -1931,6 +2036,10 @@ body {
 
   .la-goal-run.is-armed .la-goal-step {
     opacity: 1;
+  }
+
+  .la-budget.is-armed .la-budget-bar i {
+    transform: none;
   }
 
   .la-button,

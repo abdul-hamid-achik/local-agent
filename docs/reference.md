@@ -111,8 +111,11 @@ commands confined instead. See [Safety](/safety).
 | `/mcp` | Show an MCP panel: server and tool counts, or a hint to use `--mcp-config` |
 | `/help` | Show the command and key overlay |
 
-An unknown command answers `Unknown command: X. Use /help`. While a turn is
-busy, commands report a busy status instead of running.
+An unknown command answers `Unknown command: X. Use /help`; it is never sent
+to the model. In the Tuimark client names match in any case, and a line
+whose first word holds a second slash, such as `/tmp/x.log is empty`, is a
+message, not a command. While a turn is busy, commands report a busy status
+instead of running.
 
 ## Keymap
 
@@ -120,7 +123,7 @@ busy, commands report a busy status instead of running.
 |---|---|
 | `ctrl+p` | Open the command palette |
 | `esc` | Cancel the current turn, and a running `/goal` with it |
-| `ctrl+c` | Quit; clears the draft first |
+| `ctrl+c` | Quit; clears the draft first, then cancels a running turn |
 | `up`, `down` | Browse input history |
 | `ctrl+o` | Load earlier messages |
 | `pgup`, `pgdn` | Scroll the log |

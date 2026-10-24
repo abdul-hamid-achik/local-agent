@@ -44,34 +44,50 @@ const modelRows = [
   {
     name: 'qwen3.5:4b',
     location: 'LOCAL',
-    state: 'ready',
-    note: 'any installed Ollama model via --model',
+    state: 'warned',
+    note: "MLX tag: it runs, with a warning — Ollama's MLX runner ignores the size",
   },
 ]
 
-// The goal illustration plays once, when it scrolls into view. Without
-// IntersectionObserver, or with reduced motion, it is never armed and
-// shows its static look.
+// The planner's budget on a 16 GB Mac for the default model, in GiB:
+// 11/16 of the memory, less the weights (3,324,173,934 bytes) and 2.5 GiB
+// of headroom; the 32768-token KV cache (32 KiB a token) fits in the rest.
+const budgetParts = [
+  { id: 'weights', label: 'weights', gib: 3.1 },
+  { id: 'headroom', label: 'headroom', gib: 2.5 },
+  { id: 'kv', label: 'KV at 32k', gib: 1.0 },
+  { id: 'free', label: 'left', gib: 4.4 },
+]
+
+// The goal, tool and budget illustrations each play once, when they scroll
+// into view. Without IntersectionObserver, or with reduced motion, they are
+// never armed and show their static look.
 const goalRun = ref<HTMLElement | null>(null)
-let goalObserver: IntersectionObserver | undefined
+const toolRun = ref<HTMLElement | null>(null)
+const budgetBar = ref<HTMLElement | null>(null)
+let playObserver: IntersectionObserver | undefined
 
 onMounted(() => {
-  const el = goalRun.value
-  if (!el || typeof IntersectionObserver === 'undefined') return
+  const els = [goalRun.value, toolRun.value, budgetBar.value].filter(
+    (el): el is HTMLElement => el !== null,
+  )
+  if (!els.length || typeof IntersectionObserver === 'undefined') return
   if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return
-  el.classList.add('is-armed')
-  goalObserver = new IntersectionObserver(
+  for (const el of els) el.classList.add('is-armed')
+  playObserver = new IntersectionObserver(
     (entries) => {
-      if (!entries.some((entry) => entry.isIntersecting)) return
-      el.classList.add('is-playing')
-      goalObserver?.disconnect()
+      for (const entry of entries) {
+        if (!entry.isIntersecting) continue
+        entry.target.classList.add('is-playing')
+        playObserver?.unobserve(entry.target)
+      }
     },
     { threshold: 0.4 },
   )
-  goalObserver.observe(el)
+  for (const el of els) playObserver.observe(el)
 })
 
-onBeforeUnmount(() => goalObserver?.disconnect())
+onBeforeUnmount(() => playObserver?.disconnect())
 
 const ecosystemGroups = [
   {
@@ -293,6 +309,7 @@ const ecosystemGroups = [
         <ul class="la-check-list">
           <li>Default model qwen3.5:4b-q4_K_M — the smallest that passed the agent battery.</li>
           <li>Any installed model with --model; context planned for your memory and capped at the model's native window.</li>
+          <li>A model on Ollama's MLX runner gets a warning: there the size reserves nothing.</li>
           <li>A 15-second admission check before the screen opens.</li>
         </ul>
         <a class="la-text-link" :href="withBase('/ollama-models')">
@@ -332,6 +349,30 @@ const ecosystemGroups = [
             machine's memory, up to 32768 tokens, and never past the model's native context. A
             remote Chalupa profile negotiates its own context instead.
           </p>
+          <div
+            ref="budgetBar"
+            class="la-budget"
+            role="img"
+            aria-label="Illustrative planner budget on a 16 GB Mac for qwen3.5:4b-q4_K_M: of 11 GiB, 3.1 for the weights, 2.5 of headroom, 1.0 for the KV cache at 32768 tokens, 4.4 left"
+          >
+            <div class="la-budget-head" aria-hidden="true">
+              <span>16 GB Mac · qwen3.5:4b-q4_K_M</span>
+              <span>11 GiB budget</span>
+            </div>
+            <div class="la-budget-bar" aria-hidden="true">
+              <i
+                v-for="(part, index) in budgetParts"
+                :key="part.id"
+                :class="`la-budget-${part.id}`"
+                :style="{ '--share': part.gib / 11, '--step': index }"
+              ></i>
+            </div>
+            <ul class="la-budget-legend" aria-hidden="true">
+              <li v-for="part in budgetParts" :key="part.id" :class="`la-budget-${part.id}`">
+                <b></b>{{ part.label }} {{ part.gib.toFixed(1) }}
+              </li>
+            </ul>
+          </div>
           <div class="la-consent-actions" aria-hidden="true">
             <span>planned up to 32768</span>
             <strong>native context hard cap</strong>
@@ -494,6 +535,56 @@ const ecosystemGroups = [
                 </li>
               </ol>
               <div class="la-question-hint">/goal shows it · /goal stop or esc ends it</div>
+            </div>
+          </div>
+        </article>
+
+        <article class="la-question-panel la-goalloop-panel la-tools-panel" aria-labelledby="tools-panel-title">
+          <div class="la-question-copy">
+            <div class="la-panel-number" aria-hidden="true">05 / TOOLS</div>
+            <h3 id="tools-panel-title">One gateway, every tool, one card each.</h3>
+            <p>
+              Point your MCP config at a gateway such as mcphub and the model finds the tool it
+              needs: resolve_tool ranks the candidates, call_tool runs one. Plan mode offers no MCP
+              at all.
+            </p>
+            <p class="la-question-rule">
+              The card names the tool behind the gateway, never call_tool, so a session grant (a)
+              covers that one tool alone. A result the server does not mark as an error still reads
+              unverified.
+            </p>
+          </div>
+
+          <div
+            ref="toolRun"
+            class="la-question-box la-goal-run"
+            role="img"
+            aria-label="Illustrative MCP call through a gateway: the model resolves a validate tool, its card names the downstream tool, and the result reads unverified"
+          >
+            <div aria-hidden="true">
+              <div class="la-goal-run-head">
+                <span>Local Agent</span>
+                <span>qwen3.5:4b</span>
+                <span class="la-goal-run-turn">build</span>
+              </div>
+              <ol>
+                <li class="la-goal-step" style="--step: 0">
+                  <b>You</b> validate ui/app.tui
+                </li>
+                <li class="la-goal-step" style="--step: 1">
+                  <b>MCP</b> ✓ resolve_tool → tuimark__validate · confident
+                </li>
+                <li class="la-goal-step la-goal-notice" style="--step: 2">
+                  <b>Approve</b> Call validate from server tuimark? Run by the gateway mcphub
+                </li>
+                <li class="la-goal-step" style="--step: 3">
+                  <b>MCP</b> tuimark validate · ok · 0 diagnostics
+                </li>
+                <li class="la-goal-step la-goal-notice la-goal-end" style="--step: 4">
+                  <b>Result</b> unverified — the server answered; the check is yours
+                </li>
+              </ol>
+              <div class="la-question-hint">y allow · a session · ! always · n deny · esc deny</div>
             </div>
           </div>
         </article>
