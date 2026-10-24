@@ -652,7 +652,8 @@ const IMAGE_CONTENT_TYPES: Record<string, true> = {
 
 type SearchHit = { title: string; url: string; snippet: string };
 
-/** Query SearXNG's JSON API; null means "unavailable, try the next provider".
+/** Query SearXNG's JSON API; null means "unavailable, try the next provider"
+ * and [] that it answered with nothing (the caller still tries the next).
  * The run's signal ends it at once and is rethrown rather than read as
  * "unavailable": cancelling must not go on to ask DuckDuckGo. */
 async function searxngSearch(
@@ -679,10 +680,7 @@ async function searxngSearch(
     const payload = (await response.json()) as {
       results?: { title?: string; url?: string; content?: string }[];
     };
-    // SearXNG answers 200 with no results when its engines are suspended or
-    // rate limited; that is "unavailable", not "nothing on the web".
-    if (!payload.results?.length) return null;
-    return payload.results.map((result) => ({
+    return (payload.results ?? []).map((result) => ({
       title: result.title ?? result.url ?? "(untitled)",
       url: result.url ?? "",
       snippet: result.content ?? "",
@@ -2347,11 +2345,20 @@ async function* agentTurn(
           );
           let hits: SearchHit[] | null = null;
           let provider: SearchProvider = "duckduckgo";
+          let via: string = provider;
           const tried: string[] = [];
+          // SearXNG answers 200 with no results when its engines are
+          // suspended or rate limited, so an empty answer is not trusted: the
+          // next provider is asked, and only if it fails too is "no results"
+          // reported (as SearXNG's answer, not as "nobody answered").
+          let searxngEmpty = false;
           if (searxngBase) {
             tried.push(`SearXNG at ${searxngBase}`);
-            hits = await searxngSearch(searxngBase, args.query, signal);
-            if (hits) provider = "searxng";
+            const found = await searxngSearch(searxngBase, args.query, signal);
+            if (found?.length) {
+              hits = found;
+              provider = "searxng";
+            } else searxngEmpty = found !== null;
           }
           if (!hits) {
             for (const endpoint of DDG_ENDPOINTS) {
@@ -2363,6 +2370,10 @@ async function* agentTurn(
               }
             }
           }
+          if (!hits && searxngEmpty) {
+            hits = [];
+            via = "searxng (DuckDuckGo gave no usable answer)";
+          } else via = provider;
           if (!hits)
             throw new Error(
               `web_search: no search provider answered (tried ${tried.join(", ")}). For a stable backend, run a SearXNG instance and set LOCAL_AGENT_SEARXNG_URL to its address.`,
@@ -2375,7 +2386,7 @@ async function* agentTurn(
                 )
                 .join("\n\n")
             : "No results";
-          output = capOutput(`${list}\n\nvia ${provider}`, outputLimit, "");
+          output = capOutput(`${list}\n\nvia ${via}`, outputLimit, "");
         } else if (name === "task") {
           const args = TaskArgs.parse(call.function.arguments);
           yield* emitStart();

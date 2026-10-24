@@ -1495,3 +1495,34 @@ test("each DuckDuckGo attempt gets its own timeout, so a timed-out first one doe
     await run.cleanup();
   }
 });
+
+test("web_search reports no results, not a dead backend, when SearXNG answered empty and DuckDuckGo gave nothing", async () => {
+  const searxng = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch: () => Response.json({ results: [] }),
+  });
+  process.env.LOCAL_AGENT_SEARXNG_URL = searxng.url.origin;
+  stubFetch((url) =>
+    url.startsWith("https://lite.duckduckgo.com/lite/") ||
+    url.startsWith("https://html.duckduckgo.com/html/")
+      ? ddgCaptcha()
+      : undefined,
+  );
+  const run = await session([
+    { name: "web_search", arguments: { query: "bun test" } },
+  ]);
+  try {
+    expect(run.results.map((result) => result.status)).toEqual(["succeeded"]);
+    const output = run.output(0);
+    expect(output).toBe(
+      "No results\n\nvia searxng (DuckDuckGo gave no usable answer)",
+    );
+    expect(output).not.toContain("no search provider answered");
+  } finally {
+    restoreFetch();
+    delete process.env.LOCAL_AGENT_SEARXNG_URL;
+    await searxng.stop(true);
+    await run.cleanup();
+  }
+});
