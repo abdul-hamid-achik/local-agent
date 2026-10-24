@@ -32,6 +32,37 @@ describe("MCP adapter boundary", () => {
     ).rejects.toThrow("credentials or fragments");
   });
 
+  test("a command that does not start says how to fix it", async () => {
+    const reason = (transport: Record<string, unknown>) =>
+      connectMcp({
+        name: "x",
+        transport: { kind: "stdio", ...transport },
+      } as never).then(
+        () => "connected",
+        (error: Error) => error.message,
+      );
+    // Bare `bun` runs in the shell, not with the server's empty PATH.
+    const bun = Bun.which("bun");
+    expect(await reason({ command: "bun" })).toBe(
+      bun
+        ? `"bun" is not on its PATH (empty: its env sets none); use "command": "${bun}" or add its directory to env.PATH`
+        : `"bun" is not on its PATH (empty: its env sets none); give its full path`,
+    );
+    expect(
+      await reason({ command: "no-such-mcp-cmd", env: { PATH: "/usr/bin" } }),
+    ).toBe(
+      `"no-such-mcp-cmd" is not on the PATH its env sets; give its full path`,
+    );
+    expect(await reason({ command: "/no/such/mcp" })).toBe(
+      `"/no/such/mcp" does not exist`,
+    );
+    expect(await reason({ command: "/bin/sh", cwd: "/no/such/dir" })).toBe(
+      `its cwd "/no/such/dir" does not exist`,
+    );
+    // Every reason fits the 200 characters a failed server's line keeps.
+    expect((await reason({ command: "bun" })).length).toBeLessThan(200);
+  });
+
   test("validates strict JSON server configuration", () => {
     expect(() =>
       McpServerConfigSchema.parse({

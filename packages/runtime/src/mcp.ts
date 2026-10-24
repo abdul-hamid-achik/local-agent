@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 import {
   type CallToolResult,
@@ -305,8 +306,39 @@ export async function connectMcp(
     };
   } catch (error) {
     await client.close().catch(() => undefined);
+    if (config.transport.kind === "stdio")
+      throw notStarted(config.transport, error) ?? error;
     throw error;
   }
+}
+
+/**
+ * A short, fixable reason for a stdio command that did not start. Servers
+ * start with an empty PATH unless their `env` sets one, so a bare `bun`
+ * that runs in the shell is not found here.
+ */
+function notStarted(
+  transport: { command: string; env?: Record<string, string>; cwd?: string },
+  error: unknown,
+): Error | undefined {
+  if ((error as { code?: unknown } | undefined)?.code !== "ENOENT") return;
+  const { command, cwd } = transport;
+  if (cwd && !existsSync(cwd))
+    return new Error(`its cwd "${cwd}" does not exist`, { cause: error });
+  if (command.includes("/"))
+    return existsSync(command)
+      ? undefined
+      : new Error(`"${command}" does not exist`, { cause: error });
+  const path = transport.env?.PATH
+    ? "the PATH its env sets"
+    : "its PATH (empty: its env sets none)";
+  const found = Bun.which(command);
+  return new Error(
+    found
+      ? `"${command}" is not on ${path}; use "command": "${found}" or add its directory to env.PATH`
+      : `"${command}" is not on ${path}; give its full path`,
+    { cause: error },
+  );
 }
 
 export type McpConnection = Awaited<ReturnType<typeof connectMcp>>;
