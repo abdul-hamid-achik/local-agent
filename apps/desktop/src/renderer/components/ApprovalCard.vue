@@ -5,7 +5,8 @@
       <span class="badge violet">{{ proposal.kind }}</span>
       <span v-if="proposal.kind === 'edit' || proposal.kind === 'write'" class="mono">{{ proposal.path }}</span>
       <span v-if="proposal.kind === 'write'" class="dim">{{ proposal.created ? "new file" : "replace" }}</span>
-      <span v-if="proposal.kind === 'mcp'" class="mono">{{ proposal.name }}</span>
+      <span v-if="proposal.kind === 'mcp'" class="mono">{{ proposal.inner ?? proposal.name }}</span>
+      <span v-if="proposal.kind === 'mcp' && proposal.gateway" class="dim">via {{ proposal.gateway }}</span>
     </div>
     <pre v-if="proposal.kind === 'edit' || proposal.kind === 'write'" class="diff">{{ proposal.diff }}</pre>
     <pre v-if="proposal.kind === 'command'">[{{ proposal.cwd }}]$ {{ argvText }}</pre>

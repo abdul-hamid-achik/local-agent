@@ -264,6 +264,58 @@ test("permissionRequest maps every approval kind", () => {
       argumentsJson: "{}",
     }),
   ).toEqual({ tool: "mcp", target: "fs__readFile" });
+  // Through a gateway: the tool that runs, with every other name it has.
+  expect(
+    permissionRequest({
+      kind: "mcp",
+      name: "hub__call_tool",
+      argumentsJson: "{}",
+      target: "hub__cortex__status",
+      inner: "cortex__status",
+      gateway: "hub",
+      aliases: ["hub__cortex__cortex_status"],
+    }),
+  ).toEqual({
+    tool: "mcp",
+    target: "hub__cortex__status",
+    also: ["hub__call_tool", "hub__cortex__cortex_status"],
+  });
+});
+
+test("rules match a gateway call by the tool it runs or any other name", () => {
+  const request = permissionRequest({
+    kind: "mcp",
+    name: "hub__call_tool",
+    argumentsJson: "{}",
+    target: "hub__cortex__status",
+    inner: "cortex__status",
+    gateway: "hub",
+    aliases: ["hub__cortex__cortex_status"],
+  });
+  const rule = (effect: "allow" | "deny", pattern: string) =>
+    ({ effect, tool: "mcp", pattern }) as const;
+  // An "always" saves the downstream tool, never the gateway's call_tool.
+  expect(proposeRule(request)).toEqual(rule("allow", "hub__cortex__status"));
+  for (const pattern of [
+    "hub__cortex__status",
+    "hub__cortex__*",
+    "hub__cortex__cortex_status",
+    "hub__call_tool",
+  ])
+    expect(evaluate([rule("deny", pattern)], request).effect).toBe("deny");
+  expect(evaluate([rule("allow", "hub__cortex__status")], request).effect).toBe(
+    "allow",
+  );
+  // Another downstream tool is not this one.
+  expect(evaluate([rule("allow", "hub__monitor__*")], request).effect).toBe(
+    "ask",
+  );
+  expect(
+    evaluate(
+      [rule("allow", "hub__cortex__*"), rule("deny", "hub__call_tool")],
+      request,
+    ).effect,
+  ).toBe("deny");
 });
 
 test("loadPermissionFile: missing and invalid files degrade to empty", async () => {

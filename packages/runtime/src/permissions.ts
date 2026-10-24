@@ -61,12 +61,18 @@ export interface PermissionRequest {
   tool: PermissionTool;
   /**
    * edit: workspace-relative path · run_command: the space-joined argv ·
-   * fetch: the URL hostname · web_search: the query · mcp: `SERVER__TOOL`.
+   * fetch: the URL hostname · web_search: the query · mcp: `SERVER__TOOL`
+   * (through a gateway, `GATEWAY__SERVER__TOOL`: the tool that runs).
    * Commands may also carry their argv so `proposeRule` never re-splits.
    */
   target: string;
   /** The raw argv, when the request came from a command approval. */
   argv?: readonly string[];
+  /**
+   * mcp: other names for the same call, which rules match too: the
+   * gateway's own `GATEWAY__call_tool` and the spellings it resolves alike.
+   */
+  also?: readonly string[];
 }
 
 /** The empty file: what a missing or unreadable one reads as. */
@@ -706,7 +712,9 @@ function ruleMatches(
       // A search has no host: only the catch-all can match it.
       return rule.pattern === "" || rule.pattern === "*";
     case "mcp":
-      return mcpMatches(rule.pattern, request.target);
+      return [request.target, ...(request.also ?? [])].some((name) =>
+        mcpMatches(rule.pattern, name),
+      );
   }
 }
 
@@ -908,7 +916,8 @@ export async function trustRules(
  * The runtime approval kinds as permission requests: edits and writes share
  * the "edit" family (target: the workspace-relative path), a command is its
  * joined argv (and the argv itself, so proposals never re-split), and an
- * MCP call is its `SERVER__TOOL` name.
+ * MCP call is its `SERVER__TOOL` name, or through a gateway the tool it
+ * runs, with the gateway's own name and the other spellings as `also`.
  */
 export function permissionRequest(
   proposal: ApprovalRequest,
@@ -924,7 +933,13 @@ export function permissionRequest(
         argv: proposal.argv,
       };
     case "mcp":
-      return { tool: "mcp", target: proposal.name };
+      return proposal.target
+        ? {
+            tool: "mcp",
+            target: proposal.target,
+            also: [proposal.name, ...(proposal.aliases ?? [])],
+          }
+        : { tool: "mcp", target: proposal.name };
   }
 }
 

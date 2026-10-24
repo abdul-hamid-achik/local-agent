@@ -304,7 +304,7 @@ export function createTerminalRoot(
                         : pending.value.kind === "write"
                           ? `${pending.value.created ? "Create" : "Replace"} ${terminalText(pending.value.path)}? y approve · Enter/n deny`
                           : pending.value.kind === "mcp"
-                            ? `Call ${terminalText(pending.value.name)}? y approve · Enter/n deny`
+                            ? `Call ${terminalText(pending.value.inner ?? pending.value.name)}${pending.value.gateway ? ` via ${terminalText(pending.value.gateway)}` : ""}? y approve · Enter/n deny`
                             : "Run command? y approve · Enter/n deny",
                     preview:
                       mode === "inline" &&

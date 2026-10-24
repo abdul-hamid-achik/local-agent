@@ -22,7 +22,7 @@ import {
   type Intent,
   projectInstructions,
 } from "#runtime/instructions";
-import type { McpConnection } from "#runtime/mcp";
+import { gatewayTarget, type McpConnection } from "#runtime/mcp";
 import { assertFetchTarget, type FetchPolicy, fetchPolicy } from "#runtime/net";
 import type { ExecutionEvent, Session, SessionStore } from "#runtime/session";
 import type {
@@ -1052,6 +1052,16 @@ export type ApprovalRequest =
       kind: "mcp";
       name: string;
       argumentsJson: string;
+      /**
+       * Through a gateway's call_tool: the downstream tool as
+       * `GATEWAY__SERVER__TOOL` (what rules and grants match), its short
+       * `SERVER__TOOL` form, the gateway's name, and other spellings the
+       * gateway resolves to the same tool (deny rules check them too).
+       */
+      target?: string;
+      inner?: string;
+      gateway?: string;
+      aliases?: readonly string[];
     }>;
 /** Upper bound on concurrent read-only tool calls within one assistant batch. */
 const MAX_PARALLEL_TOOLS = 4;
@@ -1738,10 +1748,29 @@ async function* agentTurn(
             const argumentsJson = JSON.stringify(call.function.arguments);
             if (Buffer.byteLength(argumentsJson) > 100_000)
               throw new Error("MCP arguments exceed 100000 bytes");
+            // A gateway call is approved as the tool it runs, read from the
+            // very arguments that will be sent.
+            const gateway = mcpConnection.gateway;
+            const via =
+              gateway?.call === name
+                ? gatewayTarget(gateway.server, argumentsJson)
+                : undefined;
+            if (gateway?.call === name && !via)
+              throw new Error(
+                `${name} needs a server and a tool name (or SERVER__TOOL)`,
+              );
             const proposal = Object.freeze({
               kind: "mcp" as const,
               name,
               argumentsJson,
+              ...(via && gateway
+                ? {
+                    target: via.target,
+                    inner: via.inner,
+                    gateway: gateway.server,
+                    aliases: Object.freeze(via.aliases),
+                  }
+                : {}),
             });
             record("approval_requested");
             const allowed = await options.approve(proposal, signal);

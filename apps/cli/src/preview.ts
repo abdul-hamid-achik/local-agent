@@ -31,7 +31,7 @@ export function approvalPreview(
     return terminalText(proposal.diff);
   if (proposal.kind === "mcp")
     return terminalText(
-      `${proposal.name}\n${proposal.argumentsJson}\nMCP effects are not verified by transport success.`,
+      `${proposal.inner && proposal.gateway ? `${proposal.inner} via ${proposal.gateway}` : proposal.name}\n${proposal.argumentsJson}\nMCP effects are not verified by transport success.`,
     );
   return terminalText(
     `$ ${proposal.argv.map(shellQuote).join(" ")}\nin ${commandWhere(proposal.cwd, root)} · timeout ${proposal.timeoutMs / 1000}s · runs with your permissions`,

@@ -484,7 +484,7 @@ function prettyJson(text: string): string {
 /** The full text the dialog previews: nothing the user approves is left out of it. */
 export function approvalText(proposal: ApprovalRequest, root?: string): string {
   if (proposal.kind === "mcp")
-    return `${proposal.name}\n${prettyJson(proposal.argumentsJson)}\n\nMCP effects are not verified by transport success.`;
+    return `${mcpCallName(proposal)}\n${prettyJson(proposal.argumentsJson)}\n\nMCP effects are not verified by transport success.`;
   return approvalPreview(proposal, root);
 }
 
@@ -573,6 +573,15 @@ function commandGrant(argv: readonly string[]): {
 }
 
 /** The server and tool of an MCP `SERVER__TOOL` name, or undefined without the separator. */
+/** The call as the user reads it: `SERVER__TOOL`, or `SERVER__TOOL via GATEWAY`. */
+export function mcpCallName(
+  proposal: Extract<ApprovalRequest, { kind: "mcp" }>,
+): string {
+  return proposal.inner && proposal.gateway
+    ? `${proposal.inner} via ${proposal.gateway}`
+    : proposal.name;
+}
+
 export function mcpParts(
   name: string,
 ): { server: string; tool: string } | undefined {
@@ -619,7 +628,11 @@ export function grantFor(proposal: ApprovalRequest): {
       };
     }
     case "mcp": {
-      return { key: `mcp:${proposal.name}`, label: cleanText(proposal.name) };
+      // Through a gateway the grant is the tool it runs, never call_tool.
+      return {
+        key: `mcp:${proposal.target ?? proposal.name}`,
+        label: cleanText(proposal.inner ?? proposal.name),
+      };
     }
   }
 }
@@ -723,9 +736,13 @@ export function approvalState(
     case "mcp": {
       // The dialog names the server, not only the joined SERVER__TOOL name:
       // which process would run this is the decision the user is making.
-      const parts = mcpParts(proposal.name);
+      // Through a gateway, that is the downstream server, not the gateway.
+      const parts = mcpParts(proposal.inner ?? proposal.name);
       const server = parts ? cleanText(parts.server) : undefined;
       const tool = cleanText(parts ? parts.tool : proposal.name);
+      const gateway = proposal.gateway
+        ? cleanText(proposal.gateway)
+        : undefined;
       return {
         ...base,
         title: clip(
@@ -733,9 +750,11 @@ export function approvalState(
           70,
         ),
         body: body(
-          server
-            ? `MCP tool ${tool} from server ${server}. Call it with the arguments below.`
-            : "Call this MCP tool with the arguments below.",
+          server && gateway
+            ? `MCP tool ${tool} from server ${server}, run by the gateway ${gateway}. Call it with the arguments below.`
+            : server
+              ? `MCP tool ${tool} from server ${server}. Call it with the arguments below.`
+              : "Call this MCP tool with the arguments below.",
         ),
         danger: true,
       };

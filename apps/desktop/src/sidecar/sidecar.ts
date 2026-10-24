@@ -234,6 +234,9 @@ async function handleAgentStart(id: number, params: unknown): Promise<void> {
               kind: "mcp",
               name: proposal.name,
               argumentsJson: proposal.argumentsJson,
+              ...(proposal.inner && proposal.gateway
+                ? { inner: proposal.inner, gateway: proposal.gateway }
+                : {}),
             },
           });
         }

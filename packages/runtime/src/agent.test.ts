@@ -97,6 +97,108 @@ test("an interrupted MCP call persists uncertainty without leaking transport err
   }
 });
 
+test("a gateway call is approved as the tool it runs, or not sent at all", async () => {
+  const root = await mkdtemp(join(tmpdir(), "local-agent-mcp-gateway-"));
+  using workspace = await Workspace.create(root);
+  const calls = [
+    { tool: "cortex__status", arguments: { deep: true } },
+    { tool: "status" },
+  ];
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    async fetch(request) {
+      const path = new URL(request.url).pathname;
+      if (path === "/api/tags")
+        return Response.json({ models: [{ name: "fixture", size: 1000 }] });
+      if (path === "/api/show")
+        return Response.json({
+          capabilities: ["completion", "tools"],
+          model_info: { "fixture.context_length": 16384 },
+        });
+      const body = (await request.json()) as { messages: { role: string }[] };
+      const step = body.messages.filter((m) => m.role === "tool").length;
+      const message =
+        step < calls.length
+          ? {
+              role: "assistant",
+              content: "",
+              tool_calls: [
+                {
+                  function: { name: "hub__call_tool", arguments: calls[step] },
+                },
+              ],
+            }
+          : { role: "assistant", content: "Finished" };
+      return new Response(`${JSON.stringify({ message, done: true })}\n`);
+    },
+  });
+  const proposals: unknown[] = [];
+  const sent: unknown[] = [];
+  try {
+    const events: AgentEvent[] = [];
+    for await (const event of runAgent(
+      resolveProvider({ OLLAMA_HOST: server.url.origin }, "fixture"),
+      [{ role: "user", content: "Check status" }],
+      {
+        workspace,
+        signal: AbortSignal.timeout(5000),
+        approve: async (proposal) => {
+          proposals.push(proposal);
+          return true;
+        },
+        mcp: [
+          {
+            tools: [
+              {
+                name: "hub__call_tool",
+                inputSchema: { type: "object" },
+                readOnly: false,
+              },
+            ],
+            gateway: { server: "hub", call: "hub__call_tool" },
+            async callTool(name, args) {
+              sent.push({ name, args });
+              return {
+                transport: "success" as const,
+                domain: "unknown" as const,
+                evidence: "unverified" as const,
+                isError: false,
+                text: "ok",
+              };
+            },
+            async close() {},
+          },
+        ],
+      },
+    ))
+      events.push(event);
+    expect(proposals).toEqual([
+      {
+        kind: "mcp",
+        name: "hub__call_tool",
+        argumentsJson: JSON.stringify(calls[0]),
+        target: "hub__cortex__status",
+        inner: "cortex__status",
+        gateway: "hub",
+        aliases: ["hub__cortex__cortex_status"],
+      },
+    ]);
+    expect(sent).toEqual([{ name: "hub__call_tool", args: calls[0] }]);
+    const results = events.filter((event) => event.type === "tool_result");
+    expect(results.map((event) => event.status)).toEqual([
+      "unverified",
+      "failed",
+    ]);
+    expect(JSON.stringify(results[1])).toContain(
+      "hub__call_tool needs a server and a tool name (or SERVER__TOOL)",
+    );
+  } finally {
+    await server.stop(true);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("admission rejects a cloud alias before sending conversation data", async () => {
   const root = await mkdtemp(join(tmpdir(), "local-agent-admission-"));
   let chatRequests = 0;

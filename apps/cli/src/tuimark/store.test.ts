@@ -605,6 +605,42 @@ test("grant matching: files shared, commands by argv prefix, MCP exact", () => {
   expect(grantsLabel(["files", "bun test"])).toBe("auto: files · bun test");
 });
 
+test("a gateway call is shown, granted and keyed as the tool it runs", () => {
+  const via = (tool: string, target: string) =>
+    ({
+      kind: "mcp",
+      name: "hub__call_tool",
+      argumentsJson: JSON.stringify({ tool, arguments: {} }),
+      target,
+      inner: target.slice("hub__".length),
+      gateway: "hub",
+      aliases: [],
+    }) as const;
+  const status = via("cortex__status", "hub__cortex__status");
+  const card = approvalState(status);
+  expect(card.title).toBe("Call status from server cortex?");
+  expect(card.body).toContain("run by the gateway hub");
+  expect(card.lines[0]?.t).toBe("cortex__status via hub");
+  expect(card.grant_hint).toBe("a allow `cortex__status` this session");
+  const grant = grantFor(status);
+  expect(grant.key).toBe("mcp:hub__cortex__status");
+  expect(grantCovers(grant, via("cortex__status", "hub__cortex__status"))).toBe(
+    true,
+  );
+  // A grant for one downstream tool never covers another, nor call_tool
+  // itself.
+  expect(grantCovers(grant, via("monitor__kill", "hub__monitor__kill"))).toBe(
+    false,
+  );
+  expect(
+    grantCovers(grant, {
+      kind: "mcp",
+      name: "hub__call_tool",
+      argumentsJson: "{}",
+    }),
+  ).toBe(false);
+});
+
 test("a truncated approval offers no session grant", () => {
   const diff = Array.from(
     { length: APPROVAL_MAX_ROWS + 10 },

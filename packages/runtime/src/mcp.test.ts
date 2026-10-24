@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { createMcpHandler, McpServer } from "@modelcontextprotocol/server";
 import { describe, expect, test } from "vitest";
 import { z } from "zod";
-import { connectMcp, McpServerConfigSchema } from "#runtime/mcp";
+import { connectMcp, gatewayTarget, McpServerConfigSchema } from "#runtime/mcp";
 
 describe("MCP adapter boundary", () => {
   test("rejects remote endpoints unless explicitly enabled", async () => {
@@ -107,4 +107,112 @@ describe("MCP adapter boundary", () => {
       await handler.close();
     }
   }, 15_000);
+
+  test("detects a gateway's call_tool and bounds each call by the server's timeout", async () => {
+    const handler = createMcpHandler(
+      () => {
+        const server = new McpServer({ name: "hub", version: "1.0.0" });
+        server.registerTool(
+          "call_tool",
+          {
+            inputSchema: {
+              server: z.string().optional(),
+              tool: z.string(),
+              arguments: z.record(z.string(), z.unknown()).optional(),
+            },
+          },
+          async ({ tool }) => ({ content: [{ type: "text", text: tool }] }),
+        );
+        server.registerTool("slow", { inputSchema: {} }, async () => {
+          await Bun.sleep(3_000);
+          return { content: [{ type: "text" as const, text: "late" }] };
+        });
+        return server;
+      },
+      { responseMode: "json" },
+    );
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch: (request) => handler.fetch(request),
+    });
+    try {
+      const adapter = await connectMcp({
+        name: "hub",
+        timeoutMs: 1_000,
+        transport: { kind: "http", url: `${server.url}mcp` },
+      });
+      try {
+        expect(adapter.gateway).toEqual({
+          server: "hub",
+          call: "hub__call_tool",
+        });
+        const started = Date.now();
+        await expect(adapter.callTool("hub__slow", {})).rejects.toThrow();
+        expect(Date.now() - started).toBeLessThan(2_500);
+      } finally {
+        await adapter.close();
+      }
+    } finally {
+      server.stop(true);
+      await handler.close();
+    }
+  }, 15_000);
+
+  test("a timeout outside 1 s to 10 min is a configuration error", () => {
+    for (const timeoutMs of [999, 600_001, 1.5])
+      expect(() =>
+        McpServerConfigSchema.parse({
+          name: "x",
+          timeoutMs,
+          transport: { kind: "stdio", command: "bun" },
+        }),
+      ).toThrow();
+  });
+});
+
+describe("gatewayTarget", () => {
+  // The same rules as mcphub's call_tool: a missing server splits the tool
+  // at its first `__`, a given server strips its own prefix from the tool.
+  test("every spelling of one downstream tool has one identity", () => {
+    const status = {
+      target: "hub__cortex__status",
+      inner: "cortex__status",
+      aliases: ["hub__cortex__cortex_status"],
+    };
+    for (const args of [
+      { server: "cortex", tool: "status" },
+      { tool: "cortex__status" },
+      { server: "cortex", tool: "cortex__status" },
+      { server: "", tool: "cortex__status", arguments: { deep: true } },
+    ])
+      expect(gatewayTarget("hub", JSON.stringify(args))).toEqual(status);
+    // A self-prefixed name keeps its spelling; the short one is its alias.
+    expect(
+      gatewayTarget(
+        "hub",
+        JSON.stringify({ tool: "hitspec__hitspec_search_web" }),
+      ),
+    ).toEqual({
+      target: "hub__hitspec__hitspec_search_web",
+      inner: "hitspec__hitspec_search_web",
+      aliases: ["hub__hitspec__search_web"],
+    });
+  });
+
+  test("arguments that name no server and tool have no identity", () => {
+    for (const json of [
+      "not json",
+      "null",
+      "[]",
+      JSON.stringify({ tool: "status" }),
+      JSON.stringify({ tool: 5 }),
+      JSON.stringify({ server: "cortex" }),
+      JSON.stringify({ tool: "__status" }),
+      JSON.stringify({ tool: "cortex__" }),
+      JSON.stringify({ server: "a b", tool: "status" }),
+      JSON.stringify({ server: "cortex", tool: "st/atus" }),
+    ])
+      expect(gatewayTarget("hub", json)).toBeUndefined();
+  });
 });

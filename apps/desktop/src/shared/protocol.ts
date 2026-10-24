@@ -127,7 +127,14 @@ export type AgentStreamEvent =
             diff: string;
           }
         | { kind: "command"; argv: string[]; timeout_ms: number; cwd: string }
-        | { kind: "mcp"; name: string; argumentsJson: string };
+        | {
+            kind: "mcp";
+            name: string;
+            argumentsJson: string;
+            /** Through a gateway: the `SERVER__TOOL` it runs, and its name. */
+            inner?: string;
+            gateway?: string;
+          };
     }
   | { type: "run_error"; message: string }
   | { type: "run_done" };
