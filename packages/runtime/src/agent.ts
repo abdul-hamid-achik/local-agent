@@ -1641,10 +1641,10 @@ export type SessionContext = { store: SessionStore; state: Session };
 
 export type Approval = boolean | "sandbox";
 
-/** Told to the model with a sandboxed command that failed. */
 /** A command stopped by its timeout or a cancel, its process group gone. */
 const STOPPED_NOTE =
-  "The command was stopped before it finished and may have made partial changes: check before running it again.";
+  "The command was stopped before it finished and may have made partial changes or left a background process running: check before running it again.";
+/** Told to the model with a sandboxed command that failed. */
 const SANDBOX_NOTE =
   "This ran in the command sandbox: no network at all (not even this machine: no downloads, no DNS, no test server of its own), no writes outside the workspace (nor to any .git folder, .gitattributes or .local-agent), no reads in the home folder beyond toolchains, their caches, ~/.gitconfig and ~/.tool-versions. A failure caused by that (Operation not permitted, a refused connection) fails the same way on a retry: tell the user, who can run it outside the sandbox.";
 

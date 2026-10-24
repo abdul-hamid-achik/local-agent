@@ -84,7 +84,7 @@ const RECONCILIATIONS_DDL = `
     evidence_sha256 TEXT NOT NULL CHECK (length(evidence_sha256) = 64),
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
   );
-  CREATE TRIGGER execution_reconciliations_scope_guard BEFORE INSERT ON execution_reconciliations WHEN NOT EXISTS (SELECT 1 FROM execution_events WHERE id = NEW.latest_event_id AND session_id = NEW.session_id AND workspace_id = NEW.workspace_id AND execution_id = NEW.execution_id AND event_type = NEW.latest_event_type) BEGIN SELECT RAISE(ABORT, 'reconciliation does not match its execution'); END;
+  CREATE TRIGGER execution_reconciliations_scope_guard BEFORE INSERT ON execution_reconciliations WHEN NOT EXISTS (SELECT 1 FROM execution_events e WHERE e.id = NEW.latest_event_id AND e.session_id = NEW.session_id AND e.workspace_id = NEW.workspace_id AND e.execution_id = NEW.execution_id AND e.event_type = NEW.latest_event_type) OR EXISTS (SELECT 1 FROM execution_events later WHERE later.execution_id = NEW.execution_id AND later.id > NEW.latest_event_id) BEGIN SELECT RAISE(ABORT, 'reconciliation does not match its execution'); END;
   CREATE TRIGGER execution_reconciliations_no_update BEFORE UPDATE ON execution_reconciliations BEGIN SELECT RAISE(ABORT, 'reconciliations are append-only'); END;
   CREATE TRIGGER execution_reconciliations_no_delete BEFORE DELETE ON execution_reconciliations BEGIN SELECT RAISE(ABORT, 'reconciliations are append-only'); END;
 `;
@@ -549,6 +549,19 @@ export class SessionStore {
         "SELECT e.* FROM execution_events e JOIN (SELECT execution_id, MAX(id) id FROM execution_events WHERE session_id = ? AND workspace_id = ? GROUP BY execution_id) latest ON latest.id = e.id WHERE e.event_type IN ('requested','approval_requested','approved','started') ORDER BY e.id",
       )
       .all(sessionId, workspaceId);
+  }
+
+  /** The latest event of each execution of one canonical call id. */
+  executionsOfCall(
+    sessionId: number,
+    workspaceId: string,
+    canonicalCallId: string,
+  ): EventRow[] {
+    return this.db
+      .query<EventRow, [number, string, string]>(
+        "SELECT e.* FROM execution_events e JOIN (SELECT execution_id, MAX(id) id FROM execution_events WHERE session_id = ? AND workspace_id = ? AND canonical_call_id = ? GROUP BY execution_id) latest ON latest.id = e.id ORDER BY e.id",
+      )
+      .all(sessionId, workspaceId, canonicalCallId);
   }
 
   /** The reconciliation of an execution in this session, if any. */

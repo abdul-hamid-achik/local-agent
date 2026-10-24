@@ -382,6 +382,9 @@ test("/recover lists, or records a conclusion for one call; anything else is ref
     "/recover 1",
     "/recover 1 maybe",
     "/recover 1.5 applied",
+    "/recover 0x1 applied",
+    "/recover 1e0 applied",
+    "/recover 01 applied",
   ])
     expect(runSlash(bad, state), bad).toEqual({
       status:

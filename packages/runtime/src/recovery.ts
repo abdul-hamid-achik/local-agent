@@ -113,14 +113,21 @@ const terminal = (row: EventRow, detail: string): ExecutionEvent => ({
   detail,
 });
 
-/** What closing a session's interrupted calls takes. */
-type Settlement = { events: ExecutionEvent[]; results: Message[] };
+/**
+ * What closing a session's interrupted calls takes; `answered` says whether
+ * the call a conclusion is about got its result.
+ */
+type Settlement = {
+  events: ExecutionEvent[];
+  results: Message[];
+  answered: boolean;
+};
 
 /**
  * Plans the closing of the last assistant message's unanswered calls, in
  * order (ADR-0006 §2): one with no `started` event never ran, a read-only
  * one that started changed nothing, and one that may have had an effect
- * stops the plan unless a reconciliation concluded about it. Undefined
+ * stops the plan unless it is the call `concluded` is about. Undefined
  * when there is nothing to close, or the ledger does not match the calls
  * exactly (then nothing is changed and the resume check reports it).
  */
@@ -131,22 +138,49 @@ function planSettlement(
 ): Settlement | undefined {
   const pending = unanswered(session.messages);
   if (!pending) return undefined;
-  const open = store.listOpenExecutions(session.id, session.workspaceId);
-  if (new Set(open.map((row) => row.run_id)).size > 1) return undefined;
+  // A started call a reconciliation concluded about is settled: a pending
+  // one gets its result in the same transaction (reconcileExecution), so
+  // what is left of it here is history, not this interruption.
+  const open = store
+    .listOpenExecutions(session.id, session.workspaceId)
+    .filter(
+      (row) => !(row.event_type === "started" && storedConclusion(store, row)),
+    );
+  const runs = new Set(open.map((row) => row.run_id));
+  if (runs.size > 1) return undefined;
+  const [run] = runs;
   const used = new Set<number>();
-  const plan: Settlement = { events: [], results: [] };
+  const plan: Settlement = { events: [], results: [], answered: false };
   for (const [offset, call] of pending.calls.entries()) {
     const ordinal = pending.first + offset + 1;
     // One run's canonical call ids are unique (the store refuses a repeat).
-    const row = open.find(
-      (candidate) =>
-        candidate.canonical_call_id === call.id &&
-        candidate.tool_name === call.function.name &&
-        candidate.ordinal === ordinal,
-    );
+    const matches = (row: EventRow) =>
+      row.canonical_call_id === call.id &&
+      row.tool_name === call.function.name &&
+      row.ordinal === ordinal;
+    const row = open.find(matches);
     if (!row) {
-      // `started` is committed before a call is dispatched: no record,
-      // no dispatch.
+      // `started` is committed before a call is dispatched: no record, no
+      // dispatch. A record that has ended is a ledger the history does not
+      // match, and no result is invented for it, unless the user concluded
+      // about it (an unknown outcome the history never got).
+      const ended = call.id
+        ? store
+            .executionsOfCall(session.id, session.workspaceId, call.id)
+            .filter(
+              (other) =>
+                matches(other) && (run === undefined || other.run_id === run),
+            )
+        : [];
+      if (
+        concluded &&
+        ended.some((other) => other.execution_id === concluded.executionId)
+      ) {
+        plan.answered = true;
+        plan.results.push(concludedResult(call, concluded));
+        continue;
+      }
+      if (ended.length) return undefined;
       plan.results.push(toolResult(call, "failed", NOT_RUN));
       continue;
     }
@@ -158,39 +192,46 @@ function planSettlement(
       plan.events.push(terminal(row, "interrupted while running"));
       plan.results.push(toolResult(call, "failed", READ_INTERRUPTED));
     } else {
-      const reconciled =
-        concluded?.executionId === row.execution_id
-          ? concluded
-          : storedConclusion(store, row);
       // Results follow their calls in order: the rest waits for it.
-      if (!reconciled) break;
-      plan.results.push(
-        toolResult(
-          call,
-          reconciled.disposition === "effect_applied" ? "unverified" : "failed",
-          `The session stopped while this call ran, so it has no result. The user checked: ${CONCLUSION[reconciled.disposition]}.${reconciled.note ? ` Their note: ${reconciled.note}` : ""}`,
-        ),
-      );
+      if (concluded?.executionId !== row.execution_id) break;
+      plan.answered = true;
+      plan.results.push(concludedResult(call, concluded));
     }
   }
   // An open execution no unanswered call accounts for is not this
-  // session's interruption; a concluded one is accounted for.
+  // session's interruption, unless it is the one being concluded.
   if (
     open.some(
-      (row) =>
-        !used.has(row.id) &&
-        !(row.event_type === "started" && storedConclusion(store, row)),
+      (row) => !used.has(row.id) && row.execution_id !== concluded?.executionId,
     )
   )
     return undefined;
   return plan;
 }
 
+/** The result of a call that has none, with what the user concluded. */
+const concludedResult = (
+  call: ToolCall,
+  concluded: { disposition: Disposition; note: string },
+) =>
+  toolResult(
+    call,
+    concluded.disposition === "effect_applied" ? "unverified" : "failed",
+    `The session stopped while this call ran, so it has no result. The user checked: ${CONCLUSION[concluded.disposition]}.${concluded.note ? ` Their note: ${concluded.note}` : ""}`,
+  );
+
 function storedConclusion(store: SessionStore, row: EventRow) {
   const found = store.reconciliationOf(row.session_id, row.execution_id);
-  return found && found.latest_event_id === row.id
-    ? { disposition: found.disposition, note: found.note }
-    : undefined;
+  return found && found.latest_event_id === row.id ? found : undefined;
+}
+
+/** Whether a call of the history has no result there. */
+function awaitsResult(messages: readonly Message[], callId: string): boolean {
+  return (
+    messages.some((message) =>
+      message.tool_calls?.some((call) => call.id === callId),
+    ) && !messages.some((message) => message.tool_call_id === callId)
+  );
 }
 
 /**
@@ -252,12 +293,14 @@ export function recoveryItems(
   store: SessionStore,
   session: Session,
 ): RecoveryItem[] {
+  // By id and name, the latest holding them: a provider may repeat ids
+  // across turns.
   const calls = new Map<string, ToolCall>();
   for (const message of session.messages)
     for (const call of message.tool_calls ?? [])
-      if (call.id) calls.set(call.id, call);
+      if (call.id) calls.set(`${call.id}\0${call.function.name}`, call);
   return store.listHazards(session.id, session.workspaceId).map((row) => {
-    const call = calls.get(row.canonical_call_id);
+    const call = calls.get(`${row.canonical_call_id}\0${row.tool_name}`);
     const argv = call?.function.arguments.argv;
     const summary = Array.isArray(argv)
       ? argv.map(String).join(" ")
@@ -323,6 +366,18 @@ export async function reconcileExecution(
       disposition: conclusion.disposition,
       note,
     });
+    // A call with no result gets one with the conclusion, or nothing is
+    // recorded: a hidden hazard whose call stays unanswered is a session
+    // that can neither continue nor be recovered.
+    if (
+      awaitsResult(session.messages, hazard.canonical_call_id) &&
+      !plan?.answered
+    )
+      throw new Error(
+        plan
+          ? "Record what happened to the earlier call first: a session answers its calls in order"
+          : "This session's history does not match its ledger here, so nothing was recorded",
+      );
     const state = store.recover({
       sessionId: session.id,
       workspaceId: session.workspaceId,

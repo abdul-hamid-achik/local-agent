@@ -668,11 +668,35 @@ test("a command stopped by its timeout reports partial changes, and the turn goe
     };
     expect(result).toMatchObject({ timedOut: true, cleanupIncomplete: false });
     expect(result.note).toBe(
-      "The command was stopped before it finished and may have made partial changes: check before running it again.",
+      "The command was stopped before it finished and may have made partial changes or left a background process running: check before running it again.",
     );
     // The model was asked again, with the result: no uncertain stop.
     expect(run.bodies).toHaveLength(2);
   } finally {
     await run.cleanup();
+  }
+});
+
+test("a command that leaves a process holding its output has an unknown outcome", async () => {
+  // The child leaves the process group (setsid) and keeps stdout open, so
+  // the runner cannot see the command end: the turn stops there.
+  const script =
+    "use POSIX; if (fork) { exit 0 } POSIX::setsid(); sleep 2; exit 0";
+  let root = "";
+  try {
+    await expect(
+      session(
+        [{ name: "run_command", arguments: { argv: ["perl", "-e", script] } }],
+        "build",
+        () => true,
+        {
+          seed: async (dir) => {
+            root = dir;
+          },
+        },
+      ),
+    ).rejects.toThrow("Tool outcome is uncertain");
+  } finally {
+    if (root) await rm(root, { recursive: true, force: true });
   }
 });

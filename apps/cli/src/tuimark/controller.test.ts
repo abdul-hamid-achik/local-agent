@@ -3253,7 +3253,35 @@ test("/recover waits while a turn runs, and a failed turn names it when a call i
   release();
   await client.idle();
   expect(store(ui).status).toBe(
-    "The MCP server failed after the call was sent /recover reviews it.",
+    "The MCP server failed after the call was sent. /recover reviews it.",
+  );
+});
+
+test("a send queued behind a turn that leaves a call unknown goes back to the composer", async () => {
+  const session = fakeSession("aaa111", []);
+  const items: RecoveryItem[] = [];
+  const { sessions } = recoverable(session, items);
+  let release: () => void = () => {};
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const { ui, client, seen } = setup(
+    quiet(async () => {
+      await gate;
+      items.push(unknownCall("e1", "make deploy"));
+    }),
+    { session, sessions },
+  );
+  await ui.fire("send", "deploy it");
+  store(ui).draft = "and then report";
+  await ui.fire("send", "and then report");
+  expect(store(ui).status).toBe("Queued: and then report");
+  release();
+  await client.idle();
+  expect(seen).toHaveLength(1);
+  expect(store(ui).draft).toBe("and then report");
+  expect(store(ui).status).toBe(
+    "1 call has an unknown outcome · /recover to review before continuing",
   );
 });
 

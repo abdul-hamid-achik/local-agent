@@ -329,6 +329,21 @@ function untrackGroup(pid: number): void {
   if (liveGroups.size === 0) removeHooks();
 }
 
+/**
+ * Whether a signalled group is gone within the drain grace: polled with
+ * timers, so the event loop reaps the leader meanwhile (a zombie still
+ * counts as a member).
+ */
+async function groupGone(pid: number | undefined): Promise<boolean> {
+  if (!pid) return true;
+  const deadline = Date.now() + DRAIN_GRACE_MS;
+  while (groupAlive(pid)) {
+    if (Date.now() >= deadline) return false;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  return true;
+}
+
 function killGroup(child: ChildProcess, signal: NodeJS.Signals): boolean {
   if (!child.pid) return false;
   try {
@@ -471,15 +486,26 @@ export async function executeApprovedCommand(
   let timedOut = false;
   let cancelled = false;
   let terminationReason: "timeout" | "cancel" | undefined;
-  let groupCleanup: Promise<void> | undefined;
+  let groupCleanup: Promise<boolean> | undefined;
   let timeoutTimer: ReturnType<typeof setTimeout> | undefined;
   let drainTimer: ReturnType<typeof setTimeout> | undefined;
   let terminationTimer: ReturnType<typeof setTimeout> | undefined;
   let forceFinish: (() => void) | undefined;
 
-  const cleanupGroup = (): Promise<void> => {
+  /**
+   * Stops the command's process group: SIGTERM, then SIGKILL for what
+   * outlives the grace period. True when nothing of the group is left;
+   * false when that cannot be confirmed (a signal was refused, or the group
+   * outlived SIGKILL). A descendant that left the group (setsid, a daemon)
+   * is not seen, as for any command that finishes.
+   */
+  const cleanupGroup = (): Promise<boolean> => {
     if (groupCleanup) return groupCleanup;
     groupCleanup = new Promise((resolve) => {
+      const done = (gone: boolean) => {
+        if (child.pid) untrackGroup(child.pid);
+        resolve(gone);
+      };
       let groupExists = false;
       try {
         groupExists = killGroup(child, "SIGTERM");
@@ -489,24 +515,28 @@ export async function executeApprovedCommand(
         } catch {
           // The process may have exited between group lookup and fallback.
         }
+        // The group could not be signalled (EPERM): it may be left.
+        done(false);
+        return;
       }
       if (!groupExists) {
-        if (child.pid) untrackGroup(child.pid);
-        resolve();
+        done(true);
         return;
       }
       setTimeout(() => {
-        try {
-          killGroup(child, "SIGKILL");
-        } catch {
+        // Only a group that outlived SIGTERM: a pid that is gone may be
+        // reused.
+        if (child.pid && groupAlive(child.pid))
           try {
-            child.kill("SIGKILL");
+            killGroup(child, "SIGKILL");
           } catch {
-            // The process group may have disappeared during escalation.
+            try {
+              child.kill("SIGKILL");
+            } catch {
+              // The process group may have disappeared during escalation.
+            }
           }
-        }
-        if (child.pid) untrackGroup(child.pid);
-        resolve();
+        void groupGone(child.pid).then(done);
       }, KILL_GRACE_MS);
     });
     return groupCleanup;
@@ -559,7 +589,7 @@ export async function executeApprovedCommand(
         child.stderr?.destroy();
         child.unref();
       }
-      await cleanupGroup();
+      const gone = await cleanupGroup();
       resolve({
         output: Buffer.concat(chunks).toString("utf8"),
         exitCode: leaderExitCode,
@@ -567,7 +597,7 @@ export async function executeApprovedCommand(
         timedOut,
         cancelled,
         truncated: outputState.truncated,
-        cleanupIncomplete,
+        cleanupIncomplete: cleanupIncomplete || !gone,
         ...(sandbox ? { sandboxed: true as const } : {}),
       });
     };

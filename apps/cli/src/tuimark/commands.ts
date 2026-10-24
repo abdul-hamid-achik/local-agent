@@ -268,10 +268,9 @@ export function runSlash(text: string, state: CommandState): CommandOutcome {
   if (recover) {
     if (recover[1] === undefined)
       return { status: "Recovery", recover: "list" };
-    const index = Number(recover[1]);
+    const index = /^[1-9]\d{0,5}$/.test(recover[1]) ? Number(recover[1]) : 0;
     const conclusion = recover[2]?.toLowerCase();
     if (
-      !Number.isSafeInteger(index) ||
       index < 1 ||
       (conclusion !== "applied" &&
         conclusion !== "not-applied" &&

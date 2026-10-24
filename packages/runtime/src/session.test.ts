@@ -166,6 +166,47 @@ test("migrates v1 execution history to v3 without inventing identity metadata", 
   store.close();
 });
 
+test("migrates a v2 database to v3: its history kept, reconciliations added, reopening a no-op", async () => {
+  const { db, workspace } = await fixture();
+  const created = await SessionStore.open(db);
+  const session = await created.createSession(workspace, [
+    { role: "user", content: "kept" },
+  ]);
+  created.close();
+  // Back to what a v2 database is: no reconciliations table.
+  const downgrade = new Database(db);
+  downgrade.exec(
+    "DROP TABLE execution_reconciliations; UPDATE schema_meta SET version = 2;",
+  );
+  downgrade.close();
+  for (let open = 0; open < 2; open++) {
+    const store = await SessionStore.open(db);
+    expect(
+      (await store.loadSession(session.publicId, workspace)).messages,
+    ).toEqual([{ role: "user", content: "kept" }]);
+    const raw = (store as unknown as { db: Database }).db;
+    expect(
+      raw
+        .query<{ version: number }, []>("SELECT version FROM schema_meta")
+        .get()?.version,
+    ).toBe(3);
+    expect(
+      raw
+        .query<{ name: string }, []>(
+          "SELECT name FROM sqlite_master WHERE name LIKE 'execution_reconciliations%' ORDER BY name",
+        )
+        .all()
+        .map((row) => row.name),
+    ).toEqual([
+      "execution_reconciliations",
+      "execution_reconciliations_no_delete",
+      "execution_reconciliations_no_update",
+      "execution_reconciliations_scope_guard",
+    ]);
+    store.close();
+  }
+});
+
 test("enforces append-only lifecycle and projects effect hazards", async () => {
   const { db, workspace } = await fixture();
   const store = await SessionStore.open(db);

@@ -553,3 +553,242 @@ test("an MCP call whose outcome is unknown can be reconciled, and the next turn 
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("a call reconciled in an earlier run does not stop a later run's interruption from settling", async () => {
+  const { root, store, cleanup } = await fixture();
+  try {
+    const first = await interrupted(store, root, [call("c1", "run_command")]);
+    record(
+      store,
+      execution(first, "e1", "c1", "run_command", 1, "effectful", "run-1"),
+      "requested",
+      "started",
+    );
+    const reconciled = await reconcileExecution(store, first.publicId, root, {
+      executionId: "e1",
+      disposition: "effect_applied",
+    });
+    expect(reconciled.closed).toBe(1);
+    // A later turn stops in a read, and another in a command.
+    const later = store.saveStateCAS(
+      first.id,
+      first.workspaceId,
+      reconciled.state.revision,
+      [
+        ...reconciled.state.messages,
+        { role: "user", content: "again" },
+        {
+          role: "assistant",
+          content: "",
+          tool_calls: [call("c2", "read"), call("c3", "run_command")],
+        },
+      ],
+    );
+    record(
+      store,
+      execution(later, "e2", "c2", "read", 1, "read_only", "run-2"),
+      "requested",
+      "started",
+    );
+    record(
+      store,
+      execution(later, "e3", "c3", "run_command", 2, "effectful", "run-2"),
+      "requested",
+      "started",
+    );
+    expect(recoveryItems(store, later).map((item) => item.executionId)).toEqual(
+      ["e3"],
+    );
+    const { state, closed } = await reconcileExecution(
+      store,
+      later.publicId,
+      root,
+      { executionId: "e3", disposition: "effect_compensated" },
+    );
+    expect(closed).toBe(2);
+    expect(output(state.messages.at(-2))).toContain("It changed nothing");
+    expect(output(state.messages.at(-1))).toContain("its change was undone");
+    expect(sessionProblem(store, state)).toBeUndefined();
+  } finally {
+    await cleanup();
+  }
+});
+
+test("a conclusion is refused, and nothing recorded, when its call could not get its result", async () => {
+  const { root, store, cleanup } = await fixture();
+  try {
+    const session = await interrupted(store, root, [
+      call("c1", "run_command"),
+      call("c2", "write"),
+    ]);
+    for (const [id, callId, name, ordinal] of [
+      ["e1", "c1", "run_command", 1],
+      ["e2", "c2", "write", 2],
+    ] as const)
+      record(
+        store,
+        execution(session, id, callId, name, ordinal, "effectful"),
+        "requested",
+        "started",
+      );
+    // Results follow their calls in order.
+    await expect(
+      reconcileExecution(store, session.publicId, root, {
+        executionId: "e2",
+        disposition: "effect_applied",
+      }),
+    ).rejects.toThrow("Record what happened to the earlier call first");
+    expect(store.reconciliationOf(session.id, "e2")).toBeUndefined();
+    const first = await reconcileExecution(store, session.publicId, root, {
+      executionId: "e1",
+      disposition: "effect_not_applied",
+    });
+    expect(first.closed).toBe(1);
+    const second = await reconcileExecution(store, session.publicId, root, {
+      executionId: "e2",
+      disposition: "effect_applied",
+    });
+    expect(second.closed).toBe(1);
+    expect(sessionProblem(store, second.state)).toBeUndefined();
+    // A ledger the history does not match: no conclusion is hidden there.
+    const mixed = await interrupted(store, root, [call("c9", "run_command")]);
+    record(
+      store,
+      execution(mixed, "e9", "c9", "run_command", 1, "effectful", "run-1"),
+      "requested",
+      "started",
+    );
+    record(
+      store,
+      execution(mixed, "e10", "c10", "read", 1, "read_only", "run-2"),
+      "requested",
+    );
+    await expect(
+      reconcileExecution(store, mixed.publicId, root, {
+        executionId: "e9",
+        disposition: "effect_applied",
+      }),
+    ).rejects.toThrow("does not match its ledger");
+    expect(store.reconciliationOf(mixed.id, "e9")).toBeUndefined();
+    expect(store.listHazards(mixed.id, mixed.workspaceId)).toHaveLength(1);
+  } finally {
+    await cleanup();
+  }
+});
+
+test("a call the ledger ended is never told it did not run; an unknown one is answered by its conclusion", async () => {
+  const { root, store, cleanup } = await fixture();
+  try {
+    const completed = await interrupted(store, root, [call("c1", "write")]);
+    record(
+      store,
+      execution(completed, "e1", "c1", "write", 1, "effectful"),
+      "requested",
+      "started",
+      "completed",
+    );
+    expect(settleInterrupted(store, completed)).toEqual({
+      state: completed,
+      closed: 0,
+    });
+    const unknown = await interrupted(store, root, [
+      call("c2", "mcp_deploy"),
+      call("c3", "read"),
+    ]);
+    record(
+      store,
+      execution(unknown, "e2", "c2", "mcp_deploy", 1, "unknown"),
+      "requested",
+      "started",
+      "outcome_unknown",
+    );
+    expect(settleInterrupted(store, unknown).closed).toBe(0);
+    expect(recoveryItems(store, unknown)).toMatchObject([
+      { executionId: "e2", state: "unknown" },
+    ]);
+    const { state, closed } = await reconcileExecution(
+      store,
+      unknown.publicId,
+      root,
+      { executionId: "e2", disposition: "effect_applied", note: "deployed" },
+    );
+    expect(closed).toBe(2);
+    expect(
+      JSON.parse(state.messages[2]?.content ?? "{}") as { status: string },
+    ).toMatchObject({ status: "unverified" });
+    expect(output(state.messages[3])).toContain("Not run");
+    expect(sessionProblem(store, state)).toBeUndefined();
+  } finally {
+    await cleanup();
+  }
+});
+
+test("the table refuses a conclusion about an event the execution has moved past", async () => {
+  const { root, db, store, cleanup } = await fixture();
+  try {
+    const session = await interrupted(store, root, [call("c1", "run_command")]);
+    record(
+      store,
+      execution(session, "e1", "c1", "run_command", 1, "effectful"),
+      "requested",
+      "started",
+      "outcome_unknown",
+    );
+    const writer = new Database(db);
+    const started = writer
+      .query<{ id: number }, []>(
+        "SELECT id FROM execution_events WHERE execution_id = 'e1' AND event_type = 'started'",
+      )
+      .get();
+    const insert = (eventId: number, type: string) =>
+      writer
+        .query(
+          "INSERT INTO execution_reconciliations(session_id, workspace_id, execution_id, latest_event_id, latest_event_type, disposition, actor, evidence_json, evidence_sha256) VALUES (?, ?, 'e1', ?, ?, 'effect_applied', 'local user', '{}', ?)",
+        )
+        .run(session.id, session.workspaceId, eventId, type, "0".repeat(64));
+    expect(() => insert(started?.id ?? 0, "started")).toThrow(
+      "reconciliation does not match its execution",
+    );
+    writer.close();
+  } finally {
+    await cleanup();
+  }
+});
+
+test("a call id an earlier run used again is matched within its own run", async () => {
+  const { root, store, cleanup } = await fixture();
+  try {
+    const created = await store.createSession(root);
+    // Run 1 read with provider id "call_0" and got its result; run 2's
+    // provider used "call_0" again and stopped before recording it.
+    const session = store.saveStateCAS(created.id, created.workspaceId, 0, [
+      { role: "user", content: "go" },
+      { role: "assistant", content: "", tool_calls: [call("call_0", "read")] },
+      { role: "tool", tool_name: "read", tool_call_id: "call_0", content: "x" },
+      { role: "user", content: "again" },
+      {
+        role: "assistant",
+        content: "",
+        tool_calls: [call("call_0", "read"), call("call_1", "write")],
+      },
+    ]);
+    record(
+      store,
+      execution(session, "e1", "call_0", "read", 1, "read_only", "run-1"),
+      "requested",
+      "started",
+      "completed",
+    );
+    record(
+      store,
+      execution(session, "e2", "call_1", "write", 2, "effectful", "run-2"),
+      "requested",
+    );
+    const { state, closed } = settleInterrupted(store, session);
+    expect(closed).toBe(2);
+    expect(output(state.messages[5])).toContain("Not run");
+    expect(output(state.messages[6])).toContain("Not run");
+  } finally {
+    await cleanup();
+  }
+});

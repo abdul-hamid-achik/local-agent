@@ -2372,24 +2372,38 @@ export class TuimarkClient {
       return;
     }
     if (!raw.trim()) return;
-    this.remember(raw);
     if (isCommand) {
+      this.remember(raw);
       await this.runCommand(command, true);
       return;
     }
-    // The runtime refuses a turn past an unknown outcome: say so here, the
-    // draft kept, rather than send it into that refusal.
+    // Checked before any await: the turn starts in this same tick.
     const unknown = this.unknownOutcomes();
     if (unknown) {
-      await this.write([
-        {
-          path: "status",
-          value: `${unknown} call${unknown === 1 ? " has" : "s have"} an unknown outcome · /recover to review before continuing`,
-        },
-      ]);
+      await this.refuseForRecovery(unknown);
       return;
     }
+    this.remember(raw);
     await this.beginTurn(raw);
+  }
+
+  /**
+   * The runtime refuses a turn past an unknown outcome: says so instead of
+   * sending a prompt into that refusal, the draft kept (or given back).
+   */
+  private async refuseForRecovery(
+    unknown: number,
+    draft?: string,
+  ): Promise<void> {
+    await this.write([
+      ...(draft !== undefined && this.draftNow === ""
+        ? [{ path: "draft", value: draft }]
+        : []),
+      {
+        path: "status",
+        value: `${unknown} call${unknown === 1 ? " has" : "s have"} an unknown outcome · /recover to review before continuing`,
+      },
+    ]);
   }
 
   /** How many calls of the saved session have an unknown outcome. */
@@ -3283,6 +3297,13 @@ export class TuimarkClient {
     this.queued = undefined;
     const live = !this.quitting && !this.options.signal.aborted;
     if (next !== undefined && live) {
+      // Queued before the turn left a call unknown: it goes back to the
+      // composer rather than into the refusal.
+      const unknown = this.unknownOutcomes();
+      if (unknown) {
+        await this.refuseForRecovery(unknown, next);
+        return;
+      }
       await this.beginTurn(next);
       await this.turnDone;
     } else if (this.goal && this.goalContinues && live) {
@@ -3582,7 +3603,7 @@ export class TuimarkClient {
             ? `${error.message} /sessions new starts a new one.`
             : error instanceof Error
               ? this.unknownOutcomes()
-                ? `${error.message} /recover reviews it.`
+                ? `${error.message.replace(/[.\s]*$/, ".")} /recover reviews it.`
                 : error.message
               : "Inference failed";
         status = oneLine(message);
