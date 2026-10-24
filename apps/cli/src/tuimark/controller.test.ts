@@ -5065,6 +5065,59 @@ const notices = (ui: FakeHost) =>
     .messages.filter((m: MessageView) => m.is_notice)
     .map(viewText);
 
+test("ctrl+c between a goal's turns stops the goal before its next turn, and the next press quits", async () => {
+  const { ui, client, seen } = setup(
+    turnsOf(
+      reporting(goes("wrote the parser"), wrote("w1")),
+      reporting(goes("tests run"), ran("c1", ["bun", "test"])),
+    ),
+  );
+  // The press lands as the first turn publishes its end: no turn runs.
+  const presses: Promise<unknown>[] = [];
+  ui.refuse = (writes) => {
+    if (
+      !presses.length &&
+      writes.some((write) => write.path === "busy" && write.value === false)
+    )
+      presses.push(ui.fire("quit_request"));
+    return undefined;
+  };
+  await ui.fire("send", "/goal make the tests pass");
+  await client.idle();
+  expect(await presses[0]).toBeUndefined();
+  expect(seen).toHaveLength(1);
+  expect(ui.statusLog()).toContain("Goal stopping · ctrl+c again to quit");
+  expect(store(ui).status).toMatch(/^Goal stopped: you cancelled it/);
+  expect(store(ui).header.goal_on).toBe(false);
+  expect(await ui.fire("quit_request")).toBe("quit");
+});
+
+test("a goal stops before a turn the runtime would refuse past an unknown outcome", async () => {
+  const session = fakeSession("aaa111", []);
+  const items: RecoveryItem[] = [];
+  const { sessions } = recoverable(session, items);
+  const { ui, client, seen } = setup(
+    turnsOf(
+      (ctx) => {
+        items.push(unknownCall("e1", "make deploy"));
+        return reporting(goes("deployed, maybe"), wrote("w1"))(ctx);
+      },
+      reporting(goes("never asked"), wrote("w2")),
+    ),
+    { session, sessions },
+  );
+  await ui.fire("send", "/goal ship it");
+  await client.idle();
+  expect(seen).toHaveLength(1);
+  expect(notices(ui).at(-1)).toMatch(
+    /^Goal stopped: a call's outcome is unknown/,
+  );
+  expect(store(ui).header.goal_on).toBe(false);
+  expect(store(ui).status).toBe(
+    "1 call has an unknown outcome · /recover to review before continuing",
+  );
+});
+
 test("a goal runs its turns until the model reports done, and says what the evidence was", async () => {
   const options: AgentOptions[] = [];
   const { ui, client, seen } = setup(

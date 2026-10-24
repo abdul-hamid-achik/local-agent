@@ -2162,6 +2162,15 @@ export class TuimarkClient {
       ]);
       return undefined;
     }
+    // Between a goal's turns none runs, but the goal does: the press stops
+    // it before its next turn, and only the next press quits.
+    if (this.goal && this.goalStop === undefined) {
+      this.goalStop = "stopped: you cancelled it";
+      await this.write([
+        { path: "status", value: "Goal stopping · ctrl+c again to quit" },
+      ]);
+      return undefined;
+    }
     const quit = (async (): Promise<"quit"> => {
       this.quitting = true;
       this.queued = undefined;
@@ -3296,23 +3305,41 @@ export class TuimarkClient {
     const next = this.queued;
     this.queued = undefined;
     const live = !this.quitting && !this.options.signal.aborted;
-    if (next !== undefined && live) {
-      // Queued before the turn left a call unknown: it goes back to the
-      // composer rather than into the refusal.
-      const unknown = this.unknownOutcomes();
-      if (unknown) {
-        await this.refuseForRecovery(unknown, next);
-        return;
-      }
+    const goal = this.goal && this.goalContinues ? this.goal : undefined;
+    if (!live || (next === undefined && !goal)) return;
+    // Neither a queued send nor a goal's next turn goes into the runtime's
+    // refusal past an unknown outcome: the send goes back to the composer.
+    const unknown = this.unknownOutcomes();
+    if (unknown) {
+      if (goal) this.goalStop ??= "stopped: a call's outcome is unknown";
+      await this.endStoppedGoal();
+      await this.refuseForRecovery(unknown, next);
+      return;
+    }
+    // A queued send runs first; the goal continues after it.
+    if (next !== undefined) {
       await this.beginTurn(next);
       await this.turnDone;
-    } else if (this.goal && this.goalContinues && live) {
-      // A goal left open goes on with its next turn: host-written, marked,
-      // shown as a notice. A queued send ran first (above), and the goal
-      // continues after it.
-      await this.beginTurn(this.goal.nextMessage(), true);
-      await this.turnDone;
+      return;
     }
+    // A stop that landed after the turn's own check (ctrl+c between
+    // turns) ends the goal before another turn starts.
+    if (!goal || (await this.endStoppedGoal())) return;
+    // A goal left open goes on with its next turn: host-written, marked,
+    // shown as a notice.
+    await this.beginTurn(goal.nextMessage(), true);
+    await this.turnDone;
+  }
+
+  /** Ends a goal a stop was asked of; true when there was one. */
+  private async endStoppedGoal(): Promise<boolean> {
+    if (!this.goal || this.goalStop === undefined) return false;
+    const line = await this.endGoal(this.goal, this.goalStop);
+    await this.publishMessages([
+      { path: "status", value: line },
+      { path: "header.goal_on", value: false },
+    ]);
+    return true;
   }
 
   private async loop(
@@ -3659,13 +3686,7 @@ export class TuimarkClient {
       // Esc or /goal stop that landed after settleGoal, where no cancel
       // could reach a turn: the goal ends here, before another starts.
       // Still busy, so a send meanwhile is queued and runs next (runTurn).
-      if (this.goal && this.goalStop !== undefined) {
-        const line = await this.endGoal(this.goal, this.goalStop);
-        await this.publishMessages([
-          { path: "status", value: line },
-          { path: "header.goal_on", value: false },
-        ]);
-      }
+      await this.endStoppedGoal();
       // Busy clears only after the final commits/publish above, so no
       // send or switch can enter while this turn still owes prints.
       this.busy = false;
