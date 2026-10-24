@@ -347,6 +347,9 @@ async function htmlToText(html: string): Promise<string> {
           skipNewline = true;
           el.onEndTag(() => {
             preDepth--;
+            // The block ends its line even when text follows it directly (its
+            // own trailing newline is trimmed below).
+            if (preDepth === 0) push("\n");
           });
         }
       },

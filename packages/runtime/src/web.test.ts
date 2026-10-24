@@ -1427,3 +1427,23 @@ test("cancelling the run stops a DuckDuckGo request that is waiting on the serve
     restoreFetch();
   }
 }, 20_000);
+
+test("text right after a pre block starts on its own line", async () => {
+  stubFetch((url) => {
+    if (url.endsWith("/a")) return htmlPage(`<pre>line\n</pre>tail`);
+    if (url.endsWith("/b"))
+      return htmlPage(`<div><pre>code\n</pre></div>Some text`);
+    return undefined;
+  });
+  const run = await session([
+    { name: "fetch", arguments: { url: "http://docs.example/a" } },
+    { name: "fetch", arguments: { url: "http://docs.example/b" } },
+  ]);
+  try {
+    expect(run.output(0)).toContain("\n\nline\ntail");
+    expect(run.output(1)).toContain("\n\ncode\nSome text");
+  } finally {
+    restoreFetch();
+    await run.cleanup();
+  }
+});
