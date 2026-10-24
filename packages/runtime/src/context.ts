@@ -19,9 +19,19 @@ const STEPS = [32_768, 24_576, 16_384, 12_288, 8_192];
 /** Below this, a Chalupa-negotiated context is worth a warning. */
 const LOW_REMOTE_CONTEXT = 16_384;
 
-export type ContextPlan = { context: number; reason: string };
+export type ContextPlan = { context: number; reason: string; warning?: string };
 
 const gib = (bytes: number) => `${(bytes / GIB).toFixed(1)} GiB`;
+
+/**
+ * On Ollama's MLX runner the size is local-agent's alone: it keeps each
+ * request within it, but nothing is reserved at load (see `ollamaMLX`).
+ */
+const MLX_NOTE =
+  "local-agent keeps each request within it (Ollama's MLX runner ignores num_ctx and grows its cache with the conversation)";
+/** The warning a model on the MLX runner earns, with the way out. */
+export const MLX_WARNING =
+  "this model runs on Ollama's MLX runner, which ignores the context size and grows its memory with the conversation; a GGUF tag (one ending in -q4_K_M, say) runs on llama.cpp, where the size is reserved at load";
 
 /**
  * The largest of 32k, 24k, 16k, 12k and 8k tokens whose KV cache fits, never
@@ -30,9 +40,29 @@ const gib = (bytes: number) => `${(bytes / GIB).toFixed(1)} GiB`;
  * for the compute buffer, Ollama's prompt cache and its checkpoints. With
  * no KV facts the size stays at the long-standing 16384; when nothing fits,
  * 16384 or 12288 still stands if its cache fits without the headroom (as
- * it ran before planning), and 8192 otherwise.
+ * it ran before planning), and 8192 otherwise. On Ollama's MLX runner the
+ * size is the same, as the most local-agent sends in one request, with a
+ * warning: that runner reserves nothing for it.
  */
 export function planContextSize(facts: {
+  nativeContext?: number;
+  weightsBytes: number;
+  kvBytesPerToken?: number;
+  totalMemory: number;
+  /** Ollama serves it on MLX: the same size, but only as local-agent's own. */
+  mlx?: boolean;
+}): ContextPlan {
+  const plan = fitContext(facts);
+  return facts.mlx
+    ? {
+        context: plan.context,
+        reason: `planned: ${MLX_NOTE}`,
+        warning: MLX_WARNING,
+      }
+    : plan;
+}
+
+function fitContext(facts: {
   nativeContext?: number;
   weightsBytes: number;
   kvBytesPerToken?: number;
@@ -70,16 +100,24 @@ export function planContextSize(facts: {
  * What a size the user set (--context, LOCAL_AGENT_CONTEXT) costs: it is
  * kept, and a warning says when its KV cache needs more than the memory
  * left after the weights and headroom, the planner's own budget (Ollama
- * then runs part of the model on the CPU, or fails to load it).
+ * then runs part of the model on the CPU, or fails to load it). On the
+ * MLX runner it warns that the size reserves nothing.
  */
 export function explicitContextNote(
   facts: {
     weightsBytes: number;
     kvBytesPerToken?: number;
     totalMemory: number;
+    mlx?: boolean;
   },
   context: number,
 ): { reason: string; warning?: string } {
+  // Nothing is reserved on MLX, so its cost cannot be told from the size.
+  if (facts.mlx)
+    return {
+      reason: `set by --context or LOCAL_AGENT_CONTEXT; ${MLX_NOTE}`,
+      warning: MLX_WARNING,
+    };
   const kv = facts.kvBytesPerToken;
   if (kv === undefined)
     return { reason: "set by --context or LOCAL_AGENT_CONTEXT" };
@@ -157,6 +195,7 @@ export async function planContextAdmitted(
         weightsBytes: admission.sizeBytes,
         kvBytesPerToken: admission.kvBytesPerToken,
         totalMemory,
+        mlx: admission.mlx,
       },
       provider.context_size,
     );
@@ -174,12 +213,14 @@ export async function planContextAdmitted(
     weightsBytes: admission.sizeBytes,
     kvBytesPerToken: admission.kvBytesPerToken,
     totalMemory,
+    mlx: admission.mlx,
   });
   return {
     provider: {
       ...provider,
       context_size: plan.context,
       context_plan: plan.reason,
+      ...(plan.warning ? { context_warning: plan.warning } : {}),
     },
     admission,
   };

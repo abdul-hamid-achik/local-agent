@@ -1,5 +1,5 @@
 import { expect, test, vi } from "vitest";
-import { admitOllamaModel } from "#runtime/admission";
+import { admitOllamaModel, ollamaMLX } from "#runtime/admission";
 import { resolveProvider } from "#runtime/config";
 
 const remote = (base_url: string) =>
@@ -177,6 +177,64 @@ test("a model missing from a Chalupa host points at chalupa status, not ollama p
     expect(admission.status === "rejected" && admission.message).toBe(
       "Ollama model large:35b is not on the Chalupa host yet. Run chalupa status to see the download, or set inference.pull: true in chalupa.yml.",
     );
+  } finally {
+    fetchMock.mockRestore();
+  }
+});
+
+test("a declared runner decides MLX; an older manifest's safetensors weights mean MLX too", async () => {
+  // As Ollama 0.40.6 reports them: a GGUF tag declares llamacpp; ornith-1.5
+  // predates the field and is GGUF; the default qwen3.5 tags declare mlx.
+  expect(ollamaMLX({ format: "gguf", runner: "llamacpp" })).toBe(false);
+  expect(ollamaMLX({ format: "gguf", parent_model: "" })).toBe(false);
+  expect(ollamaMLX({ format: "safetensors", runner: "mlx" })).toBe(true);
+  expect(ollamaMLX({ runner: " MLX " })).toBe(true);
+  // The declared runner wins over the format, both ways.
+  expect(ollamaMLX({ format: "safetensors", runner: "ggml" })).toBe(false);
+  expect(ollamaMLX({ format: "gguf", runner: "mlx" })).toBe(true);
+  // No runner (or an empty one): safetensors weights run on MLX.
+  expect(ollamaMLX({ format: "safetensors" })).toBe(true);
+  expect(ollamaMLX({ format: "safetensors", runner: "" })).toBe(true);
+  expect(ollamaMLX({ format: "safetensors", runner: "  " })).toBe(true);
+  expect(ollamaMLX({})).toBe(false);
+  expect(ollamaMLX(undefined)).toBe(false);
+  expect(ollamaMLX({ runner: 1, format: null })).toBe(false);
+
+  // The admission carries it only when it holds.
+  const fetchMock = vi
+    .spyOn(globalThis, "fetch")
+    .mockImplementation(async (input, init) => {
+      if (String(input).endsWith("/api/tags"))
+        return Response.json({ models: [{ name: "qwen3.5:4b", size: 3_000 }] });
+      const model = JSON.parse(String(init?.body)).model;
+      return Response.json({
+        capabilities: ["completion", "tools"],
+        details:
+          model === "qwen3.5:4b"
+            ? { format: "safetensors", runner: "mlx" }
+            : { format: "gguf", runner: "llamacpp" },
+      });
+    });
+  try {
+    const mlx = await admitOllamaModel(
+      resolveProvider({}, "qwen3.5:4b"),
+      AbortSignal.timeout(5_000),
+    );
+    expect(mlx).toMatchObject({ status: "validated", mlx: true });
+    fetchMock.mockImplementation(async (input) =>
+      String(input).endsWith("/api/tags")
+        ? Response.json({ models: [{ name: "qwen3.5:4b", size: 3_000 }] })
+        : Response.json({
+            capabilities: ["completion", "tools"],
+            details: { format: "gguf", runner: "llamacpp" },
+          }),
+    );
+    const gguf = await admitOllamaModel(
+      resolveProvider({}, "qwen3.5:4b"),
+      AbortSignal.timeout(5_000),
+    );
+    expect(gguf.status).toBe("validated");
+    expect(gguf).not.toHaveProperty("mlx");
   } finally {
     fetchMock.mockRestore();
   }

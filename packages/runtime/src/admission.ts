@@ -19,6 +19,11 @@ export type OllamaAdmission =
       nativeContext: number | undefined;
       /** f16 KV cache bytes per token of context, when model_info says. */
       kvBytesPerToken?: number;
+      /**
+       * Ollama serves it on its MLX runner, which ignores `num_ctx` and grows
+       * the KV cache with the conversation (see `ollamaMLX`).
+       */
+      mlx?: true;
       capabilities: string[];
     };
 
@@ -37,7 +42,11 @@ const ShowSchema = z
     capabilities: z.array(z.unknown()).optional(),
     model_info: z.record(z.string(), z.unknown()).optional(),
     details: z
-      .object({ context_length: z.unknown().optional() })
+      .object({
+        context_length: z.unknown().optional(),
+        runner: z.unknown().optional(),
+        format: z.unknown().optional(),
+      })
       .passthrough()
       .optional(),
     remote_model: z.unknown().optional(),
@@ -67,6 +76,23 @@ const contextLength = (show: ShowModel) => {
   if (detail !== undefined) values.push(detail);
   return values.length > 0 ? Math.max(...values) : undefined;
 };
+
+/**
+ * Whether Ollama serves the model on its MLX runner (Apple silicon): there
+ * `num_ctx` reserves nothing, the KV cache grows with the conversation and
+ * Ollama never trims the history. `/api/show` `details.runner` decides
+ * when it is set ("mlx", "llamacpp" or "ggml"); a model that predates the
+ * field runs on MLX when its weights are safetensors, as Ollama judges it.
+ */
+export function ollamaMLX(details: ShowModel["details"]): boolean {
+  const runner = details?.runner;
+  if (typeof runner === "string" && runner.trim())
+    return runner.trim().toLowerCase() === "mlx";
+  return (
+    typeof details?.format === "string" &&
+    details.format.toLowerCase() === "safetensors"
+  );
+}
 
 const count = (value: unknown) =>
   typeof value === "number" && Number.isSafeInteger(value) && value > 0
@@ -297,6 +323,7 @@ export async function admitOllamaModel(
     sizeBytes,
     nativeContext,
     kvBytesPerToken: kvBytesPerToken(show.model_info),
+    ...(ollamaMLX(show.details) ? { mlx: true as const } : {}),
     capabilities,
   };
 }

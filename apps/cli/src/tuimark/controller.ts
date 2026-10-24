@@ -1490,6 +1490,7 @@ export class TuimarkClient {
       weightsBytes: admission.sizeBytes,
       kvBytesPerToken: admission.kvBytesPerToken,
       totalMemory: this.options.totalMemory?.() ?? totalmem(),
+      mlx: admission.mlx,
     };
     // A size the user set stays: its note (and warning) is for this model.
     const plan = planned ? planContextSize(facts) : undefined;
@@ -1497,6 +1498,8 @@ export class TuimarkClient {
       !planned && this.provider.type === "ollama"
         ? explicitContextNote(facts, this.provider.context_size)
         : undefined;
+    // A planned size warns only on Ollama's MLX runner.
+    const warning = plan?.warning ?? note?.warning;
     // A local model's warning is for its own size; Chalupa's size, and so
     // its warning, stays with the profile.
     const { context_warning: _, ...rest } = this.provider;
@@ -1510,13 +1513,13 @@ export class TuimarkClient {
         ? { context_size: plan.context, context_plan: plan.reason }
         : {}),
       ...(note ? { context_plan: note.reason } : {}),
-      ...(note?.warning ? { context_warning: note.warning } : {}),
+      ...(warning ? { context_warning: warning } : {}),
     };
     await this.write([
       {
         path: "status",
-        value: note?.warning
-          ? oneLine(`Model changed to ${admission.model} · ${note.warning}`)
+        value: warning
+          ? oneLine(`Model changed to ${admission.model} · ${warning}`)
           : `Model changed to ${admission.model}`,
       },
       { path: "header.model", value: clip(cleanText(admission.model), 40) },

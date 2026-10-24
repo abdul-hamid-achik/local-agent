@@ -39,6 +39,7 @@ export {
 export {
   type ContextPlan,
   explicitContextNote,
+  MLX_WARNING,
   PLANNED_CONTEXT_MAX,
   planContext,
   planContextAdmitted,

@@ -3,6 +3,7 @@ import { kvBytesPerToken } from "#runtime/admission";
 import { resolveProvider } from "#runtime/config";
 import {
   explicitContextNote,
+  MLX_WARNING,
   planContext,
   planContextAdmitted,
   planContextSize,
@@ -131,7 +132,11 @@ test("unknown KV facts keep 16384; tight memory keeps what ran before", () => {
   ).toBe(8_192);
 });
 
-function ollama(modelInfo: Record<string, unknown>, size = 3.3 * GIB) {
+function ollama(
+  modelInfo: Record<string, unknown>,
+  size = 3.3 * GIB,
+  details?: Record<string, unknown>,
+) {
   return vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
     const url = String(input);
     if (url.endsWith("/api/tags"))
@@ -141,6 +146,7 @@ function ollama(modelInfo: Record<string, unknown>, size = 3.3 * GIB) {
     return Response.json({
       capabilities: ["completion", "tools"],
       model_info: modelInfo,
+      ...(details ? { details } : {}),
     });
   });
 }
@@ -286,5 +292,64 @@ test("planContext leaves the provider alone when Ollama cannot say", async () =>
     );
   } finally {
     fetchMock.mockRestore();
+  }
+});
+
+test("on Ollama's MLX runner the size is local-agent's own, with a warning", async () => {
+  const facts = {
+    nativeContext: 262_144,
+    weightsBytes: 3.3 * GIB,
+    kvBytesPerToken: 32_768,
+    totalMemory: MAC_16GB,
+  };
+  // The same size: the most local-agent sends in one request.
+  const gguf = planContextSize(facts);
+  const mlx = planContextSize({ ...facts, mlx: true });
+  expect(mlx.context).toBe(gguf.context);
+  expect(gguf.warning).toBeUndefined();
+  expect(mlx).toEqual({
+    context: 32_768,
+    reason:
+      "planned: local-agent keeps each request within it (Ollama's MLX runner ignores num_ctx and grows its cache with the conversation)",
+    warning: MLX_WARNING,
+  });
+  // Without KV facts, or with memory tight, it still warns.
+  expect(
+    planContextSize({ weightsBytes: GIB, totalMemory: MAC_16GB, mlx: true })
+      .warning,
+  ).toBe(MLX_WARNING);
+  // A size the user set: nothing is reserved, so no cost is claimed.
+  expect(explicitContextNote({ ...facts, mlx: true }, 262_144)).toEqual({
+    reason:
+      "set by --context or LOCAL_AGENT_CONTEXT; local-agent keeps each request within it (Ollama's MLX runner ignores num_ctx and grows its cache with the conversation)",
+    warning: MLX_WARNING,
+  });
+
+  // Through planContext: Ollama's details decide.
+  for (const [details, warned] of [
+    [{ format: "safetensors", runner: "mlx" }, true],
+    // ornith-1.5:9b as this machine's Ollama reports it: no runner, GGUF.
+    [{ parent_model: "", format: "gguf", family: "qwen35" }, false],
+    [{ format: "gguf", runner: "llamacpp" }, false],
+  ] as const) {
+    const fetchMock = ollama(qwen35, 3.3 * GIB, details);
+    try {
+      const planned = await planContext(
+        resolveProvider({}, "qwen3.5:4b"),
+        AbortSignal.timeout(5_000),
+        MAC_16GB,
+      );
+      expect(planned.context_size).toBe(32_768);
+      expect(planned.context_warning).toBe(warned ? MLX_WARNING : undefined);
+      const chosen = await planContext(
+        resolveProvider({}, "qwen3.5:4b", { context: "8k" }),
+        AbortSignal.timeout(5_000),
+        MAC_16GB,
+      );
+      expect(chosen.context_size).toBe(8_192);
+      expect(chosen.context_warning).toBe(warned ? MLX_WARNING : undefined);
+    } finally {
+      fetchMock.mockRestore();
+    }
   }
 });

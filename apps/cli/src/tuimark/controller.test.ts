@@ -16,7 +16,11 @@ import type {
   SessionContext,
   Workspace,
 } from "@local-agent/runtime";
-import { ConversationFullError, StepLimitError } from "@local-agent/runtime";
+import {
+  ConversationFullError,
+  MLX_WARNING,
+  StepLimitError,
+} from "@local-agent/runtime";
 import { expect, test } from "vitest";
 import {
   type Block,
@@ -3672,6 +3676,51 @@ test("/model plans the new model's context unless the user chose a size", async 
     context_size: 8192,
     context_warning: "Chalupa set a context of 8192 tokens",
   });
+});
+
+test("/model to a model on Ollama's MLX runner keeps the planned size and says it is local-agent's own", async () => {
+  const GIB = 1024 ** 3;
+  const providers: Provider[] = [];
+  const admitModel = async (candidate: Provider) =>
+    ({
+      ...validated(candidate.model),
+      sizeBytes: 3.3 * GIB,
+      nativeContext: 262_144,
+      kvBytesPerToken: 32_768,
+      ...(candidate.model === "qwen3.5:4b" ? { mlx: true } : {}),
+    }) as OllamaAdmission;
+  const run: ConstructorParameters<typeof TuimarkClient>[0]["run"] = (
+    provider,
+    messages,
+    options,
+  ) => {
+    providers.push(provider);
+    return reply("ok")({ options, messages });
+  };
+  const { ui, client } = setup(reply("ok"), {
+    admitModel,
+    run,
+    totalMemory: () => 16 * GIB,
+  });
+  await ui.fire("send", "/model qwen3.5:4b");
+  expect(store(ui).status).toBe(`Model changed to qwen3.5:4b · ${MLX_WARNING}`);
+  expect(store(ui).header.ctx_label).toBe("0/32k");
+  await ui.fire("send", "hi");
+  await client.idle();
+  expect(providers.at(-1)).toMatchObject({
+    context_size: 32_768,
+    context_plan: expect.stringContaining(
+      "Ollama's MLX runner ignores num_ctx",
+    ),
+    context_warning: MLX_WARNING,
+  });
+  // Back to a GGUF tag: the warning was the other model's.
+  await ui.fire("send", "/model qwen3.5:4b-q4_K_M");
+  expect(store(ui).status).toBe("Model changed to qwen3.5:4b-q4_K_M");
+  await ui.fire("send", "hi");
+  await client.idle();
+  expect(providers.at(-1)?.context_warning).toBeUndefined();
+  expect(providers.at(-1)?.context_plan).toMatch(/^planned: its KV cache/);
 });
 
 test("a model the Ollama inventory rejects is refused: no switch, no header write", async () => {
