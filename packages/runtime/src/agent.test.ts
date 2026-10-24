@@ -484,6 +484,8 @@ async function batchRun(
         workspace,
         signal: AbortSignal.timeout(15_000),
         approve: async () => true,
+        // The scripted fetch URLs point at this loopback fixture.
+        fetchPolicy: { allowPrivate: true },
       },
     ))
       events.push(event);

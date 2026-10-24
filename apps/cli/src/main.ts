@@ -332,6 +332,8 @@ Interrupted tool outcomes require inspection; they are never automatically repla
                 );
               else process.stderr.write(`Session: ${session.state.publicId}\n`);
             }
+            // An untrusted or broken rule file is named once, not per call.
+            let permissionWarning: string | undefined;
             // Native terminal rendering stays behind the interactive dynamic import.
             for await (const event of runAgent(
               provider,
@@ -347,11 +349,26 @@ Interrupted tool outcomes require inspection; they are never automatically repla
                 mcp,
                 // Headless precedence: the workspace's permission file is
                 // the user's explicit, durable intent, so it outranks the
-                // --approve-* flags in BOTH directions — an allow rule
-                // approves even with the flag off, a deny rule refuses
+                // --approve-* flags in BOTH directions — a trusted allow
+                // rule approves even with the flag off, a deny rule refuses
                 // even with the flag on. Everything else asks the flags.
-                approve: async (proposal) => {
+                // Allow rules this user never trusted (a cloned repo's) are
+                // left out by loadPermissionFile.
+                deniedRead: async (request) => {
                   const { rules } = await loadPermissionFile(workspace.root);
+                  const verdict = evaluate(rules, request);
+                  return verdict.effect === "deny"
+                    ? (verdict.rule?.pattern ?? "")
+                    : undefined;
+                },
+                approve: async (proposal) => {
+                  const { rules, warning } = await loadPermissionFile(
+                    workspace.root,
+                  );
+                  if (warning && warning !== permissionWarning) {
+                    permissionWarning = warning;
+                    process.stderr.write(`warning: ${warning}\n`);
+                  }
                   const verdict = evaluate(rules, permissionRequest(proposal));
                   if (verdict.effect !== "ask")
                     return verdict.effect === "allow";

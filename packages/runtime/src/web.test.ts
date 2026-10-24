@@ -4,9 +4,11 @@ import { join } from "node:path";
 import { expect, test } from "vitest";
 import {
   type AgentEvent,
+  type AgentOptions,
   type ApprovalRequest,
   runAgent,
 } from "#runtime/agent";
+import { evaluate } from "#runtime/permissions";
 import { resolveProvider } from "#runtime/config";
 import type { McpConnection } from "#runtime/mcp";
 import { Workspace } from "#runtime/workspace";
@@ -41,7 +43,16 @@ function stubFetch(
 function restoreFetch() {
   responder = undefined;
   requestInits = [];
+  hostAddresses.clear();
+  readDenial = undefined;
 }
+/** What the fetch policy's resolver answers: a public address unless a test
+ * maps the host elsewhere, so the fake hosts never reach real DNS. */
+const hostAddresses = new Map<string, string[]>();
+/** The run's read deny hook (a client's file rules); reset per test. */
+let readDenial: AgentOptions["deniedRead"];
+const resolveHost = async (hostname: string) =>
+  hostAddresses.get(hostname) ?? ["93.184.215.14"];
 async function session(
   calls: Call[],
   intent: "plan" | "build" | "chat" = "plan",
@@ -85,6 +96,8 @@ async function session(
         signal: AbortSignal.timeout(10_000),
         approve: (async (proposal: ApprovalRequest) => true) as never,
         mcp,
+        fetchPolicy: { resolve: resolveHost },
+        ...(readDenial ? { deniedRead: readDenial } : {}),
       },
     ))
       events.push(event);
@@ -814,6 +827,145 @@ test("fetch sends browser headers and a same-origin referer on image requests", 
       "text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8",
     );
     expect(request?.headers["referer"]).toBe("http://img.example");
+  } finally {
+    restoreFetch();
+    await run.cleanup();
+  }
+});
+
+test("fetch refuses a redirect to file:// and never reads the file", async () => {
+  const outside = await mkdtemp(join(tmpdir(), "local-agent-outside-"));
+  const secret = join(outside, "secret.json");
+  await Bun.write(secret, '{"token":"do-not-leak"}');
+  stubFetch((url) => {
+    if (url.startsWith("http://127.0.0.1")) return undefined;
+    if (url === "https://docs.example/r")
+      return new Response(null, {
+        status: 302,
+        headers: { location: `file://${secret}` },
+      });
+    throw new Error(`unexpected fetch: ${url}`);
+  });
+  const run = await session([
+    { name: "fetch", arguments: { url: "https://docs.example/r" } },
+  ]);
+  try {
+    expect(run.results.map((result) => result.status)).toEqual(["failed"]);
+    expect(run.output(0)).toContain("unsupported protocol file:");
+    expect(run.output(0)).not.toContain("do-not-leak");
+  } finally {
+    restoreFetch();
+    await run.cleanup();
+    await rm(outside, { recursive: true, force: true });
+  }
+});
+
+test("fetch refuses loopback, private and metadata targets before connecting", async () => {
+  let hits = 0;
+  const local = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch() {
+      hits++;
+      return new Response("local secret", {
+        headers: { "content-type": "text/plain" },
+      });
+    },
+  });
+  const seen: string[] = [];
+  stubFetch((url) => {
+    seen.push(url);
+    if (url.startsWith(`http://127.0.0.1:${local.port}`))
+      throw new Error("the guard let a loopback URL through");
+    if (url.startsWith("http://127.0.0.1")) return undefined;
+    if (url === "https://docs.example/hop")
+      return new Response(null, {
+        status: 301,
+        headers: { location: "http://169.254.169.254/latest/meta-data/" },
+      });
+    throw new Error(`unexpected fetch: ${url}`);
+  });
+  hostAddresses.set("intranet.example", ["10.1.2.3"]);
+  hostAddresses.set("mixed.example", ["93.184.215.14", "192.168.1.9"]);
+  const targets = [
+    `http://127.0.0.1:${local.port}/`,
+    `http://localhost:${local.port}/`,
+    "http://[::1]/",
+    "http://[::ffff:127.0.0.1]/",
+    "http://[fd00::1]/",
+    "http://0.0.0.0/",
+    "https://docs.example/hop",
+    "https://intranet.example/",
+    "https://mixed.example/",
+  ];
+  const run = await session(
+    targets.map((url) => ({ name: "fetch", arguments: { url } })),
+  );
+  try {
+    expect(run.results.map((result) => result.status)).toEqual(
+      targets.map(() => "failed"),
+    );
+    for (const [index] of targets.entries())
+      expect(run.output(index)).toContain("private or loopback address");
+    expect(run.output(6)).toContain("169.254.169.254");
+    expect(run.output(8)).toContain("192.168.1.9");
+    expect(hits).toBe(0);
+    expect(seen.some((url) => url.includes("169.254.169.254"))).toBe(false);
+  } finally {
+    restoreFetch();
+    await local.stop(true);
+    await run.cleanup();
+  }
+});
+
+test("deny rules refuse a fetch host on any hop and a web search", async () => {
+  const seen: string[] = [];
+  stubFetch((url) => {
+    if (url.startsWith("http://127.0.0.1")) return undefined;
+    seen.push(url);
+    if (url === "https://docs.example/out")
+      return new Response(null, {
+        status: 302,
+        headers: { location: "https://tracker.example/pixel" },
+      });
+    return new Response("fine", { headers: { "content-type": "text/plain" } });
+  });
+  const rules = [
+    { effect: "deny", tool: "fetch", pattern: "domain:tracker.example" },
+    { effect: "deny", tool: "web_search", pattern: "*" },
+  ] as const;
+  const asked: string[] = [];
+  readDenial = async (request) => {
+    asked.push(`${request.tool} ${request.target}`);
+    const verdict = evaluate([...rules], request);
+    return verdict.effect === "deny" ? verdict.rule?.pattern : undefined;
+  };
+  const run = await session([
+    { name: "fetch", arguments: { url: "https://docs.example/out" } },
+    { name: "fetch", arguments: { url: "https://tracker.example/direct" } },
+    { name: "fetch", arguments: { url: "https://docs.example/ok" } },
+    { name: "web_search", arguments: { query: "anything" } },
+  ]);
+  try {
+    expect(run.results.map((result) => result.status)).toEqual([
+      "failed",
+      "failed",
+      "succeeded",
+      "failed",
+    ]);
+    expect(run.output(0)).toContain(
+      "tracker.example is denied by rule: domain:tracker.example",
+    );
+    expect(run.output(1)).toContain("denied by rule");
+    expect(run.output(3)).toContain("web_search: denied by rule: *");
+    expect(seen.some((url) => url.includes("tracker.example"))).toBe(false);
+    expect(asked).toEqual([
+      "fetch docs.example",
+      "fetch tracker.example",
+      "fetch tracker.example",
+      "fetch docs.example",
+      "web_search anything",
+    ]);
   } finally {
     restoreFetch();
     await run.cleanup();

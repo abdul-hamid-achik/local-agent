@@ -20,7 +20,8 @@
     "apps/**/*.ts",
     "packages/**/*.ts",
     "scripts/**/*.ts",
-    "vitest.config.ts"
+    "vitest.config.ts",
+    "vitest.setup.ts"
   ],
   "exclude": ["**/dist", "**/node_modules"]
 }

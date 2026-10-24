@@ -3,9 +3,25 @@
 // The file is loaded by the client on demand (mtime-checked) and evaluated
 // before any approval dialog or headless flag; nothing here talks to the
 // model, and every matcher is pure string work over the request's target.
+//
+// The file sits inside the workspace, so a cloned repository can ship one.
+// Deny and ask rules only ever restrict and always apply; an allow rule
+// applies only once this user trusted it on this machine. Trust lives
+// outside every workspace, in `trusted-rules.json` under the user's config
+// directory, keyed by the workspace's real path: the "always" key and
+// `/permissions trust` write it, nothing a repository contains can.
 
-import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { randomUUID } from "node:crypto";
+import {
+  mkdir,
+  readFile,
+  realpath,
+  rename,
+  rm,
+  writeFile,
+} from "node:fs/promises";
+import { homedir } from "node:os";
+import { basename, dirname, join } from "node:path";
 import type { ApprovalRequest } from "#runtime/agent";
 
 /** What a rule does to the requests it matches. "ask" is the dialog. */
@@ -91,12 +107,89 @@ export function permissionsPath(workspaceRoot: string): string {
   return join(workspaceRoot, ".local-agent", "permissions.json");
 }
 
+/** The per-user record of trusted allow rules, outside every workspace. */
+export function trustStorePath(
+  env: Record<string, string | undefined> = process.env,
+): string {
+  const config = env.XDG_CONFIG_HOME?.trim()
+    ? env.XDG_CONFIG_HOME
+    : join(homedir(), ".config");
+  return join(config, "local-agent", "trusted-rules.json");
+}
+
+type TrustStore = { version: 1; workspaces: Record<string, string[]> };
+
+const ruleKey = (rule: PermissionRule): string =>
+  JSON.stringify([rule.tool, rule.pattern]);
+
+/** A missing or damaged store trusts nothing: every allow rule asks again. */
+async function readTrust(): Promise<TrustStore> {
+  try {
+    const parsed = JSON.parse(await readFile(trustStorePath(), "utf8"));
+    if (
+      parsed?.version === 1 &&
+      typeof parsed.workspaces === "object" &&
+      parsed.workspaces !== null
+    ) {
+      const workspaces: Record<string, string[]> = {};
+      for (const [root, keys] of Object.entries(parsed.workspaces))
+        if (Array.isArray(keys))
+          workspaces[root] = keys.filter(
+            (key): key is string => typeof key === "string",
+          );
+      return { version: 1, workspaces };
+    }
+  } catch {
+    // Missing or unreadable: the empty store.
+  }
+  return { version: 1, workspaces: {} };
+}
+
+/** Atomic and private: a temp file in the same directory, then a rename. */
+async function writeTrust(store: TrustStore): Promise<void> {
+  const file = trustStorePath();
+  await mkdir(dirname(file), { recursive: true, mode: 0o700 });
+  const temp = `${file}.${randomUUID()}.tmp`;
+  try {
+    await writeFile(temp, `${JSON.stringify(store, null, 2)}\n`, {
+      mode: 0o600,
+    });
+    await rename(temp, file);
+  } catch (error) {
+    await rm(temp, { force: true });
+    throw error;
+  }
+}
+
+/** The store's key for a workspace: its real path, so a moved clone starts untrusted. */
+async function workspaceKey(workspaceRoot: string): Promise<string> {
+  try {
+    return await realpath(workspaceRoot);
+  } catch {
+    return workspaceRoot;
+  }
+}
+
+async function updateTrust(
+  workspaceRoot: string,
+  change: (keys: Set<string>) => void,
+): Promise<void> {
+  const store = await readTrust();
+  const root = await workspaceKey(workspaceRoot);
+  const keys = new Set(store.workspaces[root] ?? []);
+  change(keys);
+  if (keys.size) store.workspaces[root] = [...keys];
+  else delete store.workspaces[root];
+  await writeTrust(store);
+}
+
 /**
- * Reads `<root>/.local-agent/permissions.json`. Missing → the empty file;
- * unreadable or schema-invalid → the empty file plus a warning string.
- * Never throws: a bad file degrades to "ask", never to a crash.
+ * Every rule the file holds, trusted or not. Missing → the empty file;
+ * unreadable or schema-invalid → the empty file plus a warning. Callers
+ * that enforce rules use `loadPermissionFile`; this one is for rewriting
+ * the file and for listing it.
  */
-export async function loadPermissionFile(
+export async function readPermissionFile(
   workspaceRoot: string,
 ): Promise<PermissionFile & { warning?: string }> {
   let text: string;
@@ -135,6 +228,39 @@ export async function loadPermissionFile(
     };
   }
   return { version: 1, rules: parsedRules };
+}
+
+/**
+ * Reads `<root>/.local-agent/permissions.json` for enforcement. Missing →
+ * the empty file; unreadable or schema-invalid → the empty file plus a
+ * warning string. Allow rules this user never trusted are left out (listed
+ * in `untrusted`, with a warning); deny and ask rules always apply. Never
+ * throws: a bad file degrades to "ask", never to a crash.
+ */
+export async function loadPermissionFile(
+  workspaceRoot: string,
+): Promise<PermissionFile & { warning?: string; untrusted: PermissionRule[] }> {
+  const file = await readPermissionFile(workspaceRoot);
+  if (file.warning || !file.rules.some((rule) => rule.effect === "allow"))
+    return { ...file, untrusted: [] };
+  const trusted = new Set(
+    (await readTrust()).workspaces[await workspaceKey(workspaceRoot)] ?? [],
+  );
+  const untrusted = file.rules.filter(
+    (rule) => rule.effect === "allow" && !trusted.has(ruleKey(rule)),
+  );
+  if (untrusted.length === 0) return { ...file, untrusted };
+  return {
+    version: 1,
+    rules: file.rules.filter((rule) => !untrusted.includes(rule)),
+    untrusted,
+    warning: `permissions.json: ${untrusted.length} allow rule${untrusted.length === 1 ? "" : "s"} not trusted on this machine ${untrusted.length === 1 ? "is" : "are"} ignored (${untrusted
+      .slice(0, 3)
+      .map((rule) => `${rule.tool} ${rule.pattern}`)
+      .join(
+        ", ",
+      )}${untrusted.length > 3 ? ", …" : ""}); review the file, then run /permissions trust`,
+  };
 }
 
 // ------------------------------------------------------------------- matchers
@@ -186,19 +312,82 @@ const splitWords = (text: string): string[] =>
   text.trim().split(/\s+/).filter(Boolean);
 
 /**
- * An argv-prefix pattern with a trailing `*`: `npm test *` matches
- * `npm test` itself and `npm test anything`. Without the star the match is
- * exact. One approval is one argv vector (no shell), so there is no compound
- * splitting to do: the joined target is one command.
+ * A command pattern's words: whitespace separates them, `"…"` quotes one
+ * (with `\"` and `\\` escapes inside), and a final bare `*` makes the
+ * pattern a prefix. A quoted `"*"` is a literal argument.
  */
-function commandMatches(pattern: string, target: string): boolean {
-  const star = pattern.endsWith("*");
-  const core = splitWords(star ? pattern.slice(0, -1) : pattern);
-  const words = splitWords(target);
-  if (core.length === 0) return true;
-  if (!star)
-    return words.length === core.length && core.every((w, i) => w === words[i]);
-  return core.every((w, i) => w === words[i]);
+function commandPattern(
+  pattern: string,
+): { words: string[]; star: boolean } | undefined {
+  const words: string[] = [];
+  let star = false;
+  let i = 0;
+  while (i < pattern.length) {
+    const c = pattern.charAt(i);
+    if (/\s/.test(c)) {
+      i++;
+      continue;
+    }
+    if (c === '"') {
+      let word = "";
+      i++;
+      for (;;) {
+        if (i >= pattern.length) return undefined;
+        const d = pattern.charAt(i++);
+        if (d === '"') break;
+        word += d === "\\" && i < pattern.length ? pattern.charAt(i++) : d;
+      }
+      words.push(word);
+      continue;
+    }
+    let word = "";
+    while (i < pattern.length && !/\s/.test(pattern.charAt(i)))
+      word += pattern.charAt(i++);
+    // `git*` is the older spelling of `git *`.
+    if (word.endsWith("*") && pattern.slice(i).trim() === "") {
+      star = true;
+      if (word !== "*") words.push(word.slice(0, -1));
+    } else words.push(word);
+  }
+  return { words, star };
+}
+
+/** One argv word as a pattern word: quoted when it would not survive bare. */
+function quoteWord(word: string): string {
+  return word === "" || word.endsWith("*") || /[\s"\\]/.test(word)
+    ? `"${word.replace(/[\\"]/g, (c) => `\\${c}`)}"`
+    : word;
+}
+
+/**
+ * An argv pattern, exact unless it ends with a bare `*`: `npm test *`
+ * matches `npm test` itself and `npm test anything`. One approval is one
+ * argv vector (no shell), so words compare one to one, never re-split. A
+ * deny or ask rule's program also matches by basename (`rm *` refuses
+ * `/bin/rm -rf x`); an allow rule's program never does, so `git *` does
+ * not approve a planted `./git`.
+ */
+function commandMatches(
+  rule: PermissionRule,
+  request: PermissionRequest,
+): boolean {
+  const parsed = commandPattern(rule.pattern);
+  if (!parsed) return false;
+  const { words: core, star } = parsed;
+  const words = request.argv?.length
+    ? [...request.argv]
+    : splitWords(request.target);
+  if (core.length === 0) return star;
+  if (star ? words.length < core.length : words.length !== core.length)
+    return false;
+  return core.every(
+    (word, i) =>
+      word === words[i] ||
+      (i === 0 &&
+        rule.effect !== "allow" &&
+        !word.includes("/") &&
+        basename(words[0] ?? "") === word),
+  );
 }
 
 /**
@@ -232,7 +421,7 @@ function ruleMatches(
     case "edit":
       return pathGlobMatches(rule.pattern, request.target);
     case "run_command":
-      return commandMatches(rule.pattern, request.target);
+      return commandMatches(rule, request);
     case "fetch":
       return domainMatches(rule.pattern, request.target);
     case "web_search":
@@ -272,10 +461,10 @@ function escapeGlob(path: string): string {
 }
 
 /**
- * The rule an "always" verdict would save: narrow enough to name exactly
- * what was approved — a literal escaped path, the command's first token
- * (plus a star once argv is long enough to be a stable prefix), the fetch
- * host, the exact MCP tool, or everything for a web search.
+ * The rule an "always" verdict would save: exactly what was approved — a
+ * literal escaped path, the command's exact argv (quoted where needed; a
+ * hand-written trailing `*` widens it), the fetch host, the exact MCP
+ * tool, or everything for a web search.
  */
 export function proposeRule(request: PermissionRequest): PermissionRule {
   switch (request.tool) {
@@ -289,15 +478,12 @@ export function proposeRule(request: PermissionRequest): PermissionRule {
       const argv = request.argv?.length
         ? request.argv
         : splitWords(request.target);
-      if (argv.length === 0)
-        return { effect: "allow", tool: "run_command", pattern: "*" };
-      // One or two words name the command well; more than that is
-      // call-specific, so keep the first token and let the star speak.
-      const pattern =
-        argv.length > 2
-          ? `${argv[0] ?? ""} *`
-          : argv.join(" ") || (argv[0] ?? "*");
-      return { effect: "allow", tool: "run_command", pattern };
+      // An empty argv names nothing; the empty pattern matches nothing.
+      return {
+        effect: "allow",
+        tool: "run_command",
+        pattern: argv.map(quoteWord).join(" "),
+      };
     }
     case "fetch":
       return {
@@ -318,41 +504,56 @@ function patternTarget(rule: PermissionRule): string {
   if (rule.tool === "fetch" || rule.tool === "web_search")
     return rule.pattern.replace(/^domain:/, "");
   if (rule.tool === "run_command")
-    return rule.pattern.replace(/\*$/, "").trim();
+    return (commandPattern(rule.pattern)?.words ?? []).join(" ");
   return rule.pattern.replace(/\\/g, "");
 }
 
 /**
  * Appends a rule to the file, creating the `.local-agent/` directory and
  * file when missing, and adding `.local-agent/` to the workspace's
- * `.gitignore` when one exists without it. Refuses (throws) when an
- * existing deny rule already covers the new rule's requests, when the
- * file is invalid (the caller may then say so), or at 100 rules.
+ * `.gitignore` when one exists without it. The new rule (only that one) is
+ * trusted for this workspace. Refuses (throws) when an existing deny rule
+ * already covers the new rule's requests, when the file is invalid (the
+ * caller may then say so), or at 100 rules.
  */
 export async function appendRule(
   workspaceRoot: string,
   rule: PermissionRule,
 ): Promise<{ file: string; created: boolean; gitignoreAdded: boolean }> {
-  const existing = await loadPermissionFile(workspaceRoot);
+  const existing = await readPermissionFile(workspaceRoot);
   if (existing.warning) throw new Error(existing.warning);
   if (rule.effect === "allow") {
+    const target = patternTarget(rule);
     const shadow = evaluate(existing.rules, {
       tool: rule.tool,
-      target: patternTarget(rule),
+      target,
+      ...(rule.tool === "run_command"
+        ? { argv: commandPattern(rule.pattern)?.words ?? [] }
+        : {}),
     });
     if (shadow.effect === "deny")
       throw new Error(
         `refused: the deny rule "${shadow.rule?.tool} ${shadow.rule?.pattern}" already covers ${rule.tool} ${rule.pattern}`,
       );
   }
-  if (existing.rules.length >= RULES_MAX)
-    throw new Error(
-      `refused: permissions.json already holds ${RULES_MAX} rules`,
-    );
   const file = permissionsPath(workspaceRoot);
-  const next: PermissionFile = { version: 1, rules: [...existing.rules, rule] };
-  await mkdir(join(workspaceRoot, ".local-agent"), { recursive: true });
-  await writeFile(file, `${JSON.stringify(next, null, 2)}\n`);
+  const present = existing.rules.some(
+    (other) => other.effect === rule.effect && ruleKey(other) === ruleKey(rule),
+  );
+  if (!present) {
+    if (existing.rules.length >= RULES_MAX)
+      throw new Error(
+        `refused: permissions.json already holds ${RULES_MAX} rules`,
+      );
+    const next: PermissionFile = {
+      version: 1,
+      rules: [...existing.rules, rule],
+    };
+    await mkdir(join(workspaceRoot, ".local-agent"), { recursive: true });
+    await writeFile(file, `${JSON.stringify(next, null, 2)}\n`);
+  }
+  if (rule.effect === "allow")
+    await updateTrust(workspaceRoot, (keys) => keys.add(ruleKey(rule)));
   let gitignoreAdded = false;
   const gitignore = join(workspaceRoot, ".gitignore");
   try {
@@ -368,14 +569,38 @@ export async function appendRule(
   return { file, created: existing.rules.length === 0, gitignoreAdded };
 }
 
-/** `/permissions clear rules`: the file, rewritten with no rules. */
+/** `/permissions clear rules`: the file, rewritten with no rules, and its trust dropped. */
 export async function clearRules(
   workspaceRoot: string,
 ): Promise<{ file: string }> {
   const file = permissionsPath(workspaceRoot);
   await mkdir(join(workspaceRoot, ".local-agent"), { recursive: true });
   await writeFile(file, `${JSON.stringify(NO_PERMISSIONS, null, 2)}\n`);
+  await updateTrust(workspaceRoot, (keys) => keys.clear());
   return { file };
+}
+
+/**
+ * `/permissions trust`: trusts every allow rule the file holds right now,
+ * for this workspace only. Returns the rules that were not trusted before,
+ * so the caller can name what it just enabled.
+ */
+export async function trustRules(
+  workspaceRoot: string,
+): Promise<{ trusted: PermissionRule[] }> {
+  const file = await readPermissionFile(workspaceRoot);
+  if (file.warning) throw new Error(file.warning);
+  const trusted: PermissionRule[] = [];
+  const allows = file.rules.filter((rule) => rule.effect === "allow");
+  if (allows.length === 0) return { trusted };
+  await updateTrust(workspaceRoot, (keys) => {
+    for (const rule of allows)
+      if (!keys.has(ruleKey(rule))) {
+        keys.add(ruleKey(rule));
+        trusted.push(rule);
+      }
+  });
+  return { trusted };
 }
 
 /**

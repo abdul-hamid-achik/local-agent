@@ -422,3 +422,45 @@ test("write replaces an existing file with a diff, and refuses stale, racing, ex
     "issued by this workspace",
   );
 });
+
+test("the host's permission rules and the user's local-agent config are out of reach", async () => {
+  const { root, workspace } = await fixture();
+  const rules = '{"version":1,"rules":[]}';
+  await mkdir(join(root, ".local-agent"));
+  await writeFile(join(root, ".local-agent", "permissions.json"), rules);
+  await mkdir(join(root, "pkg", ".local-agent"), { recursive: true });
+  await mkdir(join(root, ".config", "local-agent"), { recursive: true });
+  await writeFile(
+    join(root, ".config", "local-agent", "trusted-rules.json"),
+    "trusted needle",
+  );
+  await writeFile(join(root, ".config", "other.json"), "other needle");
+  for (const path of [
+    ".local-agent/permissions.json",
+    "pkg/.local-agent/permissions.json",
+    ".config/local-agent/trusted-rules.json",
+    ".CONFIG/Local-Agent/trusted-rules.json",
+  ]) {
+    await expect(workspace.read(path)).rejects.toThrow("excluded");
+    await expect(
+      workspace.prepareWrite(path, '{"version":1,"rules":[]}\n'),
+    ).rejects.toThrow("excluded");
+  }
+  await expect(
+    workspace.prepareEdit(".local-agent/permissions.json", "[]", "[1]"),
+  ).rejects.toThrow("excluded");
+  await expect(workspace.list(".local-agent")).rejects.toThrow("excluded");
+  await expect(workspace.list(".config/local-agent")).rejects.toThrow(
+    "excluded",
+  );
+  expect(await workspace.list()).not.toContain(".local-agent");
+  expect(await workspace.list(".config")).toBe("other.json");
+  // A search from the root never walks into the trust store.
+  const found = await workspace.search("needle");
+  expect(found).toContain(".config/other.json");
+  expect(found).not.toContain("trusted-rules");
+  // Only the pair is excluded: a project directory named local-agent is fine.
+  await mkdir(join(root, "src", "local-agent"), { recursive: true });
+  await writeFile(join(root, "src", "local-agent", "a.ts"), "x");
+  expect(await workspace.read("src/local-agent/a.ts")).toBe("x");
+});

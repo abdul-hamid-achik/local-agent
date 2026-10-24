@@ -1847,7 +1847,7 @@ test("grants: a command grant matches program + first argument as a prefix, noth
         commandProposal(["bun", "run", "x"]),
       ],
       [commandProposal(["ls"])],
-      [commandProposal(["ls", "-la"]), commandProposal(["git", "status"])],
+      [commandProposal(["ls"]), commandProposal(["ls", "-la"])],
     ]),
   );
   await ui.fire("send", "one");
@@ -1869,12 +1869,11 @@ test("grants: a command grant matches program + first argument as a prefix, noth
   await ui.fire("dialog_cancel");
   await client.idle();
 
-  // A bare program grants the program: `ls -la` is covered, `git` is not.
+  // A bare program grants exactly itself: `ls` again is covered, `ls -la`
+  // asks (a bare `bash` grant must not cover `bash -c …`).
   await ui.fire("send", "three");
   await untilApproval(ui);
-  expect(store(ui).approval.grant_hint).toBe(
-    "a allow every `ls …` command this session",
-  );
+  expect(store(ui).approval.grant_hint).toBe("a allow `ls` this session");
   await ui.fire("dialog_session");
   await client.idle();
   expect(store(ui).header.grants).toBe("auto: bun test · ls");
@@ -2984,7 +2983,11 @@ test("F9: a real export file is created with mode 0o600", async () => {
 
 // ------------------------------------------------------------ permission rules
 
-import { loadPermissionFile, type PermissionRule } from "@local-agent/runtime";
+import {
+  loadPermissionFile,
+  type PermissionRule,
+  trustRules,
+} from "@local-agent/runtime";
 
 /** Writes the workspace's permissions file, creating the directory. */
 async function writeRules(
@@ -3004,6 +3007,8 @@ test("rules: allow auto-approves and deny refuses, each named in the status, no 
     { effect: "allow", tool: "edit", pattern: "a.txt" },
     { effect: "deny", tool: "run_command", pattern: "rm *" },
   ]);
+  // A hand-written allow rule applies once this user trusts it.
+  await trustRules(root);
   const { ui, client } = setup(
     quiet(async ({ options }) => {
       // The deny decision must land even though a rule allows the edit;
@@ -3050,27 +3055,51 @@ test("rules: `!` saves the proposed rule, grants the call, and later calls auto-
   // The verdict write is the one that closes the dialog; read it before
   // the turn's idle write replaces it.
   expect(store(ui).status).toBe(
-    "Always allowed: run_command bun * (saved to .local-agent/permissions.json)",
+    "Always allowed: run_command bun test a.test.ts (saved to .local-agent/permissions.json)",
   );
   await client.idle();
   expect(decisions).toEqual([true]);
   const saved = await loadPermissionFile(root);
   expect(saved.rules).toEqual([
-    { effect: "allow", tool: "run_command", pattern: "bun *" },
+    { effect: "allow", tool: "run_command", pattern: "bun test a.test.ts" },
   ]);
-  // The saved rule now covers the sibling call: no card, allowed by rule.
+  expect(saved.untrusted).toEqual([]);
+  // The saved rule is the exact argv: the sibling call still gets a card.
+  await ui.fire("send", "two");
+  await until(() => store(ui).status === APPROVAL_STATUS);
+  expect(store(ui).approval.open).toBe(true);
+  await ui.fire("dialog_cancel");
+  await client.idle();
+  expect(decisions).toEqual([true, false]);
+});
+
+test("rules: a cloned repository's allow rule never skips the card until trusted", async () => {
+  const root = await mkdtemp(join(tmpdir(), "la-planted-"));
+  await writeRules(root, [
+    { effect: "allow", tool: "run_command", pattern: "*" },
+  ]);
+  const { ui, client } = setup(
+    turnsAsking([
+      [commandProposal(["curl", "https://evil.example"])],
+      [commandProposal(["curl", "https://evil.example"])],
+    ]),
+    { workspace: { root } as Workspace },
+  );
+  await ui.fire("send", "one");
+  await until(() => store(ui).status === APPROVAL_STATUS);
+  expect(store(ui).approval.open).toBe(true);
+  await ui.fire("dialog_cancel");
+  await client.idle();
+  expect(decisions).toEqual([false]);
+  await ui.fire("send", "/permissions");
+  expect(store(ui).status).toBe(
+    "Permissions: file: allow run_command:* (untrusted)",
+  );
+  await ui.fire("send", "/permissions trust");
+  expect(store(ui).status).toBe("Trusted 1 rule: run_command *");
   await ui.fire("send", "two");
   await client.idle();
-  expect(decisions).toEqual([true, true]);
-  expect(
-    ui.batches
-      .flat()
-      .some(
-        (w) =>
-          w.path === "status" &&
-          String(w.value).startsWith("allowed by rule: bun *"),
-      ),
-  ).toBe(true);
+  expect(decisions).toEqual([false, true]);
 });
 
 test("rules: /permissions lists both origins and clear rules empties the file", async () => {
@@ -3090,5 +3119,9 @@ test("rules: /permissions lists both origins and clear rules empties the file", 
   expect(store(ui).status).toBe("Permissions: file: allow edit:a.txt");
   await ui.fire("send", "/permissions clear rules");
   expect(store(ui).status).toBe("File rules cleared");
-  expect(await loadPermissionFile(root)).toEqual({ version: 1, rules: [] });
+  expect(await loadPermissionFile(root)).toEqual({
+    version: 1,
+    rules: [],
+    untrusted: [],
+  });
 });

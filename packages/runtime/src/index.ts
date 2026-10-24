@@ -35,6 +35,12 @@ export {
   McpServerConfigSchema,
 } from "#runtime/mcp";
 export {
+  assertFetchTarget,
+  type FetchPolicy,
+  fetchPolicy,
+  isPublicAddress,
+} from "#runtime/net";
+export {
   appendRule,
   clearRules,
   evaluate,
@@ -47,6 +53,9 @@ export {
   type PermissionVerdict,
   permissionRequest,
   proposeRule,
+  readPermissionFile,
+  trustRules,
+  trustStorePath,
 } from "#runtime/permissions";
 export {
   Workspace,

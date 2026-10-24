@@ -23,6 +23,7 @@ import {
   projectInstructions,
 } from "#runtime/instructions";
 import type { McpConnection } from "#runtime/mcp";
+import { assertFetchTarget, type FetchPolicy, fetchPolicy } from "#runtime/net";
 import type { ExecutionEvent, Session, SessionStore } from "#runtime/session";
 import type {
   Workspace,
@@ -119,30 +120,36 @@ const FETCH_HEADERS: Record<string, string> = {
   accept: "text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8",
 };
 
-/** GET with redirects followed, capped at FETCH_MAX_REDIRECTS hops. */
+/** GET with redirects followed, capped at FETCH_MAX_REDIRECTS hops. The
+ * policy is checked before every request, so a redirect cannot reach a
+ * scheme or address the first URL could not. */
 async function httpGet(
   url: string,
   timeoutMs: number,
+  policy: FetchPolicy,
+  signal: AbortSignal,
   headers?: Record<string, string>,
 ): Promise<{ response: Response; finalUrl: string }> {
-  let current = url;
-  const origin = new URL(url).origin;
+  let current = new URL(url);
+  const origin = current.origin;
+  const deadline = AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]);
   for (let hop = 0; ; hop++) {
+    await assertFetchTarget(current, policy);
+    deadline.throwIfAborted();
     const response = await fetch(current, {
       redirect: "manual",
       headers: { ...headers, referer: origin },
-      signal: AbortSignal.timeout(timeoutMs),
+      signal: deadline,
     });
     const location =
       response.status >= 300 && response.status < 400
         ? response.headers.get("location")
         : null;
-    if (location === null) return { response, finalUrl: current };
-    if (hop >= FETCH_MAX_REDIRECTS) {
-      await response.body?.cancel();
+    if (location === null) return { response, finalUrl: current.toString() };
+    await response.body?.cancel();
+    if (hop >= FETCH_MAX_REDIRECTS)
       throw new Error(`fetch: more than ${FETCH_MAX_REDIRECTS} redirects`);
-    }
-    current = new URL(location, current).toString();
+    current = new URL(location, current);
   }
 }
 
@@ -1085,6 +1092,18 @@ export type AgentOptions = {
   maxTurns?: number;
   /** Internal: hard cap on total tool calls in a subagent run. */
   toolCallBudget?: number;
+  /** Where the fetch tool may connect. Defaults to public hosts only
+   * (LOCAL_AGENT_FETCH_PRIVATE=1 widens it) and the system resolver. */
+  fetchPolicy?: Partial<FetchPolicy>;
+  /**
+   * The user's deny rules for the tools that never ask (`fetch` by host,
+   * every hop; `web_search` by query). Returns the refusing rule's pattern,
+   * or undefined to proceed. Reads have no approval, so only deny matters.
+   */
+  deniedRead?: (request: {
+    tool: "fetch" | "web_search";
+    target: string;
+  }) => Promise<string | undefined>;
 };
 
 /** Internal control-flow signal: a subagent run hit its turn or call budget. */
@@ -1162,6 +1181,16 @@ async function* agentTurn(
   options: AgentOptions,
 ): AsyncGenerator<AgentEvent> {
   const { signal, workspace } = options;
+  const { deniedRead } = options;
+  const fetchGuard = fetchPolicy({
+    ...(deniedRead
+      ? {
+          deniedHost: (target: string) =>
+            deniedRead({ tool: "fetch", target }),
+        }
+      : {}),
+    ...options.fetchPolicy,
+  });
   const mcpTools = new Map<string, McpConnection>();
   const availableTools = [...tools];
   for (const connection of options.mcp ?? []) {
@@ -1402,12 +1431,11 @@ async function* agentTurn(
           const args = FetchArgs.parse(call.function.arguments);
           yield* emitStart();
           signal.throwIfAborted();
-          const target = new URL(args.url);
-          if (target.protocol !== "http:" && target.protocol !== "https:")
-            throw new Error(`fetch: unsupported protocol ${target.protocol}`);
           const { response, finalUrl } = await httpGet(
-            target.toString(),
+            args.url,
             FETCH_TIMEOUT_MS,
+            fetchGuard,
+            signal,
             FETCH_HEADERS,
           );
           if (response.status >= 400) {
@@ -1496,6 +1524,12 @@ async function* agentTurn(
           const args = WebSearchArgs.parse(call.function.arguments);
           yield* emitStart();
           signal.throwIfAborted();
+          const rule = await deniedRead?.({
+            tool: "web_search",
+            target: args.query,
+          });
+          if (rule !== undefined)
+            throw new Error(`web_search: denied by rule: ${rule}`);
           const searxngBase = process.env.LOCAL_AGENT_SEARXNG_URL?.replace(
             /\/+$/,
             "",

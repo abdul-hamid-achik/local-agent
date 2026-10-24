@@ -423,8 +423,12 @@ test("the approval state spells out what `a` would grant, per kind", () => {
   expect(approvalState(cmd(["bun", "test", "a.ts"]))).toMatchObject({
     grant_hint: "a allow `bun test …` this session",
   });
+  // A bare program, an option-first argv and a wrapper grant themselves only.
   expect(approvalState(cmd(["ls"])).grant_hint).toBe(
-    "a allow every `ls …` command this session",
+    "a allow `ls` this session",
+  );
+  expect(approvalState(cmd(["bash", "-c", "make"])).grant_hint).toBe(
+    "a allow `bash -c make` this session",
   );
   expect(
     approvalState({ kind: "mcp", name: "db__query", argumentsJson: "{}" })
@@ -457,8 +461,35 @@ test("grant matching: files shared, commands by argv prefix, MCP exact", () => {
   expect(grantCovers(bunTest, cmd(["bun"]))).toBe(false);
 
   const ls = grantFor(cmd(["ls"]));
-  expect(grantCovers(ls, cmd(["ls", "-la"]))).toBe(true);
+  expect(grantCovers(ls, cmd(["ls"]))).toBe(true);
+  expect(grantCovers(ls, cmd(["ls", "-la"]))).toBe(false);
   expect(grantCovers(ls, cmd(["lsblk"]))).toBe(false);
+
+  // A prefix over an option or a wrapper would cover arbitrary code, so
+  // those grants are exact: `bash -c` never covers another script, `git -c`
+  // never another config, `env FOO=1` never another program.
+  for (const argv of [
+    ["bash", "-c", "make"],
+    ["git", "-c", "core.pager=less", "log"],
+    ["node", "-e", "1"],
+    ["env", "FOO=1", "make"],
+    ["/usr/bin/timeout", "5", "make"],
+    ["xargs", "echo"],
+    ["ssh", "host", "uptime"],
+    ["find", ".", "-name", "x"],
+  ] as [string, ...string[]][]) {
+    const exact = grantFor(cmd(argv));
+    expect(exact.exact, argv.join(" ")).toBe(true);
+    expect(grantCovers(exact, cmd(argv))).toBe(true);
+    expect(grantCovers(exact, cmd([...argv, "; rm -rf /"]))).toBe(false);
+    expect(grantCovers(exact, cmd([argv[0], argv[1] ?? "", "rm -rf /"]))).toBe(
+      false,
+    );
+  }
+  // An exact grant and a prefix grant never share a key.
+  expect(grantFor(cmd(["git", "status"])).key).not.toBe(
+    grantFor(cmd(["git", "-c"])).key,
+  );
 
   // An empty argv (type-impossible, but parseArgv can produce one at
   // runtime) must never become a grant that covers every command:

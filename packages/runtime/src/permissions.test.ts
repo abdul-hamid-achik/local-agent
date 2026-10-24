@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "vitest";
@@ -11,6 +11,9 @@ import {
   type PermissionRule,
   permissionRequest,
   proposeRule,
+  readPermissionFile,
+  trustRules,
+  trustStorePath,
 } from "#runtime/permissions";
 
 const edit = (target: string): PermissionRequest => ({ tool: "edit", target });
@@ -181,9 +184,25 @@ test("proposeRule: paths escaped, commands narrowed, hosts and tools exact", () 
     tool: "run_command",
     pattern: "bun test",
   });
+  // "Always" saves the exact argv: never a program-wide star.
   expect(
     proposeRule(run("npm test -- --watch", ["npm", "test", "--", "--watch"])),
-  ).toEqual({ effect: "allow", tool: "run_command", pattern: "npm *" });
+  ).toEqual({
+    effect: "allow",
+    tool: "run_command",
+    pattern: "npm test -- --watch",
+  });
+  // Words that would not survive bare are quoted, and match back exactly.
+  const odd = ["git", "commit", "-m", 'fix "it" now', "a\\b", "*", "x*", ""];
+  const quoted = proposeRule(run(odd.join(" "), odd));
+  expect(quoted.pattern).toBe(
+    'git commit -m "fix \\"it\\" now" "a\\\\b" "*" "x*" ""',
+  );
+  expect(evaluate([quoted], run(odd.join(" "), odd)).effect).toBe("allow");
+  expect(
+    evaluate([quoted], run("git commit -m x", ["git", "commit", "-m", "x"]))
+      .effect,
+  ).toBe("ask");
   expect(proposeRule({ tool: "fetch", target: "docs.example.com" })).toEqual({
     effect: "allow",
     tool: "fetch",
@@ -237,7 +256,11 @@ test("permissionRequest maps every approval kind", () => {
 
 test("loadPermissionFile: missing and invalid files degrade to empty", async () => {
   const root = await tempRoot();
-  expect(await loadPermissionFile(root)).toEqual({ version: 1, rules: [] });
+  expect(await loadPermissionFile(root)).toEqual({
+    version: 1,
+    rules: [],
+    untrusted: [],
+  });
 });
 
 test("loadPermissionFile: schema violations carry a warning, never throw", async () => {
@@ -298,9 +321,136 @@ test("appendRule: refuses a rule a deny rule already covers", async () => {
   expect((await loadPermissionFile(root)).rules).toHaveLength(1);
 });
 
-test("clearRules rewrites the file empty", async () => {
+test("clearRules rewrites the file empty and drops its trust", async () => {
   const root = await tempRoot();
   await appendRule(root, rule("allow", "edit", "*"));
   await clearRules(root);
-  expect(await loadPermissionFile(root)).toEqual({ version: 1, rules: [] });
+  expect(await loadPermissionFile(root)).toEqual({
+    version: 1,
+    rules: [],
+    untrusted: [],
+  });
+  // The same rule written back by hand is not trusted any more.
+  await writeFile(
+    join(root, ".local-agent", "permissions.json"),
+    JSON.stringify({ version: 1, rules: [rule("allow", "edit", "*")] }),
+  );
+  expect((await loadPermissionFile(root)).rules).toEqual([]);
+});
+
+// ---------------------------------------------------------------------- trust
+
+async function plant(root: string, rules: PermissionRule[]): Promise<void> {
+  await mkdir(join(root, ".local-agent"), { recursive: true });
+  await writeFile(
+    join(root, ".local-agent", "permissions.json"),
+    JSON.stringify({ version: 1, rules }),
+  );
+}
+
+test("a repository's allow rules are ignored until trusted; deny and ask always apply", async () => {
+  const root = await tempRoot();
+  const planted = [
+    rule("allow", "run_command", "*"),
+    rule("deny", "run_command", "rm *"),
+    rule("ask", "edit", "/src/**"),
+  ];
+  await plant(root, planted);
+  const loaded = await loadPermissionFile(root);
+  expect(loaded.rules).toEqual(planted.slice(1));
+  expect(loaded.untrusted).toEqual(planted.slice(0, 1));
+  expect(loaded.warning).toContain("1 allow rule not trusted");
+  expect(loaded.warning).toContain("/permissions trust");
+  expect(
+    evaluate(loaded.rules, run("curl evil", ["curl", "evil"])).effect,
+  ).toBe("ask");
+  expect(
+    evaluate(loaded.rules, run("rm -rf /", ["rm", "-rf", "/"])).effect,
+  ).toBe("deny");
+  // The raw read still sees every rule (for rewriting and listing).
+  expect((await readPermissionFile(root)).rules).toEqual(planted);
+});
+
+test("'always' trusts only the rule it adds, never the planted ones beside it", async () => {
+  const root = await tempRoot();
+  await plant(root, [rule("allow", "run_command", "curl *")]);
+  await appendRule(root, rule("allow", "run_command", "bun test"));
+  const loaded = await loadPermissionFile(root);
+  expect(loaded.rules).toEqual([rule("allow", "run_command", "bun test")]);
+  expect(loaded.untrusted).toEqual([rule("allow", "run_command", "curl *")]);
+  // Appending a rule the file already holds trusts it without duplicating it.
+  await appendRule(root, rule("allow", "run_command", "curl *"));
+  expect((await readPermissionFile(root)).rules).toHaveLength(2);
+  expect((await loadPermissionFile(root)).untrusted).toEqual([]);
+});
+
+test("trustRules trusts the file as it is now, per workspace real path", async () => {
+  const root = await tempRoot();
+  await plant(root, [
+    rule("allow", "edit", "/src/**"),
+    rule("deny", "run_command", "rm *"),
+  ]);
+  expect((await trustRules(root)).trusted).toEqual([
+    rule("allow", "edit", "/src/**"),
+  ]);
+  expect((await trustRules(root)).trusted).toEqual([]);
+  expect((await loadPermissionFile(root)).untrusted).toEqual([]);
+  // A rule added to the file afterwards is not covered by that trust.
+  await plant(root, [
+    rule("allow", "edit", "/src/**"),
+    rule("allow", "edit", "*"),
+  ]);
+  expect((await loadPermissionFile(root)).untrusted).toEqual([
+    rule("allow", "edit", "*"),
+  ]);
+  // The same file in another checkout starts untrusted.
+  const clone = await tempRoot();
+  await plant(clone, [rule("allow", "edit", "/src/**")]);
+  expect((await loadPermissionFile(clone)).rules).toEqual([]);
+  // The store is private and lives outside every workspace.
+  const store = trustStorePath();
+  expect(store.startsWith(process.env.XDG_CONFIG_HOME ?? "\0")).toBe(true);
+  expect((await stat(store)).mode & 0o777).toBe(0o600);
+});
+
+test("a damaged trust store trusts nothing", async () => {
+  const root = await tempRoot();
+  await appendRule(root, rule("allow", "edit", "*"));
+  await writeFile(trustStorePath(), "{not json");
+  expect((await loadPermissionFile(root)).untrusted).toEqual([
+    rule("allow", "edit", "*"),
+  ]);
+});
+
+test("command deny rules match the program by basename; allow rules never do", () => {
+  const argv = ["/bin/rm", "-rf", "/"];
+  expect(
+    evaluate([rule("deny", "run_command", "rm *")], run(argv.join(" "), argv))
+      .effect,
+  ).toBe("deny");
+  expect(
+    evaluate([rule("ask", "run_command", "rm *")], run(argv.join(" "), argv))
+      .effect,
+  ).toBe("ask");
+  const planted = ["./git", "status"];
+  expect(
+    evaluate(
+      [rule("allow", "run_command", "git *")],
+      run(planted.join(" "), planted),
+    ).effect,
+  ).toBe("ask");
+  // The older `git*` spelling is still a prefix.
+  expect(
+    evaluate(
+      [rule("allow", "run_command", "git*")],
+      run("git status", ["git", "status"]),
+    ).effect,
+  ).toBe("allow");
+  // Argv words compare one to one: a space inside one word is not two words.
+  expect(
+    evaluate(
+      [rule("allow", "run_command", "echo a b")],
+      run("echo a b", ["echo", "a b"]),
+    ).effect,
+  ).toBe("ask");
 });

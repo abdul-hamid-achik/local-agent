@@ -26,11 +26,13 @@ import {
   type Message,
   type OllamaAdmission,
   type PermissionFile,
+  type PermissionRule,
   type Provider,
   permissionRequest,
   proposeRule,
   runAgent,
   type SessionContext,
+  trustRules,
   type Workspace,
 } from "@local-agent/runtime";
 import type { Commit, Host, HostEvent } from "@thelacanians/tuimark";
@@ -326,7 +328,10 @@ export class TuimarkClient {
    * `!` verdict (or any outside edit) bumps the mtime and the next
    * evaluation reloads. `-1` marks a missing file.
    */
-  private permFile: PermissionFile = { version: 1, rules: [] };
+  private permFile: PermissionFile & { untrusted?: PermissionRule[] } = {
+    version: 1,
+    rules: [],
+  };
   private permMtimeMs: number | undefined;
   /**
    * The latest completed tool receipt, whole, for `/details`. Memory only:
@@ -1763,7 +1768,9 @@ export class TuimarkClient {
    * moved (a cheap stat per approval). A missing file reads as empty; a
    * broken one degrades to "ask" with the load's warning on the status.
    */
-  private async fileRules(): Promise<PermissionFile> {
+  private async fileRules(): Promise<
+    PermissionFile & { untrusted?: PermissionRule[] }
+  > {
     const root = this.options.workspace?.root;
     if (!root) return this.permFile;
     let mtimeMs: number;
@@ -1785,11 +1792,17 @@ export class TuimarkClient {
     return this.permFile;
   }
 
-  /** `/permissions` labels for the file's rules, in file order. */
+  /** `/permissions` labels for the file's rules (enforced first, then the
+   * allow rules this user has not trusted, marked so). */
   private ruleLabels(): Promise<string[]> {
-    return this.fileRules().then((file) =>
-      file.rules.map((rule) => `${rule.effect} ${rule.tool}:${rule.pattern}`),
-    );
+    return this.fileRules().then((file) => [
+      ...file.rules.map(
+        (rule) => `${rule.effect} ${rule.tool}:${rule.pattern}`,
+      ),
+      ...(file.untrusted ?? []).map(
+        (rule) => `${rule.effect} ${rule.tool}:${rule.pattern} (untrusted)`,
+      ),
+    ]);
   }
 
   private async runCommand(command: string): Promise<void> {
@@ -1877,6 +1890,26 @@ export class TuimarkClient {
         };
       }
     }
+    if (outcome.trustRules) {
+      const root = this.options.workspace?.root;
+      let status = "No workspace: file rules unavailable";
+      if (root) {
+        try {
+          const { trusted } = await trustRules(root);
+          this.permMtimeMs = undefined;
+          status = trusted.length
+            ? oneLine(
+                `Trusted ${trusted.length} rule${trusted.length === 1 ? "" : "s"}: ${trusted
+                  .map((rule) => `${rule.tool} ${rule.pattern}`)
+                  .join(" · ")}`,
+              )
+            : "No untrusted allow rules in .local-agent/permissions.json";
+        } catch (error) {
+          status = oneLine(`Rules not trusted: ${error}`);
+        }
+      }
+      writes[0] = { path: "status", value: status };
+    }
     if (outcome.help) writes.push({ path: "help.open", value: true });
     await this.write(writes);
   }
@@ -1943,6 +1976,16 @@ export class TuimarkClient {
   }
 
   // -------------------------------------------------------------------- one turn
+
+  /** A file deny rule for a read that never asks (fetch by host, web_search). */
+  private deniedRead: NonNullable<AgentOptions["deniedRead"]> = async (
+    request,
+  ) => {
+    const verdict = evaluate((await this.fileRules()).rules, request);
+    if (verdict.effect !== "deny") return undefined;
+    this.noteActivity(`denied by rule: ${verdict.rule?.pattern}`);
+    return verdict.rule?.pattern ?? "";
+  };
 
   private approve = async (
     proposal: ApprovalRequest,
@@ -2166,6 +2209,7 @@ export class TuimarkClient {
         workspace,
         intent: this.intent,
         approve: this.approve,
+        deniedRead: this.deniedRead,
         signal: turnSignal,
         session,
         mcp,

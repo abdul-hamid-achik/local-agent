@@ -40,6 +40,8 @@ export interface CommandOutcome {
   clearGrants?: boolean;
   /** Set by `/permissions clear rules`: empty the workspace's rule file. */
   clearRules?: boolean;
+  /** Set by `/permissions trust`: trust the file's allow rules on this machine. */
+  trustRules?: boolean;
   /**
    * Set by `/details`: open the viewer over the latest tool receipt. The
    * controller owns the receipt, so it writes the real status itself.
@@ -155,8 +157,11 @@ export function runSlash(text: string, state: CommandState): CommandOutcome {
         status: grants.length ? "Session grants cleared" : "No session grants",
         clearGrants: true,
       };
+    // The controller trusts the file as it is now and names what it enabled.
+    if (requested === "trust")
+      return { status: "Trusting file rules…", trustRules: true };
     return {
-      status: `Unknown permissions setting: ${requested}. Use /permissions, /permissions clear or /permissions clear rules`,
+      status: `Unknown permissions setting: ${requested}. Use /permissions, /permissions clear, /permissions clear rules or /permissions trust`,
     };
   }
   if (command === "/details")

@@ -442,11 +442,13 @@ export class Workspace implements Disposable {
     if (!same()) throw new Error("Workspace directory changed during listing");
     const entries = readdirSync(absolute, { withFileTypes: true });
     if (!same()) throw new Error("Workspace directory changed during listing");
+    const parent = relative.split("/").at(-1);
     return entries
       .filter((entry) =>
         entry.isDirectory()
           ? !SKIPPED_DIRECTORIES.has(entry.name) &&
-            !isExcludedName(entry.name, false)
+            !isExcludedName(entry.name, false) &&
+            !isUserConfig(parent, entry.name)
           : !isExcludedName(entry.name, true),
       )
       .sort(
@@ -763,6 +765,9 @@ function snapshot(
 
 const EXCLUDED_NAMES = new Set([
   ".git",
+  // The host's own policy: permission rules are read by the host, never
+  // edited (or read) through the model's file tools.
+  ".local-agent",
   ".ssh",
   ".gnupg",
   ".kube",
@@ -795,11 +800,21 @@ function isExcludedName(part: string, leaf: boolean): boolean {
   );
 }
 
+/** A workspace at the home directory still cannot reach the user's
+ * local-agent config: the permission trust store lives there. */
+function isUserConfig(parent: string | undefined, name: string): boolean {
+  return (
+    parent?.toLowerCase() === ".config" && name.toLowerCase() === "local-agent"
+  );
+}
+
 function rejectExcluded(relative: string): void {
   const parts = relative.split("/");
   if (
-    parts.some((part, index) =>
-      isExcludedName(part, index === parts.length - 1),
+    parts.some(
+      (part, index) =>
+        isExcludedName(part, index === parts.length - 1) ||
+        isUserConfig(parts[index - 1], part),
     )
   )
     throw new Error("Workspace path is excluded");

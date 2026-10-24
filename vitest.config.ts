@@ -16,6 +16,9 @@ export default defineConfig({
       "apps/*/src/**/*.test.ts",
       "scripts/**/*.test.ts",
     ],
+    // Every test file gets a private XDG_CONFIG_HOME, so the permission
+    // trust store never reads or writes the developer's real one.
+    setupFiles: ["./vitest.setup.ts"],
     pool: "forks",
     maxWorkers: 1,
     testTimeout: 10_000,
