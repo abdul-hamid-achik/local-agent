@@ -1,14 +1,14 @@
 ---
 title: Providers
-description: Two inference providers — local Ollama by default, remote Chalupa opt-in through the environment. No profiles, no OpenAI-compatible endpoints.
+description: Three inference providers — local Ollama by default, remote Chalupa and local OpenAI-compatible servers opt-in through the environment. No YAML profiles.
 outline: deep
 ---
 
 # Providers
 
-The current client has exactly two providers: local Ollama (the default) and
-Chalupa (opt-in). Selection is environment-only — there are no YAML provider
-profiles and no OpenAI-compatible endpoints. See
+The current client has three providers: local Ollama (the default), Chalupa
+(opt-in) and a local OpenAI-compatible server (opt-in, below). Selection is
+environment-only — there are no YAML provider profiles. See
 [Configuration](/configuration).
 
 ## Local Ollama (default)

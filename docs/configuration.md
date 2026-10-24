@@ -48,7 +48,8 @@ with a 15 s admission check, before the session starts.
 
 ## Providers
 
-Two providers exist: local Ollama (the default) and Chalupa. Select Chalupa
+Three providers exist: local Ollama (the default), Chalupa, and a local
+OpenAI-compatible server (`LOCAL_AGENT_PROVIDER=openai_local`). Select Chalupa
 with `LOCAL_AGENT_PROVIDER=chalupa`; `LOCAL_AGENT_LOCAL_ONLY` must then be
 `false`. Chalupa profiles come from the environment supplied by
 `chalupa exec` and are passed via `LOCAL_AGENT_PROVIDER_CONFIG` as profile JSON.
