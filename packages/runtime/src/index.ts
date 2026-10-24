@@ -217,6 +217,7 @@ function guardedFetch(signal: AbortSignal, timeoutMs: number): typeof fetch {
 
 type OpenAIStreamPart = {
   choices?: Array<{
+    finish_reason?: string | null;
     delta?: {
       content?: string;
       reasoning_content?: string;
@@ -239,35 +240,63 @@ type OpenAIStreamPart = {
  */
 export const INVALID_ARGUMENTS = "__invalid_arguments";
 
-/** Parses one SSE body into JSON payloads; `data: [DONE]` ends the stream. */
+/** A pending SSE event past this many characters fails the request instead of growing in memory. */
+const maxPendingSSEChars = 8 << 20;
+
+/**
+ * Parses one SSE body into JSON payloads. Lines end in LF, CRLF or CR; an
+ * event's `data:` lines join with "\n". `data: [DONE]` ends the stream, and
+ * so does a clean close after a `finish_reason`, for servers that skip it.
+ */
 export async function* parseOpenAISSE(
   body: ReadableStream<Uint8Array>,
 ): AsyncGenerator<OpenAIStreamPart> {
   const reader = body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
+  // A "\r" that ends a chunk waits: a "\n" may open the next one.
+  let heldCR = false;
+  let finished = false;
   try {
     for (;;) {
       const chunk = await reader.read();
+      let text = chunk.done
+        ? decoder.decode()
+        : decoder.decode(chunk.value, { stream: true });
+      if (heldCR) text = `\r${text}`;
+      heldCR = !chunk.done && text.endsWith("\r");
+      if (heldCR) text = text.slice(0, -1);
+      buffer += text.replace(/\r\n?/g, "\n");
       // A last event without its blank line still counts.
       if (chunk.done) buffer += "\n\n";
-      else buffer += decoder.decode(chunk.value, { stream: true });
+      let start = 0;
       for (;;) {
-        const boundary = buffer.indexOf("\n\n");
+        const boundary = buffer.indexOf("\n\n", start);
         if (boundary === -1) break;
-        const rawEvent = buffer.slice(0, boundary);
-        buffer = buffer.slice(boundary + 2);
-        for (const line of rawEvent.split("\n")) {
-          if (!line.startsWith("data:")) continue;
-          const data = line.slice(5).trim();
-          if (!data) continue;
-          if (data === "[DONE]") return;
-          yield JSON.parse(data) as OpenAIStreamPart;
-        }
+        const data: string[] = [];
+        for (const line of buffer.slice(start, boundary).split("\n"))
+          if (line.startsWith("data:"))
+            data.push(line.slice(line.startsWith("data: ") ? 6 : 5));
+        start = boundary + 2;
+        const payload = data.join("\n").trim();
+        if (!payload) continue;
+        if (payload === "[DONE]") return;
+        const part = JSON.parse(payload) as OpenAIStreamPart;
+        if (part.choices?.some((choice) => choice.finish_reason))
+          finished = true;
+        yield part;
       }
+      buffer = buffer.slice(start);
+      if (buffer.length > maxPendingSSEChars)
+        throw new Error(
+          "OpenAI-compatible stream event exceeds 8 MiB without a blank line",
+        );
       if (chunk.done) break;
     }
-    throw new Error("OpenAI-compatible stream ended before [DONE]");
+    if (finished) return;
+    throw new Error(
+      "OpenAI-compatible stream ended before [DONE] and without a finish_reason (the server closed the connection mid-reply)",
+    );
   } finally {
     await reader.cancel().catch(() => undefined);
   }
