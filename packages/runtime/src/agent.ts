@@ -1342,6 +1342,16 @@ const READ_ONLY_TOOLS = new Set([
   "ask_user",
   "goal_status",
 ]);
+/** Inspection tools whose same call, with nothing run in between, gives the
+ * same result: a repeat is answered with a note instead of a second copy. */
+const REPEATABLE = new Set([
+  "read",
+  "read_image",
+  "list",
+  "search",
+  "fetch",
+  "web_search",
+]);
 /** Read-only tools that never join a parallel batch: a question waits on
  * the one user, so two at once (or one beside reads) run one by one; a
  * goal's report is recorded in call order. */
@@ -1982,6 +1992,12 @@ async function* agentTurn(
   // Calls refused this turn (or this goal), by name and arguments.
   const refused = options.refused ?? new Set<string>();
   const refusedIn = options.refused ? "in this goal" : "in this turn";
+  // Inspection calls answered this turn, by name and arguments, with the
+  // result the model was given. The same call again, while that result is
+  // still in the request and nothing else has run since, is answered with
+  // a note: a small model that rereads a file each step fills its window
+  // with copies before the step limit ends it.
+  const answered = new Map<string, { message: Message; limit: number }>();
   // The last call's reported prompt size and the characters it was made
   // of: the next prompt is estimated from the characters added since.
   let anchor: { tokens: number; chars: number } | undefined;
@@ -2232,9 +2248,21 @@ async function* agentTurn(
       output: string;
       message: Message;
       uncertain: boolean;
+      /** The call's name and arguments, and whether a note answered it. */
+      signature: string;
+      repeated: boolean;
     };
     /** Runs one tool call; yields its tool_start (unless pre-emitted for a
      * parallel batch) and returns the outcome for history + durability. */
+    // A result cut to share a batch is not what the call alone would get.
+    const repeats = (signature: string) => {
+      const earlier = answered.get(signature);
+      return (
+        earlier !== undefined &&
+        earlier.limit >= outputLimit &&
+        history.indexOf(earlier.message) >= (start ?? 0)
+      );
+    };
     const performCall = async function* (
       ctx: CallContext,
       call: ToolCall,
@@ -2252,6 +2280,7 @@ async function* agentTurn(
       let effectAttempted = false;
       let uncertain = false;
       let fromServer = false;
+      let repeated = false;
       let output: string;
       const images: string[] = [];
       // Effects are hard-denied under an explicit non-build intent; an
@@ -2281,6 +2310,10 @@ async function* agentTurn(
             name === "ask_user"
               ? `The user already declined this question ${refusedIn}. Continue with what you know, or say what you need.`
               : `This exact ${name} call was already refused ${refusedIn}, so it was not asked again. Ask the user, or take another approach.`;
+        } else if (repeats(signature)) {
+          yield* emitStart();
+          repeated = true;
+          output = `This exact ${name} call already ran in this turn, and nothing has run since that could change it. Its result is above: use it, or try something else.`;
         } else if (name === "read") {
           const args = ReadRangeArgs.parse(call.function.arguments);
           yield* emitStart();
@@ -2805,7 +2838,7 @@ async function* agentTurn(
         ),
       };
       if (images.length) message.images = images.splice(0);
-      return { status, output, message, uncertain };
+      return { status, output, message, uncertain, signature, repeated };
     };
     const endedAs = (oc: CallOutcome): ExecutionEvent["type"] =>
       oc.uncertain
@@ -2842,6 +2875,15 @@ async function* agentTurn(
           oc.message = kept;
         }
       }
+      if (!REPEATABLE.has(ctx.name)) {
+        if (oc.status !== "denied") answered.clear();
+      } else if (
+        // A note is not a result: the one it points at must stay in the
+        // request for the next repeat to point at it too.
+        !oc.repeated &&
+        (oc.status === "succeeded" || oc.status === "unverified")
+      )
+        answered.set(oc.signature, { message: oc.message, limit: outputLimit });
     };
     function* emitOutcome(
       ctx: CallContext,
@@ -2924,6 +2966,8 @@ async function* agentTurn(
               content: JSON.stringify({ status: "failed", output }),
             },
             uncertain: false,
+            signature: "",
+            repeated: false,
           };
         } finally {
           release();

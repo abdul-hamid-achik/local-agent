@@ -440,6 +440,57 @@ test("a batch of reads is cut to its share, and the next step to its own", async
   }
 });
 
+test("the same inspection call again in a turn is answered with a note, until something else runs", async () => {
+  const read = { name: "read", arguments: { path: "src/stats.ts" } };
+  const list = { name: "list", arguments: { path: "src" } };
+  const edit = {
+    name: "edit",
+    arguments: {
+      path: "src/stats.ts",
+      old_string: "mean = 1",
+      new_string: "mean = 2",
+    },
+  };
+  const refused = {
+    name: "edit",
+    arguments: {
+      ...edit.arguments,
+      old_string: "mean = 2",
+      new_string: "mean = 3",
+    },
+  };
+  const run = await session(
+    [read, list, read, edit, read, read, refused, read],
+    "build",
+    (proposal) =>
+      !(proposal.kind === "edit" && proposal.after.includes("mean = 3")),
+  );
+  try {
+    const NOTE =
+      "This exact read call already ran in this turn, and nothing has run since that could change it. Its result is above: use it, or try something else.";
+    expect(run.results.map((result) => [result.name, result.status])).toEqual([
+      ["read", "succeeded"],
+      ["list", "succeeded"],
+      ["read", "succeeded"],
+      ["edit", "succeeded"],
+      ["read", "succeeded"],
+      ["read", "succeeded"],
+      ["edit", "denied"],
+      ["read", "succeeded"],
+    ]);
+    const outputs = run.results.map((result) => result.output);
+    // Another inspection between them does not count, nor a refused edit;
+    // an edit that ran does.
+    expect(outputs[0]).toBe("export const mean = 1;\n");
+    expect(outputs[2]).toBe(NOTE);
+    expect(outputs[4]).toBe("export const mean = 2;\n");
+    expect(outputs[5]).toBe(NOTE);
+    expect(outputs[7]).toBe(NOTE);
+  } finally {
+    await run.cleanup();
+  }
+});
+
 test("read pages through a file that does not fit, at line ends", () => {
   const file = Array.from({ length: 100 }, (_, i) => `line ${i + 1}`).join(
     "\n",

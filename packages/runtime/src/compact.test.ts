@@ -165,6 +165,9 @@ test("the current work stays whole, and a second pass finds nothing", () => {
  */
 function ollama(replies: ("read" | "done" | "fail")[]) {
   const bodies: { messages: Message[] }[] = [];
+  // Each read starts a line further on: the same call again would be
+  // answered with a note, not a second copy.
+  let reads = 0;
   const server = Bun.serve({
     hostname: "127.0.0.1",
     port: 0,
@@ -192,7 +195,7 @@ function ollama(replies: ("read" | "done" | "fail")[]) {
                     {
                       function: {
                         name: "read",
-                        arguments: { path: "big.txt" },
+                        arguments: { path: "big.txt", offset: ++reads },
                       },
                     },
                   ],
