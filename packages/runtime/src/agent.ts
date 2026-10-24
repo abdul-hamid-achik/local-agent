@@ -776,11 +776,12 @@ async function duckduckgoSearch(
   query: string,
   signal: AbortSignal,
 ): Promise<SearchHit[] | null> {
-  const deadline = AbortSignal.any([
-    signal,
-    AbortSignal.timeout(SEARXNG_TIMEOUT_MS),
-  ]);
   for (let attempt = 1; attempt <= DDG_ATTEMPTS; attempt++) {
+    // Per attempt: a first try that timed out must not abort its retry.
+    const deadline = AbortSignal.any([
+      signal,
+      AbortSignal.timeout(SEARXNG_TIMEOUT_MS),
+    ]);
     let response: Response | null = null;
     try {
       response = await fetch(`${endpoint.url}?q=${encodeURIComponent(query)}`, {

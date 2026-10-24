@@ -26,6 +26,8 @@ let responder:
 let requestInits: { url: string; headers: Record<string, string> }[] = [];
 /** Every stubbed request's URL, in call order (which providers were tried). */
 let requestedUrls: string[] = [];
+/** The signal each stubbed request was given, parallel to requestedUrls. */
+let requestSignals: (AbortSignal | null | undefined)[] = [];
 /** Like the real fetch, a stubbed response never outlives its request's signal. */
 function untilAborted<T>(pending: Promise<T> | T, signal: AbortSignal) {
   return new Promise<T>((resolve, reject) => {
@@ -39,6 +41,7 @@ function untilAborted<T>(pending: Promise<T> | T, signal: AbortSignal) {
 globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
   const url = String(input);
   requestedUrls.push(url);
+  requestSignals.push(init?.signal);
   if (init?.headers)
     requestInits.push({
       url,
@@ -58,6 +61,7 @@ function restoreFetch() {
   responder = undefined;
   requestInits = [];
   requestedUrls = [];
+  requestSignals = [];
   hostAddresses.clear();
   readDenial = undefined;
 }
@@ -1460,6 +1464,32 @@ test("pre blocks get LF line endings and at most one blank line in a row", async
   try {
     expect(run.output(0)).toContain("\n\na\n\nb\n  c\n");
     expect(run.output(0)).not.toContain("\r");
+  } finally {
+    restoreFetch();
+    await run.cleanup();
+  }
+});
+
+test("each DuckDuckGo attempt gets its own timeout, so a timed-out first one does not doom the retry", async () => {
+  delete process.env.LOCAL_AGENT_SEARXNG_URL;
+  stubFetch((url) =>
+    url.startsWith("https://lite.duckduckgo.com/lite/")
+      ? new Response("upstream error", { status: 503 })
+      : url.startsWith("https://html.duckduckgo.com/html/")
+        ? ddgHtmlResponse()
+        : undefined,
+  );
+  const run = await session([
+    { name: "web_search", arguments: { query: "bun test" } },
+  ]);
+  try {
+    expect(run.results.map((result) => result.status)).toEqual(["succeeded"]);
+    const lite = requestSignals.filter((_, index) =>
+      requestedUrls[index]?.startsWith("https://lite.duckduckgo.com/lite/"),
+    );
+    // One shared 10 s deadline would already be spent when the retry starts.
+    expect(lite).toHaveLength(2);
+    expect(lite[1]).not.toBe(lite[0]);
   } finally {
     restoreFetch();
     await run.cleanup();
