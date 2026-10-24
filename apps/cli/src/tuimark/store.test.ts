@@ -500,7 +500,7 @@ test("grant matching: files shared, commands by argv prefix, MCP exact", () => {
   expect(grantCovers(runTest, cmd(["bun", "run", "evil.ts"]))).toBe(false);
   expect(grantCovers(runTest, cmd(["bun", "run"]))).toBe(false);
   for (const [program, sub] of [
-    ["npx", "x"],
+    ["npm", "x"],
     ["pnpm", "dlx"],
     ["docker", "exec"],
     ["go", "run"],
@@ -511,9 +511,13 @@ test("grant matching: files shared, commands by argv prefix, MCP exact", () => {
     expect(grantCovers(grant, cmd([program, sub, "a"])), program).toBe(true);
     expect(grantCovers(grant, cmd([program, sub, "c"])), program).toBe(false);
   }
-  // Other git subcommands keep the two-word prefix.
+  // Other git subcommands keep the two-word prefix: `add` runs code only
+  // after a package manager's name.
   const gitLog = grantFor(cmd(["git", "log", "-1"]));
   expect(grantCovers(gitLog, cmd(["git", "log", "--oneline"]))).toBe(true);
+  const gitAdd = grantFor(cmd(["git", "add", "a.ts"]));
+  expect(grantCovers(gitAdd, cmd(["git", "add", "b.ts"]))).toBe(true);
+  expect(grantFor(cmd(["git", "add"])).exact).toBeUndefined();
 
   // An exact grant and a prefix grant never share a key.
   expect(grantFor(cmd(["git", "status"])).key).not.toBe(

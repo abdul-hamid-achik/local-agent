@@ -501,25 +501,37 @@ export const TRUNCATED_BODY =
 // further arguments), and an MCP call grants its exact SERVER__TOOL name.
 //
 // Two narrower shapes keep a grant from covering code nobody saw:
-// - a runner subcommand (`bun run`, `npm exec`, `docker run`, `go run`,
-//   `bun add`, …) grants three words, so `bun run test …` never covers
-//   `bun run evil.ts`;
+// - a runner subcommand of a package manager or toolchain (`bun run`,
+//   `npm exec`, `docker run`, `go run`, `bun add`, …) grants three words,
+//   so `bun run test …` never covers `bun run evil.ts` (`git add` is not a
+//   runner: it keeps the two-word prefix);
 // - a bare program, a command whose second word is an option (`git -c …`,
 //   `bash -c …`, `node -e …`), a program that runs another program (`env`,
 //   `xargs`, `timeout`, `ssh`, …) and the git subcommands that run code
 //   from their arguments or write config that later runs (`git config`,
 //   `git rebase`, `git bisect`, …) grant only that exact argv.
 
-/** Second words that run code (or install packages) named by the third. */
-const RUNNER_SUBCOMMANDS = new Set([
-  "run",
-  "exec",
-  "x",
-  "dlx",
-  "add",
-  "install",
-  "i",
-]);
+/** Per program, the second words that run code (or install a package)
+ * named by the third. */
+const RUNNER_SUBCOMMANDS: Record<string, ReadonlySet<string>> = {
+  bun: new Set(["run", "x", "exec", "add", "install", "i"]),
+  npm: new Set(["run", "run-script", "exec", "x", "install", "i", "add"]),
+  pnpm: new Set(["run", "exec", "dlx", "add", "install", "i"]),
+  yarn: new Set(["run", "exec", "dlx", "add"]),
+  deno: new Set(["run", "x", "install", "add"]),
+  docker: new Set(["run", "exec"]),
+  podman: new Set(["run", "exec"]),
+  kubectl: new Set(["run", "exec"]),
+  go: new Set(["run", "install"]),
+  cargo: new Set(["run", "install"]),
+  uv: new Set(["run", "add"]),
+  pip: new Set(["install"]),
+  pip3: new Set(["install"]),
+  pipx: new Set(["run", "install"]),
+  poetry: new Set(["run", "add"]),
+  gem: new Set(["install"]),
+  brew: new Set(["install"]),
+};
 
 /** git subcommands that execute their arguments or set config that executes. */
 const GIT_EXACT = new Set([
@@ -541,7 +553,8 @@ function commandGrant(argv: readonly string[]): {
 } {
   const program = (argv[0] ?? "").split("/").at(-1)?.toLowerCase() ?? "";
   const second = argv[1] ?? "";
-  const runner = RUNNER_SUBCOMMANDS.has(second.toLowerCase());
+  const runner =
+    RUNNER_SUBCOMMANDS[program]?.has(second.toLowerCase()) ?? false;
   const exact =
     argv.length <= 1 ||
     COMMAND_WRAPPERS.has(program) ||
