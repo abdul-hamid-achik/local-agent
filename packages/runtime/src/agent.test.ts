@@ -97,6 +97,82 @@ test("an interrupted MCP call persists uncertainty without leaking transport err
   }
 });
 
+test("an approved edit whose file changed before it was applied fails plainly and the run goes on", async () => {
+  const root = await mkdtemp(join(tmpdir(), "local-agent-stale-edit-"));
+  await writeFile(join(root, "notes.md"), "before\n");
+  using workspace = await Workspace.create(root);
+  const store = await SessionStore.open(join(root, "session.sqlite"));
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    async fetch(request) {
+      const path = new URL(request.url).pathname;
+      if (path === "/api/tags")
+        return Response.json({ models: [{ name: "fixture", size: 1000 }] });
+      if (path === "/api/show")
+        return Response.json({
+          capabilities: ["completion", "tools"],
+          model_info: { "fixture.context_length": 16384 },
+        });
+      const body = (await request.json()) as { messages: { role: string }[] };
+      const message = body.messages.some((m) => m.role === "tool")
+        ? { role: "assistant", content: "Finished" }
+        : {
+            role: "assistant",
+            content: "",
+            tool_calls: [
+              {
+                function: {
+                  name: "edit",
+                  arguments: {
+                    path: "notes.md",
+                    old_string: "before",
+                    new_string: "after",
+                  },
+                },
+              },
+            ],
+          };
+      return new Response(`${JSON.stringify({ message, done: true })}\n`);
+    },
+  });
+  try {
+    const session = { store, state: await store.createSession(root) };
+    const events: AgentEvent[] = [];
+    for await (const event of runAgent(
+      resolveProvider({ OLLAMA_HOST: server.url.origin }, "fixture"),
+      [{ role: "user", content: "Edit the notes" }],
+      {
+        workspace,
+        session,
+        signal: AbortSignal.timeout(5000),
+        // A formatter rewrites the file while the card is open.
+        approve: async () => {
+          await writeFile(join(root, "notes.md"), "formatted\n");
+          return true;
+        },
+      },
+    ))
+      events.push(event);
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "tool_result",
+        name: "edit",
+        status: "failed",
+        output: "File changed since edit was prepared",
+      }),
+    );
+    expect(events.at(-1)).toMatchObject({ type: "turn_complete" });
+    expect(await readFile(join(root, "notes.md"), "utf8")).toBe("formatted\n");
+    const current = await store.loadSession(session.state.publicId, root);
+    expect(store.listHazards(current.id, current.workspaceId)).toHaveLength(0);
+  } finally {
+    await server.stop(true);
+    store.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("a gateway call is approved as the tool it runs, or not sent at all", async () => {
   const root = await mkdtemp(join(tmpdir(), "local-agent-mcp-gateway-"));
   using workspace = await Workspace.create(root);

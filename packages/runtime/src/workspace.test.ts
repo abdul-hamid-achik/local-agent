@@ -1,7 +1,9 @@
+import { fsyncSync } from "node:fs";
 import {
   link,
   mkdir,
   mkdtemp,
+  readdir,
   readFile,
   rename,
   rm,
@@ -11,7 +13,23 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, expect, test, vi } from "vitest";
-import { changeLines, secretPathsIn, Workspace } from "#runtime/workspace";
+import {
+  changeLines,
+  NotAppliedError,
+  secretPathsIn,
+  Workspace,
+} from "#runtime/workspace";
+import { renameAt } from "#runtime/workspace_native";
+
+vi.mock("node:fs", async (importOriginal) => {
+  const fs = await importOriginal<typeof import("node:fs")>();
+  return { ...fs, fsyncSync: vi.fn(fs.fsyncSync) };
+});
+vi.mock("#runtime/workspace_native", async (importOriginal) => {
+  const native =
+    await importOriginal<typeof import("#runtime/workspace_native")>();
+  return { ...native, renameAt: vi.fn(native.renameAt) };
+});
 
 const roots: string[] = [];
 const workspaces: Workspace[] = [];
@@ -98,8 +116,53 @@ test("rejects a proposal when the file changes after preparation", async () => {
   const { root, workspace } = await fixture();
   const proposal = await workspace.prepareEdit("notes.md", "before", "after");
   await writeFile(join(root, "notes.md"), "changed\nkeep\n", "utf8");
-  await expect(workspace.applyEdit(proposal)).rejects.toThrow("changed since");
+  const error = await workspace.applyEdit(proposal).catch((e: unknown) => e);
+  expect(error).toBeInstanceOf(NotAppliedError);
+  expect(error).toHaveProperty(
+    "message",
+    "File changed since edit was prepared",
+  );
   expect(await workspace.read("notes.md")).toBe("changed\nkeep\n");
+});
+
+test("a failure after the file was replaced is not reported as unapplied", async () => {
+  const { root, workspace } = await fixture();
+  const proposal = await workspace.prepareEdit("notes.md", "before", "after");
+  // The temporary file syncs; the directory, after the rename, does not.
+  vi.mocked(fsyncSync)
+    .mockImplementationOnce(() => {})
+    .mockImplementationOnce(() => {
+      throw new Error("EIO: i/o error, fsync");
+    });
+  const error = await workspace.applyEdit(proposal).catch((e: unknown) => e);
+  expect(error).toHaveProperty("message", "EIO: i/o error, fsync");
+  expect(error).not.toBeInstanceOf(NotAppliedError);
+  expect(await readFile(join(root, "notes.md"), "utf8")).toContain("after");
+  const write = await workspace.prepareWrite("fresh/new.txt", "x");
+  vi.mocked(fsyncSync)
+    .mockImplementationOnce(() => {})
+    .mockImplementationOnce(() => {
+      throw new Error("EIO: i/o error, fsync");
+    });
+  const failed = await workspace.applyWrite(write).catch((e: unknown) => e);
+  expect(failed).toHaveProperty("message", "EIO: i/o error, fsync");
+  expect(failed).not.toBeInstanceOf(NotAppliedError);
+  expect(await readFile(join(root, "fresh", "new.txt"), "utf8")).toBe("x");
+});
+
+test("a write that could not be published changed nothing but the directories it made, and says so", async () => {
+  const { root, workspace } = await fixture();
+  const proposal = await workspace.prepareWrite("made/deep/new.txt", "x");
+  vi.mocked(renameAt).mockImplementationOnce(() => {
+    throw new Error("Workspace replacement could not be published");
+  });
+  const error = await workspace.applyWrite(proposal).catch((e: unknown) => e);
+  expect(error).toBeInstanceOf(NotAppliedError);
+  expect(error).toHaveProperty(
+    "message",
+    "Workspace replacement could not be published; the directories it made remain: made, made/deep",
+  );
+  expect(await readdir(join(root, "made", "deep"))).toEqual([]);
 });
 
 test("requires a workspace-issued proposal and consumes it after one apply", async () => {

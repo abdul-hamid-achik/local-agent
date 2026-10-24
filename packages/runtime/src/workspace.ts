@@ -34,6 +34,20 @@ import {
 } from "#runtime/workspace_native";
 
 const MAX_FILE_BYTES = 8 * 1024 * 1024;
+
+/**
+ * An approved edit or write that failed before the file was replaced: the
+ * file holds what it held when the change was approved, so the outcome is
+ * known. A failure after the replacement (syncing the directory) is not one.
+ */
+export class NotAppliedError extends Error {}
+
+function notApplied(error: unknown, note = ""): NotAppliedError {
+  if (error instanceof NotAppliedError) return error;
+  const message = error instanceof Error ? error.message : String(error);
+  return new NotAppliedError(`${message}${note}`, { cause: error });
+}
+
 export type WorkspaceEditProposal = Readonly<{
   kind: "edit";
   path: string;
@@ -308,6 +322,20 @@ export class Workspace implements Disposable {
   }
 
   async applyEdit(proposal: WorkspaceEditProposal): Promise<void> {
+    let published = false;
+    try {
+      this.publishEdit(proposal, () => {
+        published = true;
+      });
+    } catch (error) {
+      throw published ? error : notApplied(error);
+    }
+  }
+
+  private publishEdit(
+    proposal: WorkspaceEditProposal,
+    published: () => void,
+  ): void {
     const expectedParent = proposal && this.proposals.get(proposal);
     if (!expectedParent)
       throw new Error(
@@ -348,6 +376,7 @@ export class Workspace implements Disposable {
         // POSIX rename has no compare-and-swap against other writers. Recheck
         // immediately before publication; all pathname operations stay pinned.
         renameAt(parent, tempName, name);
+        published();
         temporary = false;
         fsyncSync(parent);
       } finally {
@@ -738,6 +767,28 @@ export class Workspace implements Disposable {
   }
 
   async applyWrite(proposal: WorkspaceWriteProposal): Promise<void> {
+    let published = false;
+    const made: string[] = [];
+    try {
+      this.publishWrite(proposal, made, () => {
+        published = true;
+      });
+    } catch (error) {
+      if (published) throw error;
+      throw notApplied(
+        error,
+        made.length
+          ? `; the directories it made remain: ${made.join(", ")}`
+          : "",
+      );
+    }
+  }
+
+  private publishWrite(
+    proposal: WorkspaceWriteProposal,
+    made: string[],
+    published: () => void,
+  ): void {
     const expectedParent = proposal && this.proposals.get(proposal);
     if (!expectedParent || proposal.kind !== "write")
       throw new Error(
@@ -746,8 +797,11 @@ export class Workspace implements Disposable {
     this.proposals.delete(proposal);
     if (this.fd < 0) throw new Error("Workspace is closed");
     const relative = this.relative(proposal.path);
-    const run = proposal.created ? withParentCreating : withParent;
-    run(this.fd, relative, (parent, name) => {
+    const parentOf = (operation: (parent: number, name: string) => void) =>
+      proposal.created
+        ? withParentCreating(this.fd, relative, operation, made)
+        : withParent(this.fd, relative, operation);
+    parentOf((parent, name) => {
       if (!proposal.created && parentIdentity(parent) !== expectedParent)
         throw new Error("Workspace parent changed since write was prepared");
       const verify = () => {
@@ -796,6 +850,7 @@ export class Workspace implements Disposable {
         }
         verify();
         renameAt(parent, tempName, name);
+        published();
         temporary = false;
         fsyncSync(parent);
       } finally {

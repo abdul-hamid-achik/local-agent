@@ -45,10 +45,11 @@ import {
   type Session,
   type SessionStore,
 } from "#runtime/session";
-import type {
-  Workspace,
-  WorkspaceEditProposal,
-  WorkspaceWriteProposal,
+import {
+  NotAppliedError,
+  type Workspace,
+  type WorkspaceEditProposal,
+  type WorkspaceWriteProposal,
 } from "#runtime/workspace";
 
 const ReadArgs = z.strictObject({ path: z.string().min(1).max(4096) });
@@ -2767,7 +2768,9 @@ async function* agentTurn(
           throw new Error(`Unknown tool: ${name}`);
         }
       } catch (error) {
-        uncertain = effectAttempted;
+        // A write or edit that failed before replacing the file changed
+        // nothing: a plain failure the model can retry, not an unknown.
+        uncertain = effectAttempted && !(error instanceof NotAppliedError);
         status = "failed";
         output = signal.aborted
           ? "Cancelled; tool did not report successful completion"

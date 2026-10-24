@@ -229,13 +229,14 @@ export function renameAt(parent: number, source: string, target: string): void {
 
 /**
  * Like `withParent`, but creates the missing directories of the path (relative
- * to the pinned parent, never following a symbolic link). Used only to publish
- * a file the host has already approved.
+ * to the pinned parent, never following a symbolic link), naming each in
+ * `made`. Used only to publish a file the host has already approved.
  */
 export function withParentCreating<T>(
   root: number,
   path: string,
   operation: (parent: number, name: string) => T,
+  made: string[] = [],
 ): T {
   const parts = path.split("/");
   for (const part of parts) component(part);
@@ -243,7 +244,7 @@ export function withParentCreating<T>(
   if (!name) throw new Error("Missing workspace filename");
   let parent = root;
   try {
-    for (const part of parts) {
+    for (const [index, part] of parts.entries()) {
       let next: number;
       try {
         next = openAt(parent, part, DIRECTORY_FLAGS);
@@ -262,7 +263,7 @@ export function withParentCreating<T>(
             throw new Error(
               `Workspace directory could not be created (errno ${code})`,
             );
-        }
+        } else made.push(parts.slice(0, index + 1).join("/"));
         next = openAt(parent, part, DIRECTORY_FLAGS);
       }
       if (parent !== root) closeSync(parent);
