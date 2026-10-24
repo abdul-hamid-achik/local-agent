@@ -142,6 +142,10 @@ describe("provider configuration boundary", () => {
       stream_idle_timeout: "10m",
     });
     expect(providerStreamIdleTimeoutMs(provider)).toBe(600_000);
+    // An unparsed profile with an empty value is invalid, not the default.
+    expect(() =>
+      providerStreamIdleTimeoutMs({ ...provider, stream_idle_timeout: "" }),
+    ).toThrow(/stream_idle_timeout is invalid/);
     expect(() =>
       ProviderSchema.parse({
         ...provider,

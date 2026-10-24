@@ -446,6 +446,57 @@ describe("finish reasons", () => {
     }
   });
 
+  test("a finish_reason on a later choice is read like the parser's own check", async () => {
+    const server = serve(() =>
+      sseResponse(
+        sse(
+          JSON.stringify({
+            choices: [{ delta: {} }, { delta: {}, finish_reason: "length" }],
+          }),
+        ),
+      ),
+    );
+    try {
+      expect(
+        (await events(localProvider(`${server.url.origin}/v1`))).at(-1),
+      ).toMatchObject({ type: "done", finishReason: "length" });
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test("a finish reason that is not a string is ignored, not a crash", async () => {
+    const ollama = serve(
+      () =>
+        new Response(
+          `${JSON.stringify({ message: { role: "assistant", content: "x" }, done: true, done_reason: 5 })}\n`,
+        ),
+    );
+    const openai = serve(() =>
+      sseResponse(
+        sse(
+          JSON.stringify({ choices: [{ delta: {}, finish_reason: 5 }] }),
+          "[DONE]",
+        ),
+      ),
+    );
+    try {
+      expect(
+        (
+          await events(
+            resolveProvider({ OLLAMA_HOST: ollama.url.origin }, "fixture"),
+          )
+        ).at(-1),
+      ).toEqual({ type: "done", inputTokens: 0, outputTokens: 0 });
+      expect(
+        (await events(localProvider(`${openai.url.origin}/v1`))).at(-1),
+      ).toEqual({ type: "done", inputTokens: 0, outputTokens: 0 });
+    } finally {
+      ollama.stop(true);
+      openai.stop(true);
+    }
+  });
+
   test.each(["stop", "length"])(
     "ollama done_reason %s is surfaced on done",
     async (reason) => {

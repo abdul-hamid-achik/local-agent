@@ -493,8 +493,11 @@ async function* openAILocalChat(
         entry.args += fragment.function.arguments;
       pendingCalls.set(index, entry);
     }
-    const reason = part.choices?.[0]?.finish_reason;
-    if (reason) finishReason = reason;
+    // The same choices the parser's finished check looks at, not only the first.
+    const reason = part.choices?.find(
+      (choice) => choice.finish_reason,
+    )?.finish_reason;
+    if (typeof reason === "string") finishReason = reason;
     if (part.usage) usage = part.usage;
   }
   yield* emitToolCalls();
@@ -580,7 +583,7 @@ export async function* chat(
           inputTokens: part.prompt_eval_count ?? 0,
           outputTokens: part.eval_count ?? 0,
           ...reported,
-          ...(part.done_reason
+          ...(typeof part.done_reason === "string" && part.done_reason
             ? { finishReason: part.done_reason.slice(0, 64) }
             : {}),
         });

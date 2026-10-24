@@ -37,10 +37,11 @@ const durationMilliseconds = (value: string) => {
 };
 
 export function providerStreamIdleTimeoutMs(provider: Provider): number {
-  const parsed = provider.stream_idle_timeout
-    ? durationMilliseconds(provider.stream_idle_timeout)
-    : undefined;
-  if (parsed === undefined && provider.stream_idle_timeout)
+  const parsed =
+    provider.stream_idle_timeout !== undefined
+      ? durationMilliseconds(provider.stream_idle_timeout)
+      : undefined;
+  if (parsed === undefined && provider.stream_idle_timeout !== undefined)
     throw new Error("Provider stream_idle_timeout is invalid");
   return (
     parsed ?? provider.stream_idle_timeout_ms ?? defaultStreamIdleTimeoutMs
