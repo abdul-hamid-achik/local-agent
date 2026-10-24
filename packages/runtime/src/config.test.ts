@@ -308,6 +308,45 @@ describe("openai_local provider configuration", () => {
     ).toThrow(/^(?!.*sk-secret-value)/s);
   });
 
+  // The classification is of the host the URL parser resolves, not its spelling.
+  test.each([
+    "http://localhost.evil.com/v1",
+    "http://127.0.0.1.nip.io/v1",
+    "http://0.0.0.0/v1",
+    "HTTP://10.0.0.5/v1",
+    "http://[::ffff:127.0.0.1]/v1",
+  ])("refuses an api_key over http to %s", (url) => {
+    expect(() =>
+      resolveProvider({
+        ...local(url, { api_key: "k" }),
+        LOCAL_AGENT_LOCAL_ONLY: "false",
+      }),
+    ).toThrow(/use an https base URL or drop the api_key/);
+  });
+
+  test("a userinfo trick is refused whatever the key", () => {
+    expect(() =>
+      resolveProvider({
+        ...local("http://127.0.0.1@evil.com/v1", { api_key: "k" }),
+        LOCAL_AGENT_LOCAL_ONLY: "false",
+      }),
+    ).toThrow(/embedded credentials/);
+  });
+
+  test.each([
+    "http://localhost./v1",
+    "http://127.1/v1",
+    "http://2130706433/v1",
+    "HTTP://127.0.0.1:8080/v1",
+  ])("takes an api_key over http to %s, which is loopback", (url) => {
+    expect(
+      resolveProvider({
+        ...local(url, { api_key: "k" }),
+        LOCAL_AGENT_LOCAL_ONLY: "false",
+      }).api_key,
+    ).toBe("k");
+  });
+
   test("keeps http to loopback and keyless http to a LAN host, and https with a key", () => {
     const open = { LOCAL_AGENT_LOCAL_ONLY: "false" };
     for (const url of [

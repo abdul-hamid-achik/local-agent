@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from "vitest";
+import { afterEach, expect, test, vi } from "vitest";
 import type { Provider } from "#runtime/config";
 import {
   type LoadedModel,
@@ -143,6 +143,24 @@ test("an OpenAI-compatible endpoint is timed on its model list; a 404 still answ
   expect(
     await loadedModel(provider(bare.origin), AbortSignal.timeout(5_000)),
   ).toBeUndefined();
+});
+
+test("a profile built by hand is held to the schema before anything is sent", async () => {
+  const sent = vi.spyOn(globalThis, "fetch");
+  const probe = await probeProvider(
+    {
+      type: "openai_local",
+      base_url: "http://10.0.0.5:8080/v1",
+      model: "m",
+      context_size: 8_192,
+      api_key: "sk-secret-value",
+    } as Provider,
+    AbortSignal.timeout(5_000),
+  );
+  expect(probe.error).toContain("use an https base URL or drop the api_key");
+  expect(probe.error).not.toContain("sk-secret-value");
+  expect(sent).not.toHaveBeenCalled();
+  sent.mockRestore();
 });
 
 test("a placement warning names what is short, and nothing when the model is as asked", () => {

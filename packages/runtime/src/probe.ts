@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { canonicalModel, getJSON, ollamaMLX } from "#runtime/admission";
-import type { Provider } from "#runtime/config";
+import { type Provider, ProviderSchema } from "#runtime/config";
 
 /** The provider's model as its server holds it loaded (Ollama's GET /api/ps). */
 export type LoadedModel = {
@@ -114,6 +114,15 @@ export async function probeProvider(
   signal: AbortSignal,
   clock: () => number = () => performance.now(),
 ): Promise<ProviderProbe> {
+  // A profile that built its own way (not through resolveProvider) is held
+  // to the same rules before anything, an api_key included, is sent.
+  const checked = ProviderSchema.safeParse(provider);
+  if (!checked.success) {
+    const issue = checked.error.issues[0];
+    return {
+      error: `provider config is invalid: ${issue?.path.join(".") || "profile"}: ${issue?.message ?? "invalid"}`,
+    };
+  }
   const budget = AbortSignal.any([
     signal,
     AbortSignal.timeout(PROBE_TIMEOUT_MS),
