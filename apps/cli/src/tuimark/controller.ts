@@ -111,23 +111,26 @@ import {
   APPROVAL_UNARMED_STATUS,
   APPROVAL_WAIT_STATUS,
   approvalState,
-  BUSY_STATUS_LINE,
   CtxMeter,
   compactedNotice,
   contextLabel,
   contextPct,
   ctxFlags,
   detailsState,
+  formatElapsed,
   grantCovers,
   grantFor,
   grantsLabel,
+  type HeadPhase,
+  type HeadView,
+  headState,
   idleStatus,
   initialStore,
-  MCP_WAIT_STATUS,
   type McpServerFacts,
   mcpLines,
   mcpParts,
   NO_DETAILS_STATUS,
+  NO_HEAD,
   namesSecret,
   noApproval,
   noDetails,
@@ -150,13 +153,11 @@ import {
   questionChoices,
   questionPick,
   questionState,
-  RATE_POINTS,
   type SessionSummary,
   type Store,
   secretStatus,
   sessionRows,
   statusLines,
-  WAITING_STATUS,
   windowedNotice,
 } from "#cli/tuimark/store";
 import { LiveStream } from "#cli/tuimark/stream";
@@ -329,17 +330,10 @@ function oneLine(message: string): string {
   return clip(flatLine(message), STATUS_MAX);
 }
 
-function withSpeed(status: string, count: number, duration: number): string {
-  const speed = tokensPerSecond(count, duration);
-  return speed ? `${status} · ${speed}` : status;
-}
+export { formatElapsed };
 
-/** Elapsed seconds as the busy status shows them: `12s`, then `1m 05s`. */
-export function formatElapsed(totalSeconds: number): string {
-  const s = Math.max(0, Math.floor(totalSeconds));
-  if (s < 60) return `${s}s`;
-  return `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, "0")}s`;
-}
+/** What the turn is doing between the model's messages, for the head. */
+type Phase = HeadPhase | "between";
 
 /** The refused writes the client remembers. */
 const MAX_WRITE_ERRORS = 20;
@@ -558,18 +552,29 @@ export class TuimarkClient {
   };
   /** Quit was answered: a queued message must not start after it. */
   private quitting = false;
-  /** What the busy status names: waiting, generating, or the last tool result. */
-  private activity = WAITING_STATUS;
-  /** When the running turn started (the `now` clock), for the elapsed suffix. */
+  /** What the head of the live message says the turn is doing. */
+  private phase: Phase = "waiting";
+  /** The turn runs and its head may show (cleared first thing when it ends). */
+  private headOn = false;
+  /** The head as last written (JSON), so an unchanged one is not rewritten. */
+  private headShown = JSON.stringify(NO_HEAD);
+  /** The elapsed second the head last showed, so the ticker writes once a second. */
+  private headSeconds = -1;
+  /** When the running turn started (the `now` clock), for the head's elapsed. */
   private turnStartedAt = 0;
-  /** The elapsed second last written, so the ticker writes about once a second. */
-  private elapsedShown = -1;
-  /** Stream pieces (text or reasoning) since the last pace sample. */
-  private pieces = 0;
-  /** The turn's pace samples, one per elapsed second (the store's `rate`). */
-  private rate: number[] = [];
-  /** The elapsed second the last pace sample closed. */
-  private rateAt = 0;
+  /**
+   * The elapsed time stops while the turn waits on the person (an approval,
+   * an answer): when the wait began, and the waits already over.
+   */
+  private pausedAt?: number;
+  private pausedMs = 0;
+  /**
+   * A transient status (a verdict, a rule's note) is showing since this
+   * turn began: the next tool result puts the ambient status back.
+   */
+  private flashed = false;
+  /** The last finished turn, for the ambient status ("last 1m 06s · 32 tok/s"). */
+  private lastTurn?: { seconds: number; speed?: string };
   /** Ollama's generation counters, summed over the steps of a turn (nanoseconds). */
   private evalCount = 0;
   private evalDuration = 0;
@@ -830,12 +835,17 @@ export class TuimarkClient {
     }
   }
 
-  /** The idle status line, with what the MCP servers are doing. */
+  /** The ambient status line: mode, MCP state and the last turn (same idle and busy). */
   private idleText(): string {
-    return idleStatus(this.options.mcp?.length ?? 0, this.intent, {
-      connecting: this.mcpPending,
-      failed: this.mcpFailed.length,
-    });
+    return idleStatus(
+      this.options.mcp?.length ?? 0,
+      this.intent,
+      {
+        connecting: this.mcpPending,
+        failed: this.mcpFailed.length,
+      },
+      this.lastTurn,
+    );
   }
 
   /**
@@ -1468,6 +1478,7 @@ export class TuimarkClient {
     }
     this.transcript.replace(views);
     this.ctx.reset();
+    this.lastTurn = undefined;
     const closed = this.closePanelWrite();
     // Inline, the loaded history joins the scrollback like a resumed
     // session's does at attach; the region itself holds no history.
@@ -1999,6 +2010,8 @@ export class TuimarkClient {
     await this.publishWindow([
       { path: "live", value: IDLE_LIVE },
       { path: "thinking", value: IDLE_THINKING },
+      // The tool card is gone (or the turn is over): the head follows.
+      ...this.headWrites(),
       ...extra,
     ]);
   }
@@ -2014,6 +2027,8 @@ export class TuimarkClient {
       return [
         { path: "live", value: this.liveTool },
         { path: "thinking", value: IDLE_THINKING },
+        // A tool card stands in for the head (unless the turn waits on the person).
+        ...this.headWrites(),
       ];
     }
     return this.stream.drain();
@@ -2038,12 +2053,88 @@ export class TuimarkClient {
     return this.options.now?.() ?? Date.now();
   }
 
-  /** The busy status: the activity, its elapsed time, and a queued send. */
-  private busyStatus(): string {
-    const seconds = Math.floor((this.now() - this.turnStartedAt) / 1000);
-    this.elapsedShown = seconds;
-    const queued = this.queued !== undefined ? " · 1 queued" : "";
-    return `${this.activity} · ${formatElapsed(seconds)}${queued}`;
+  /** The turn's own seconds: the wait on the person (an approval, an answer) is not counted. */
+  private turnSeconds(): number {
+    const end = this.pausedAt ?? this.now();
+    return Math.floor((end - this.turnStartedAt - this.pausedMs) / 1000);
+  }
+
+  /** The turn waits on the person: its elapsed time stops. */
+  private pauseClock(): void {
+    this.pausedAt ??= this.now();
+  }
+
+  /** The person answered: the elapsed time goes on from where it stopped. */
+  private resumeClock(): void {
+    if (this.pausedAt === undefined) return;
+    this.pausedMs += this.now() - this.pausedAt;
+    this.pausedAt = undefined;
+  }
+
+  /**
+   * The head of the live assistant message, from the turn's own state: it
+   * waits on the person (static glyph) while an approval or a question is
+   * open, hides while a tool card stands in for it, and otherwise says
+   * what the model is doing. The phase and the elapsed time are the only
+   * text; neither is written per frame (see maybeElapsed).
+   */
+  private headView(): HeadView {
+    if (!this.headOn) return NO_HEAD;
+    const seconds = this.turnSeconds();
+    if (this.decide) return headState("approval", seconds);
+    if (this.asking) return headState("answer", seconds);
+    if (this.liveTool || this.phase === "between") return NO_HEAD;
+    return headState(this.phase, seconds);
+  }
+
+  /** The write that brings the head up to date, or none when it already is. */
+  private headWrites(): Write[] {
+    const view = this.headView();
+    const shown = JSON.stringify(view);
+    this.headSeconds = this.headOn ? this.turnSeconds() : -1;
+    if (shown === this.headShown) return [];
+    this.headShown = shown;
+    return [{ path: "head", value: view }];
+  }
+
+  /** Writes the head now if it changed. Not awaited: the writer's tail orders it. */
+  private syncHead(): void {
+    const writes = this.headWrites();
+    if (writes.length === 0) return;
+    void this.write(writes).then((ok) => {
+      // A refused write: the next sync sends it again.
+      if (!ok) this.headShown = "";
+    });
+  }
+
+  /** What the head says the turn is doing; a change is written at once. */
+  private setPhase(phase: Phase): void {
+    if (this.phase === phase) return;
+    this.phase = phase;
+    this.syncHead();
+  }
+
+  /**
+   * A transient status over the ambient one: a verdict, or a rule's note.
+   * It stays until the next state change (a tool result, the turn's end).
+   * An open approval owns the status line, so it wins; an open question
+   * likewise. Not awaited by the event loop: the write serializes on the
+   * writer's tail like every other, and event processing must not pause
+   * for a status paint (an abort that lands in such a pause can pass a
+   * generator still suspended at its yield).
+   */
+  private flash(text: string): void {
+    this.flashed = true;
+    if (!this.decide && !this.asking)
+      void this.write([{ path: "status", value: text }]);
+  }
+
+  /** A tool finished: a transient status of this turn gives way to the ambient one. */
+  private restoreStatus(): void {
+    if (!this.flashed) return;
+    this.flashed = false;
+    if (!this.decide && !this.asking)
+      void this.write([{ path: "status", value: this.idleText() }]);
   }
 
   /** The writes that paint the header ctx for `used` tokens. */
@@ -2060,53 +2151,14 @@ export class TuimarkClient {
   }
 
   /**
-   * Names what the busy status shows: the first text/thinking/tool event of
-   * the turn turns waiting into generating, and a tool result names itself
-   * until the next event. An open approval owns the status line, so it wins:
-   * the activity is remembered but not written over it (an open question
-   * likewise). Not awaited by the
-   * event loop: the write serializes on the writer's tail like every other,
-   * and event processing must not pause for a status paint (an abort that
-   * lands in such a pause can pass a generator still suspended at its yield).
-   */
-  private noteActivity(activity = BUSY_STATUS_LINE): void {
-    if (this.activity === activity) return;
-    this.activity = activity;
-    if (!this.decide && !this.asking)
-      void this.write([{ path: "status", value: this.busyStatus() }]);
-  }
-
-  /**
-   * Rewrites the busy status when its elapsed second changes (about once a
-   * second, from the flush timer), and samples the stream's pace in the
-   * same write. Idle writes nothing; an open approval keeps its status line
-   * but still samples, so the pace reads flat while the turn waits.
+   * Rewrites the head when its elapsed second changes (about once a
+   * second, from the flush timer). Idle writes nothing; the head's other
+   * changes (a phase, an approval) write themselves when they happen.
    */
   private async maybeElapsed(): Promise<void> {
-    if (!this.busy) return;
-    const seconds = Math.floor((this.now() - this.turnStartedAt) / 1000);
-    const writes: Write[] = [];
-    if (!this.decide && !this.asking && seconds !== this.elapsedShown)
-      writes.push({ path: "status", value: this.busyStatus() });
-    // Its own second, not elapsedShown: an activity change repaints the
-    // status mid-second and must not swallow that second's sample. Seconds
-    // the timer missed count as zeros after the pieces they held.
-    if (seconds > this.rateAt) {
-      const missed = Math.min(seconds - this.rateAt - 1, RATE_POINTS);
-      this.rate = [
-        ...this.rate,
-        this.pieces,
-        ...new Array<number>(missed).fill(0),
-      ].slice(-RATE_POINTS);
-      this.pieces = 0;
-      this.rateAt = seconds;
-      // Nothing streamed in the window: no line at all. The sparkline
-      // scales an all-zero series to mid-height, which reads as a stream.
-      writes.push({
-        path: "rate",
-        value: this.rate.some((pieces) => pieces > 0) ? this.rate : [],
-      });
-    }
+    if (!this.busy || !this.headOn) return;
+    if (this.turnSeconds() === this.headSeconds) return;
+    const writes = this.headWrites();
     if (writes.length > 0) await this.write(writes);
   }
 
@@ -2661,7 +2713,7 @@ export class TuimarkClient {
     const current = `${file}|${await stamp(trustStorePath())}`;
     if (current === this.permStamp) return this.permFile;
     const loaded = await loadPermissionFile(root);
-    if (loaded.warning) this.noteActivity(oneLine(loaded.warning));
+    if (loaded.warning) this.flash(oneLine(loaded.warning));
     this.permFile = loaded;
     this.permStamp = current;
     return this.permFile;
@@ -2950,7 +3002,7 @@ export class TuimarkClient {
   ) => {
     const verdict = evaluate((await this.fileRules()).rules, request);
     if (verdict.effect !== "deny") return undefined;
-    this.noteActivity(oneLine(`denied by rule: ${verdict.rule?.pattern}`));
+    this.flash(oneLine(`denied by rule: ${verdict.rule?.pattern}`));
     return verdict.rule?.pattern ?? "";
   };
 
@@ -2969,7 +3021,7 @@ export class TuimarkClient {
       permissionRequest(proposal),
     );
     if (verdict.effect === "deny") {
-      this.noteActivity(oneLine(`denied by rule: ${verdict.rule?.pattern}`));
+      this.flash(oneLine(`denied by rule: ${verdict.rule?.pattern}`));
       return false;
     }
     // `/sandbox on`: a command runs confined unless a person approves it on
@@ -2989,7 +3041,7 @@ export class TuimarkClient {
     ) {
       const why = this.sandboxProblem();
       if (why === undefined) {
-        this.noteActivity(oneLine(`sandboxed: ${proposal.argv.join(" ")}`));
+        this.flash(oneLine(`sandboxed: ${proposal.argv.join(" ")}`));
         return "sandbox";
       }
       // It stopped being available: off, and this command asks, whatever
@@ -3006,7 +3058,7 @@ export class TuimarkClient {
       ]);
     }
     if (verdict.effect === "allow" && !sandboxLost && !secret) {
-      this.noteActivity(oneLine(`allowed by rule: ${verdict.rule?.pattern}`));
+      this.flash(oneLine(`allowed by rule: ${verdict.rule?.pattern}`));
       return true;
     }
     // Grants never bypass a non-build intent: the runtime refuses plan and
@@ -3025,7 +3077,7 @@ export class TuimarkClient {
     if (grantedLabel !== undefined) {
       // The least invasive visible trace: the status flash a tool result
       // gets, naming the grant that let the call through.
-      this.noteActivity(`${grantedLabel}: allowed for session`);
+      this.flash(`${grantedLabel}: allowed for session`);
       return true;
     }
     return new Promise<boolean>((resolve) => {
@@ -3069,19 +3121,22 @@ export class TuimarkClient {
             : granted !== undefined
               ? `Approved · ${granted} allowed for session`
               : "Approved");
-        // The verdict is the activity until the next event, so the elapsed
-        // ticker keeps it (with its suffix) instead of overwriting it.
-        this.activity = verdict;
+        // The verdict stays on the status line until the next state change
+        // (a tool result, the turn's end); the turn's clock goes on.
+        this.flashed = true;
+        this.resumeClock();
         resolve(allowed);
         await this.write([
           { path: "approval", value: noApproval() },
           { path: "status", value: verdict },
+          ...this.headWrites(),
           ...(granted !== undefined ? this.grantsWrites() : []),
         ]);
       };
       // Anything but an armed, explicit "allow" is a deny, the abort included.
       const deny = () => void finish(false);
       this.decide = finish;
+      this.pauseClock();
       this.armed = false;
       this.proposal = proposal;
       signal.addEventListener("abort", deny, { once: true });
@@ -3096,6 +3151,8 @@ export class TuimarkClient {
         ...this.closePanelWrite(),
         { path: "approval", value: approval },
         { path: "status", value: APPROVAL_WAIT_STATUS },
+        // The head waits on the person: a still glyph, the clock stopped.
+        ...this.headWrites(),
       ];
       if (this.liveTool) {
         // The card goes in the same write as the dialog, so the two never disagree.
@@ -3155,8 +3212,9 @@ export class TuimarkClient {
             : answer.kind === "declined"
               ? "Question skipped"
               : "Answered";
-        // Like an approval's verdict, it is the activity until the next event.
-        if (verdict !== undefined) this.activity = verdict;
+        // Like an approval's verdict, it stays until the next state change.
+        if (verdict !== undefined) this.flashed = true;
+        this.resumeClock();
         if (answer) resolve(answer);
         else reject(signal.reason);
         await this.write([
@@ -3166,6 +3224,7 @@ export class TuimarkClient {
           ...(verdict !== undefined
             ? [{ path: "status", value: verdict }]
             : []),
+          ...this.headWrites(),
         ]);
       };
       const state = {
@@ -3179,6 +3238,7 @@ export class TuimarkClient {
       };
       const abort = () => void finish();
       this.asking = state;
+      this.pauseClock();
       signal.addEventListener("abort", abort, { once: true });
       const writes: Write[] = [
         { path: "palette.open", value: false },
@@ -3196,6 +3256,8 @@ export class TuimarkClient {
         },
         { path: "draft", value: "" },
         { path: "status", value: QUESTION_WAIT_STATUS },
+        // The head waits on the person: a still glyph, the clock stopped.
+        ...this.headWrites(),
       ];
       if (this.liveTool) {
         this.liveTool = {
@@ -3285,12 +3347,13 @@ export class TuimarkClient {
     this.evalCount = 0;
     this.evalDuration = 0;
     this.ctx.beginTurn();
-    this.activity = WAITING_STATUS;
+    this.phase = "waiting";
+    this.headOn = true;
     this.turnStartedAt = this.now();
-    this.elapsedShown = -1;
-    this.pieces = 0;
-    this.rate = [];
-    this.rateAt = 0;
+    this.pausedAt = undefined;
+    this.pausedMs = 0;
+    this.headSeconds = -1;
+    this.flashed = false;
     this.cancelReturnedQueue = false;
     // Every turn while a goal runs is one of its turns for the stop rules,
     // a typed one too.
@@ -3339,9 +3402,10 @@ export class TuimarkClient {
         { path: "empty", value: false },
         { path: "draft", value: "" },
         { path: "busy", value: true },
-        { path: "rate", value: this.rate },
         { path: "placeholder", value: PLACEHOLDER_BUSY },
-        { path: "status", value: this.busyStatus() },
+        // The same ambient status as at rest: a transient one of the last
+        // turn (an error, a command's answer) goes with the new turn.
+        { path: "status", value: this.idleText() },
         ...(this.goal
           ? [
               { path: "header.goal", value: this.goal.label },
@@ -3409,7 +3473,6 @@ export class TuimarkClient {
     const session = this.session;
     let receivedMessage = false;
     let status = "";
-    let toolName = "";
     // A card's duration, per call (the `now` clock). The runtime starts a
     // parallel batch's calls together and sends their messages afterwards,
     // in call order, so a call is matched to its message by that order,
@@ -3436,7 +3499,7 @@ export class TuimarkClient {
       // is offered, so the turn waits for them (Esc still cancels).
       const ready = this.options.mcpReady;
       if (this.mcpPending && ready) {
-        this.noteActivity(MCP_WAIT_STATUS);
+        this.setPhase("mcp");
         await new Promise<void>((resolve, reject) => {
           const abort = () => reject(turnSignal.reason);
           turnSignal.addEventListener("abort", abort, { once: true });
@@ -3446,7 +3509,7 @@ export class TuimarkClient {
           });
         });
         // mcpSettled runs before this continuation: its then was first.
-        this.noteActivity(WAITING_STATUS);
+        this.setPhase("waiting");
       }
       status = this.idleText();
       for await (const event of this.run(this.provider, this.history, {
@@ -3467,19 +3530,22 @@ export class TuimarkClient {
       })) {
         switch (event.type) {
           case "thinking":
-            this.noteActivity();
-            this.pieces++;
+            // Reasoning after the reply began (a late piece) is not a phase.
+            if (this.phase !== "streaming") this.setPhase("thinking");
             if (this.goalTurn) this.goalTurn.streamed = true;
             if (!this.liveTool) this.stream.pushThinking(event.text);
             break;
           case "text":
-            this.noteActivity();
-            this.pieces++;
+            this.setPhase("streaming");
             if (this.goalTurn) this.goalTurn.streamed = true;
             if (!this.liveTool) this.stream.pushText(event.text);
             break;
           case "message": {
             receivedMessage = true;
+            // A tool message hands the turn back to the model; a reply
+            // (or the text before a tool call) is complete. publishMessages
+            // below writes the head the new phase gives.
+            this.phase = event.message.role === "tool" ? "waiting" : "between";
             this.history.push(event.message);
             for (const call of event.message.tool_calls ?? [])
               if (call.id && call.function.name === "run_command")
@@ -3548,8 +3614,6 @@ export class TuimarkClient {
             break;
           }
           case "tool_requested":
-            this.noteActivity();
-            toolName = event.name;
             callOrder.push(event.id);
             // Inline, the text before the tool call is printed before the
             // stream is dropped for the tool card (and kept if refused).
@@ -3566,7 +3630,6 @@ export class TuimarkClient {
             this.dirty = true;
             break;
           case "tool_start":
-            this.noteActivity();
             startedAt.set(event.id, this.now());
             if (this.liveTool) {
               this.liveTool = {
@@ -3585,11 +3648,9 @@ export class TuimarkClient {
             const started = startedAt.get(event.id);
             if (started !== undefined && !tookMs.has(event.id))
               tookMs.set(event.id, this.now() - started);
-            // The result names the busy status (with its elapsed suffix)
-            // until the next event, as it did before the ticker existed.
-            this.noteActivity(
-              terminalText(`${event.name || toolName}: ${event.status}`),
-            );
+            // The card shows the result; a verdict or a rule's note that was
+            // on the status line gives way to the ambient status.
+            this.restoreStatus();
             const goal = this.goalTurn;
             if (goal) {
               if (event.status === "outcome_unknown") goal.uncertain = true;
@@ -3620,7 +3681,12 @@ export class TuimarkClient {
             break;
         }
       }
-      status = withSpeed(status, this.evalCount, this.evalDuration);
+      // What the ambient status keeps of this turn from now on.
+      this.lastTurn = {
+        seconds: this.turnSeconds(),
+        speed: tokensPerSecond(this.evalCount, this.evalDuration),
+      };
+      status = this.idleText();
       finished = true;
     } catch (error) {
       const aborted = request.signal.aborted;
@@ -3705,6 +3771,10 @@ export class TuimarkClient {
         this.transcript.push(notice);
       }
     } finally {
+      // The head goes with the turn: the publish below writes it off, and
+      // nothing that runs before it may write it on again.
+      this.headOn = false;
+      this.resumeClock();
       if (this.timer) clearInterval(this.timer);
       this.timer = undefined;
       clearTimeout(this.armTimer);

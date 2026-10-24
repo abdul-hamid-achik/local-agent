@@ -47,7 +47,8 @@
 /* Ctx thresholds (store flags: warn at >=75%, danger at >=90%; danger wins). */
 .la-ctx.warn, .la-ctxbar.warn { color: $warn; }
 .la-ctx.danger, .la-ctxbar.danger { color: $danger; }
-.la-spin { width: 2; }
+.la-spin, .la-still { width: 2; }
+.la-still { color: $muted; }
 
 /* Bordered like the composer and the diff, so `scrollbar: auto` has a right
  * border to paint its thumb over (a borderless viewport gets none). */
@@ -56,7 +57,7 @@
 .la-welcome { height: auto; layout: column; margin: 0 0 1 0; }
 .la-welcome-title { bold: true; width: auto; }
 .la-welcome-line { width: auto; color: $muted; }
-#rows, #live, #thinking { height: auto; layout: column; }
+#rows, #live { height: auto; layout: column; }
 
 .la-msg { height: auto; layout: column; margin: 0 0 1 0; }
 .la-role { bold: true; }
@@ -64,9 +65,11 @@
 .la-msg.asst > .la-role { color: $accent; }
 .la-msg.error > .la-role { color: $danger; }
 .la-msg.notice > .la-role { color: $warn; }
-/* The reply being written: its label and a spinner (app.tui #live). */
+/* The reply being written: its label, a spinner (or a still glyph while the
+ * turn waits on you) and the phase with the elapsed time, dim (app.tui #live). */
 .la-live-head { height: 1; gap: 1; }
 .la-live-head > .la-role { width: auto; color: $accent; }
+.la-live-text { width: 1fr; }
 .la-blocks { height: auto; layout: column; }
 .la-blocks > text { wrap: wrap; }
 /* Prose stops at a readable measure on a wide terminal; code blocks and
@@ -84,11 +87,8 @@
 .la-code.table { margin: 1 0 0 0; }
 .la-lang { color: $muted; dim: true; }
 .la-codetext, .la-out, .la-think { height: auto; }
-.la-think-row { height: 1; gap: 1; }
-.la-think-head { width: auto; color: $muted; dim: true; }
 .la-think { padding: 0 0 0 2; color: $muted; italic: true; dim: true; }
 .la-thinkbox { height: auto; max-height: 3; width: 1fr; }
-#thinking { margin: 0 0 1 0; }
 
 /* Inline runs (blocks.ts inlineRuns) and code tokens: a span is styled by the
  * class its run carries. */
@@ -126,13 +126,12 @@ span.del { color: $danger; }
 
 #status { gap: 1; padding: 0 1; }
 .la-statustext { width: auto; padding: 0 2 0 0; }
-.la-rate { width: 16; color: $accent; }
 .la-hints { width: 1fr; justify: end; }
 /* Narrow terminals: the context meter goes first (model and mode stay), and
  * the status text is capped so at least the first hint (^P commands) fits.
  * Hints drop as a suffix: the first that does not fit takes the rest. */
 @media (max-cols: 60) {
-  .la-ctx, .la-ctxbar, .la-grants, .la-rate { display: none; }
+  .la-ctx, .la-ctxbar, .la-grants { display: none; }
   .la-statustext { max-width: 50%; padding: 0; }
 }
 

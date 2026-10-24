@@ -32,7 +32,7 @@ steps:
     - snapshot: card_truncated
     - wait:
         screen:
-            contains: "Ready"
+            contains: "Message the model"
         timeoutMs: 10000
     - wait:
         screen:

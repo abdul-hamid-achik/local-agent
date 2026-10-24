@@ -7,4 +7,4 @@ build · session a1b2c3d · project
 ╔══════════════════════════════════════════════════════════════════════════════╗
 ║ Message the model                                                            ║
 ╚══════════════════════════════════════════════════════════════════════════════╝
- build · Ready · /help for keys   ^P commands  esc cancel  ctrl+c quit          
+ build · last 1m 06s · 32 tok/s   ^P commands  esc cancel  ctrl+c quit          

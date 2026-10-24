@@ -1,9 +1,9 @@
 === grid 80x8 ===
  Local Agent        qwen3-coder:30b  goal 2/8        ctx 9.6k/32k  ███▋░░░░░░░░ 
-Assistant ⠋                                                                     
+Assistant ⠋  41s                                                                
 Running the fetch tests next.                                                   
                                                                                 
 ╔══════════════════════════════════════════════════════════════════════════════╗
-║ Generating…                                                                  ║
+║ Type to queue a message                                                      ║
 ╚══════════════════════════════════════════════════════════════════════════════╝
- ⠋  Generating…                    ^P commands  esc cancel  ctrl+c quit         
+ build · last 1m 06s · 32 tok/s   ^P commands  esc cancel  ctrl+c quit          

@@ -266,36 +266,35 @@
         <col id="rows" each="messages as m" key="m.id">
           <use template="la-turn" with="m as msg"/>
         </col>
-        <!-- The in-flight message. A reply is live.blocks (final, appended to) and
-             live.tail (the block being written); a tool call is live.card. -->
-        <col id="live" if="live.active">
-          <!-- la-message's shape, with a spinner by the label while the reply
-               is written (a template's props are fixed text, and a printed or
-               history turn must never carry a spinner). -->
-          <col class="la-msg asst" if="live.is_asst">
+        <!-- The in-flight assistant message, from the moment a turn starts: its
+             head is the one place the UI says what the turn is doing (head.*: a
+             spinner the engine animates, or a still glyph while the turn waits on
+             you, then the phase and the elapsed time, dim). The reasoning, dim,
+             shows under the head until the answer starts: the stream appends to
+             thinking.runs and the scroll shows the last three rows of it. A reply
+             is live.blocks (final, appended to) and live.tail (the block being
+             written). la-message's shape, but not its template: a template's props
+             are fixed text, and a printed or history turn must never carry a spinner. -->
+        <col id="live" if="head.on">
+          <col class="la-msg asst">
             <row class="la-live-head">
               <text class="la-role">Assistant</text>
-              <progress indeterminate="true" class="la-spin"/>
+              <progress indeterminate="true" if="head.spin" class="la-spin"/>
+              <text if="head.still" class="la-still">{head.glyph}</text>
+              <text class="la-muted la-live-text" wrap="truncate">{head.text}</text>
             </row>
+            <scroll id="think" if="thinking.on" class="la-thinkbox" stick="bottom">
+              <text class="la-think" runs="thinking.runs" wrap="pre-wrap"/>
+            </scroll>
             <use template="la-blocks" with="live.blocks as blocks"/>
             <use template="la-blocks" with="live.tail as blocks"/>
             <use template="la-media" with="live as lm"/>
           </col>
-          <use template="la-tool" if="live.is_tool" with="live.card as t">
-            <text class="la-out" runs="live.card.out" wrap="pre-wrap"/>
-          </use>
         </col>
-        <!-- The model's reasoning, dim, until the answer starts: the stream appends to
-             thinking.runs and the scroll shows the last three rows of it. -->
-        <col id="thinking" if="thinking.on">
-          <row class="la-think-row">
-            <progress indeterminate="true" class="la-spin"/>
-            <text class="la-think-head">Thinking…</text>
-          </row>
-          <scroll id="think" class="la-thinkbox" stick="bottom">
-            <text class="la-think" runs="thinking.runs" wrap="pre-wrap"/>
-          </scroll>
-        </col>
+        <!-- A running tool keeps its card, with its own spinner. -->
+        <use id="livetool" template="la-tool" if="live.is_tool" with="live.card as t">
+          <text class="la-out" runs="live.card.out" wrap="pre-wrap"/>
+        </use>
       </scroll>
 
       <!-- An open ask_user question, answered from the composer below. -->
@@ -320,11 +319,9 @@
       <textarea id="composer" bind="draft" placeholder="{placeholder}" on:change="typed" on:submit="send"/>
 
       <row id="status" class="k-statusbar">
-        <progress indeterminate="true" if="busy" class="la-spin"/>
+        <!-- Ambient facts, the same at rest and while a turn runs (what the
+             turn is doing is the live message's head), or a transient message. -->
         <text class="la-statustext" wrap="truncate">{status}</text>
-        <!-- The stream's pace, a sample a second (the parent's rate): the
-             reply's shape while it arrives, not a number. -->
-        <sparkline if="busy" class="la-rate" bind="rate" min="0"/>
         <hints class="la-hints"/>
       </row>
     </col>

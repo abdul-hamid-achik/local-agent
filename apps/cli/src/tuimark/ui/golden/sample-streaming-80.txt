@@ -17,7 +17,7 @@
 │ Assistant                                                                    ┃
 │ Done. The helper now retries three times.                                    ┃
 │                                                                              ┃
-│ Assistant ⠋                                                                  ┃
+│ Assistant ⠋  12s                                                             ┃
 │ Here is the plan:                                                            ┃
 │  ts                                                                          ┃
 │  const retries = 3;                                                          ┃
@@ -26,6 +26,6 @@
 │                                                                              ┃
 └──────────────────────────────────────────────────────────────────────────────┘
 ╔══════════════════════════════════════════════════════════════════════════════╗
-║ Generating…                                                                  ║
+║ Type to queue a message                                                      ║
 ╚══════════════════════════════════════════════════════════════════════════════╝
- ⠋  Generating…             ▂▆▇▇█▇ ^P commands  esc cancel  ↑/↓ history         
+ build · last 1m 06s · 32 tok/s   ^P commands  esc cancel  ↑/↓ history          

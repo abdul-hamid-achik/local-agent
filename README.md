@@ -235,12 +235,12 @@ saved state up to 8 MiB; past either the turn is refused with a sentence that
 says so, and the Tuimark client adds that `/sessions new` starts over.
 
 Thinking streams as its own `thinking` event, apart from the answer. The Tuimark
-client shows a dim "Thinking…" block with the last three lines while it streams
-and removes it when the answer starts; the Vue client shows "Thinking…" in its
-status line; headless `--json` emits the events. Reasoning is never printed into
+client shows a dim block with the last three lines under the assistant's message
+head ("Assistant ⠋ thinking · 12s") while it streams and removes it when the
+answer starts; the Vue client shows "Thinking…" in its status line; headless `--json` emits the events. Reasoning is never printed into
 the transcript. The `done` event also carries Ollama's `promptEvalCount`,
 `promptEvalDuration`, `evalCount`, `evalDuration` and `totalDuration` (durations in
-nanoseconds) when reported, and the status line shows `N tok/s` after a turn.
+nanoseconds) when reported, and the Tuimark status line keeps `last 1m 06s · N tok/s` after a turn.
 
 ### Tools
 

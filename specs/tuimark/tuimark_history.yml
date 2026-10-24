@@ -29,7 +29,7 @@ steps:
         timeoutMs: 15000
     - wait:
         screen:
-            contains: "Ready"
+            contains: "Message the model"
         timeoutMs: 15000
     - type: "count beta"
     - press: enter
@@ -39,7 +39,7 @@ steps:
         timeoutMs: 15000
     - wait:
         screen:
-            contains: "Ready"
+            contains: "Message the model"
         timeoutMs: 15000
     - type: "half typed"
     - press: up

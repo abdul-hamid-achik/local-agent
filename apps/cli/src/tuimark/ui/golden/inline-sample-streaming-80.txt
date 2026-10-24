@@ -1,6 +1,6 @@
 === grid 80x12 ===
  Local Agent         qwen3-coder:30b  build          ctx 9.6k/32k  ███▋░░░░░░░░ 
-Assistant ⠋                                                                     
+Assistant ⠋  12s                                                                
 Here is the plan:                                                               
  ts                                                                             
  const retries = 3;                                                             
@@ -8,6 +8,6 @@ Here is the plan:
    await fetch(url);                                                            
                                                                                 
 ╔══════════════════════════════════════════════════════════════════════════════╗
-║ Generating…                                                                  ║
+║ Type to queue a message                                                      ║
 ╚══════════════════════════════════════════════════════════════════════════════╝
- ⠋  Generating…             ▂▆▇▇█▇ ^P commands  esc cancel  ctrl+c quit         
+ build · last 1m 06s · 32 tok/s   ^P commands  esc cancel  ctrl+c quit          

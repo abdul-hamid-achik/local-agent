@@ -38,32 +38,54 @@ import {
 } from "#cli/tuimark/commands";
 import type { TranscriptSnapshot } from "#cli/tuimark/transcript";
 
-export const IDLE_STATUS = "Ready · /help for keys";
-
 /** MCP servers that are still connecting, or that failed to (count only). */
 export interface McpStartupState {
   connecting?: boolean;
   failed?: number;
 }
 
-/** The idle status line, prefixed with the mode so the intent is always
- * visible; the MCP count (or that the servers are still connecting, and how
- * many failed) stays for the whole session. */
+/** The last finished turn, as the ambient status keeps it. */
+export interface LastTurn {
+  seconds: number;
+  /** "32 tok/s", when the provider reported its timings. */
+  speed?: string;
+}
+
+/**
+ * The ambient status line, the same at rest and while a turn runs: the
+ * mode, the MCP state (the count, that the servers are still connecting,
+ * how many failed) and, once a turn has finished, how long it took and how
+ * fast it went. What a turn is doing now is the live message's head, not
+ * this line. Transient messages (a command's answer, an error, the keys of
+ * an open approval) take the line over and give it back at the next state
+ * change.
+ */
 export function idleStatus(
   mcpServers: number,
   intent?: Intent,
   mcp: McpStartupState = {},
+  last?: LastTurn,
 ): string {
   const failed = mcp.failed ?? 0;
-  const base = mcp.connecting
-    ? `${IDLE_STATUS} · MCP connecting…`
-    : mcpServers || failed
-      ? `${IDLE_STATUS} · MCP ${mcpServers}${failed ? ` · ${failed} failed (/mcp)` : ""}`
-      : IDLE_STATUS;
-  return intent ? `${intent} · ${base}` : base;
+  const parts: string[] = [];
+  if (intent) parts.push(intent);
+  if (mcp.connecting) parts.push("MCP connecting…");
+  else if (mcpServers || failed)
+    parts.push(
+      `MCP ${mcpServers}${failed ? ` · ${failed} failed (/mcp)` : ""}`,
+    );
+  if (last) {
+    parts.push(
+      `last ${last.seconds < 1 ? "<1s" : formatElapsed(last.seconds)}`,
+    );
+    if (last.speed) parts.push(last.speed);
+  }
+  return parts.join(" · ");
 }
+/** The composer's hint at rest. */
 export const PLACEHOLDER = "Message the model";
-export const PLACEHOLDER_BUSY = "Generating…";
+/** While a turn runs a send is queued (one message, run when the turn ends). */
+export const PLACEHOLDER_BUSY = "Type to queue a message";
 /** While the dialog is not armed yet: only deny works. */
 export const APPROVAL_WAIT_STATUS = "Waiting for approval · n deny · Esc deny";
 /** Once the dialog accepts `y` (and `a`, the session grant, `!` the rule). */
@@ -71,11 +93,6 @@ export const APPROVAL_STATUS =
   "Waiting for approval · y allow · a session · ! always · n deny · Esc deny";
 export const APPROVAL_TRUNCATED_STATUS =
   "Preview truncated · y allow · n deny · Esc deny";
-export const BUSY_STATUS_LINE = "Generating…";
-/** Busy, but no text/thinking/tool event has arrived yet this turn. */
-export const WAITING_STATUS = "Waiting for the model…";
-/** A turn sent while the MCP servers still connect waits for them. */
-export const MCP_WAIT_STATUS = "Connecting MCP servers…";
 /** A `y` swallowed by the arm delay says so instead of going silent. */
 export const APPROVAL_UNARMED_STATUS = "Approval not armed yet — press y again";
 /** An `a` swallowed by the arm delay, same rule as `y`. */
@@ -169,6 +186,80 @@ export interface ApprovalState {
   lines: DiffLine[];
 }
 
+/** Elapsed seconds as the head shows them: `12s`, then `1m 05s`. */
+export function formatElapsed(totalSeconds: number): string {
+  const s = Math.max(0, Math.floor(totalSeconds));
+  if (s < 60) return `${s}s`;
+  return `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, "0")}s`;
+}
+
+/**
+ * What the running turn is doing, as the head of the assistant's message
+ * says it: waiting for the model (or for the MCP servers it needs), the
+ * model reasoning, the reply streaming (the elapsed alone: the text is the
+ * indication), or the turn waiting on the person (an approval, an answer).
+ */
+export type HeadPhase =
+  | "waiting"
+  | "mcp"
+  | "thinking"
+  | "streaming"
+  | "approval"
+  | "answer";
+
+const HEAD_PHASE_TEXT: Record<HeadPhase, string> = {
+  waiting: "waiting for the model",
+  mcp: "connecting MCP servers",
+  thinking: "thinking",
+  streaming: "",
+  approval: "waiting for your approval",
+  answer: "waiting for your answer",
+};
+
+/** Stands where the spinner was while the turn waits on the person. */
+export const HEAD_STILL_GLYPH = "⠿";
+
+/**
+ * The head of the assistant's live message, from the moment a turn starts.
+ * It lives in its own store path, not in `live` (the stream rewrites `live`
+ * whole), and is never part of a printed or history turn: those are
+ * rendered from la-turn, which has no spinner. The engine animates the
+ * spinner (`<progress indeterminate>`); the text changes once a second.
+ */
+export interface HeadView {
+  /** The head shows: a turn runs, and no tool card stands in for it. */
+  on: boolean;
+  /** The spinner turns: the turn is working. */
+  spin: boolean;
+  /** The static glyph shows instead: the turn waits on the person. */
+  still: boolean;
+  glyph: string;
+  /** "<phase> · <elapsed>", dim; the elapsed alone while the reply streams. */
+  text: string;
+}
+
+export const NO_HEAD: HeadView = Object.freeze({
+  on: false,
+  spin: false,
+  still: false,
+  glyph: HEAD_STILL_GLYPH,
+  text: "",
+}) as HeadView;
+
+/** The head for `phase` after `seconds` of the turn's own time. */
+export function headState(phase: HeadPhase, seconds: number): HeadView {
+  const waiting = phase === "approval" || phase === "answer";
+  return {
+    on: true,
+    spin: !waiting,
+    still: waiting,
+    glyph: HEAD_STILL_GLYPH,
+    text: [HEAD_PHASE_TEXT[phase], formatElapsed(seconds)]
+      .filter(Boolean)
+      .join(" · "),
+  };
+}
+
 export interface Store {
   header: {
     provider: string;
@@ -203,6 +294,11 @@ export interface Store {
   live: LiveView;
   /** The model's reasoning while it streams; gone once the answer starts. */
   thinking: ThinkingView;
+  /**
+   * The head of the assistant's message while a turn runs: the one place the
+   * UI says what the turn is doing (see HeadView).
+   */
+  head: HeadView;
   approval: ApprovalState;
   /** An open ask_user question (see QuestionState). */
   question: QuestionState;
@@ -230,14 +326,8 @@ export interface Store {
   draft: string;
   placeholder: string;
   busy: boolean;
+  /** The status bar: ambient facts, or a transient message (see idleStatus). */
   status: string;
-  /**
-   * The stream's pace while a turn runs: pieces of reply (or reasoning)
-   * that arrived in each second, the newest last, at most RATE_POINTS of
-   * them. The status bar draws it as a sparkline; the final speed is the
-   * status text's (tok/s from the model's own counts).
-   */
-  rate: number[];
   /**
    * Scratch paths of the inline client (ui/inline.tui reads them only at
    * commit time): the view or blocks a `commit` is about to print into the
@@ -246,9 +336,6 @@ export interface Store {
   commit_buf: MessageView | null;
   commit_blocks: Block[];
 }
-
-/** The seconds of stream pace the status bar's sparkline shows. */
-export const RATE_POINTS = 16;
 
 /** The empty view a fresh store carries at `commit_buf`, before any commit. */
 export const EMPTY_COMMIT_VIEW: MessageView = Object.freeze({
@@ -570,6 +657,7 @@ export function initialStore(init: StoreInit): Store {
     earlier: init.transcript.earlier,
     live: IDLE_LIVE,
     thinking: IDLE_THINKING,
+    head: NO_HEAD,
     approval: noApproval(),
     question: noQuestion(),
     details: noDetails(),
@@ -584,7 +672,6 @@ export function initialStore(init: StoreInit): Store {
     status: idleStatus(init.mcpServers, init.intent, {
       connecting: init.mcpConnecting,
     }),
-    rate: [],
     commit_buf: EMPTY_COMMIT_VIEW,
     commit_blocks: [],
   };

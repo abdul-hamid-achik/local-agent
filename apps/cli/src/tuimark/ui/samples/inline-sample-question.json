@@ -54,6 +54,13 @@
     "on": false,
     "runs": []
   },
+  "head": {
+    "on": true,
+    "spin": false,
+    "still": true,
+    "glyph": "⠿",
+    "text": "waiting for your answer · 12s"
+  },
   "approval": {
     "open": false,
     "title": "",
@@ -332,7 +339,6 @@
   "placeholder": "enter takes the chosen row",
   "busy": true,
   "status": "Waiting for your answer · esc skip",
-  "rate": [],
   "commit_buf": {
     "id": "commit",
     "is_user": false,

@@ -1,13 +1,13 @@
 === grid 80x30 ===
  Local Agent         qwen3-coder:30b  build          ctx 9.6k/32k  ███▋░░░░░░░░ 
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│    for (let attempt = 1; ; attempt++) {                                      │
-│      try { return await fetch(url); }                                        │
+│      catch (e) { if (attempt === tries) throw e; }                           │
+│    }                                                                         │
 │ ╭─ Edit install.sh? ───────────────────────────────────────────────────────╮ │
 │ │                                                                          │ │
 │ │  Apply this change to the workspace.                                     │ │
 │ │  ┌────────────────────────────────────────────────────────────────────┐  │ │
-│ │  │--- a/install.sh                                                    ┃  │ ┃
+│ │  │--- a/install.sh                                                    ┃  │ │
 │ │  │+++ b/install.sh                                                    │  │ ┃
 │ │  │@@ -1,3 +1,250 @@                                                   │  │ ┃
 │ │  │+echo step 0                                                        │  │ ┃
@@ -26,6 +26,6 @@
 │ │                                                                          │ ┃
 └─╰──────────────────────────────────────────────────────────────────────────╯─┘
 ╭──────────────────────────────────────────────────────────────────────────────╮
-│ Generating…                                                                  │
+│ Type to queue a message                                                      │
 ╰──────────────────────────────────────────────────────────────────────────────╯
- ⠋  Waiting for approval · y allow · a session · ! always · n deny · Esc deny   
+ Waiting for approval · y allow · a session · ! always · n deny · Esc deny      

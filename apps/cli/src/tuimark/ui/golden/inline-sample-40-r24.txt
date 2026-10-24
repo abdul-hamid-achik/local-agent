@@ -3,4 +3,4 @@
 ╔══════════════════════════════════════╗
 ║ Message the model                    ║
 ╚══════════════════════════════════════╝
- build · Ready · /h… ^P commands        
+ build · last 1m 06… ^P commands        

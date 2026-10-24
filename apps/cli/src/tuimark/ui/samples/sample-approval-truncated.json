@@ -306,6 +306,13 @@
     "on": false,
     "runs": []
   },
+  "head": {
+    "on": true,
+    "spin": false,
+    "still": true,
+    "glyph": "⠿",
+    "text": "waiting for your approval · 12s"
+  },
   "approval": {
     "open": true,
     "title": "Edit big.txt?",
@@ -14572,10 +14579,9 @@
     ]
   },
   "draft": "",
-  "placeholder": "Generating…",
+  "placeholder": "Type to queue a message",
   "busy": true,
   "status": "Preview truncated · y allow · n deny · Esc deny",
-  "rate": [],
   "commit_buf": {
     "id": "commit",
     "is_user": false,

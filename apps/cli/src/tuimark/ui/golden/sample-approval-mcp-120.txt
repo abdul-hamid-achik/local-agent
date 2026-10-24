@@ -1,23 +1,23 @@
 === grid 120x30 ===
  Local Agent           Ollama / loopback  qwen3-coder:30b  build            session a1b2c3d  ctx 9.6k/32k  ███▋░░░░░░░░ 
 ┌──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│    for (let attempt = 1; ; attempt++) {                                                                              │
-│      try { return await fetch(url); }                                                                                │
-│      catch (e) { if ╭─ Call query from server db? ─────────────────────────────────────────────╮                     │
-│    }                │                                                                          │                     │
-│  }                  │  MCP tool query from server db. Call it with the arguments below.        │                     │
-│                     │  ┌────────────────────────────────────────────────────────────────────┐  │                     │
-│ ╭─ Edit ────────────│  │db__query                                                           ┃  │───────────────────╮ ┃
-│ │ ✓ succeeded       │  │{                                                                   ┃  │                   │ ┃
-│ │ src/fetch.ts      │  │  "field_0": "value number 0 for the remote tool",                  ┃  │                   │ ┃
-│ │ Updated src/fetch.│  │  "field_1": "value number 1 for the remote tool",                  ┃  │                   │ ┃
-│ │   import { sleep }│  │  "field_2": "value number 2 for the remote tool",                  ┃  │                   │ ┃
-│ │ - export const get│  │  "field_3": "value number 3 for the remote tool",                  ┃  │                   │ ┃
-│ │ + export const get│  │  "field_4": "value number 4 for the remote tool",                  ┃  │                   │ ┃
-│ ╰───────────────────│  │  "field_5": "value number 5 for the remote tool",                  ┃  │───────────────────╯ ┃
-│                     │  │  "field_6": "value number 6 for the remote tool",                  │  │                     ┃
-│ Assistant           │  │  "field_7": "value number 7 for the remote tool",                  │  │                     ┃
-│ Done. The helper now│  │  "field_8": "value number 8 for the remote tool",                  │  │                     ┃
+│      catch (e) { if (attempt === tries) throw e; }                                                                   │
+│    }                                                                                                                 │
+│  }                  ╭─ Call query from server db? ─────────────────────────────────────────────╮                     │
+│                     │                                                                          │                     │
+│ ╭─ Edit ────────────│  MCP tool query from server db. Call it with the arguments below.        │───────────────────╮ │
+│ │ ✓ succeeded       │  ┌────────────────────────────────────────────────────────────────────┐  │                   │ │
+│ │ src/fetch.ts      │  │db__query                                                           ┃  │                   │ │
+│ │ Updated src/fetch.│  │{                                                                   ┃  │                   │ ┃
+│ │   import { sleep }│  │  "field_0": "value number 0 for the remote tool",                  ┃  │                   │ ┃
+│ │ - export const get│  │  "field_1": "value number 1 for the remote tool",                  ┃  │                   │ ┃
+│ │ + export const get│  │  "field_2": "value number 2 for the remote tool",                  ┃  │                   │ ┃
+│ ╰───────────────────│  │  "field_3": "value number 3 for the remote tool",                  ┃  │───────────────────╯ ┃
+│                     │  │  "field_4": "value number 4 for the remote tool",                  ┃  │                     ┃
+│ Assistant           │  │  "field_5": "value number 5 for the remote tool",                  ┃  │                     ┃
+│ Done. The helper now│  │  "field_6": "value number 6 for the remote tool",                  │  │                     ┃
+│                     │  │  "field_7": "value number 7 for the remote tool",                  │  │                     ┃
+│ Assistant ⠿  waiting│  │  "field_8": "value number 8 for the remote tool",                  │  │                     ┃
 │                     │  │  "field_9": "value number 9 for the remote tool",                  │  │                     ┃
 │ ╭─ Edit ────────────│  └────────────────────────────────────────────────────────────────────┘  │───────────────────╮ ┃
 │ │ ⠋  waiting for app│  a allow `db__query` this session                                        │                   │ ┃
@@ -26,6 +26,6 @@
 │                     │                                                                          │                     ┃
 └─────────────────────╰──────────────────────────────────────────────────────────────────────────╯─────────────────────┘
 ╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
-│ Generating…                                                                                                          │
+│ Type to queue a message                                                                                              │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
- ⠋  Waiting for approval · y allow · a session · ! always · n deny · Esc deny                    a session  ! always    
+ Waiting for approval · y allow · a session · ! always · n deny · Esc deny   a session  ! always  pgup/pgdn scroll      

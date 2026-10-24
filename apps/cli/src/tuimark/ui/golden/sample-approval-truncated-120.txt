@@ -1,23 +1,23 @@
 === grid 120x30 ===
  Local Agent           Ollama / loopback  qwen3-coder:30b  build            session a1b2c3d  ctx 9.6k/32k  ███▋░░░░░░░░ 
 ┌──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│    for (let attempt = 1; ; attempt++) {                                                                              │
-│      try { return await fetch(url); }                                                                                │
-│      catch (e) { if ╭─ Edit big.txt? ──────────────────────────────────────────────────────────╮                     │
-│    }                │                                                                          │                     │
-│  }                  │  Preview truncated. Deny unless you have read the whole change.          │                     │
-│                     │  ┌────────────────────────────────────────────────────────────────────┐  │                     │
-│ ╭─ Edit ────────────│  │+line 0                                                             ┃  │───────────────────╮ ┃
-│ │ ✓ succeeded       │  │+line 1                                                             │  │                   │ ┃
-│ │ src/fetch.ts      │  │+line 2                                                             │  │                   │ ┃
-│ │ Updated src/fetch.│  │+line 3                                                             │  │                   │ ┃
-│ │   import { sleep }│  │+line 4                                                             │  │                   │ ┃
-│ │ - export const get│  │+line 5                                                             │  │                   │ ┃
-│ │ + export const get│  │+line 6                                                             │  │                   │ ┃
-│ ╰───────────────────│  │+line 7                                                             │  │───────────────────╯ ┃
-│                     │  │+line 8                                                             │  │                     ┃
-│ Assistant           │  │+line 9                                                             │  │                     ┃
-│ Done. The helper now│  │+line 10                                                            │  │                     ┃
+│      catch (e) { if (attempt === tries) throw e; }                                                                   │
+│    }                                                                                                                 │
+│  }                  ╭─ Edit big.txt? ──────────────────────────────────────────────────────────╮                     │
+│                     │                                                                          │                     │
+│ ╭─ Edit ────────────│  Preview truncated. Deny unless you have read the whole change.          │───────────────────╮ │
+│ │ ✓ succeeded       │  ┌────────────────────────────────────────────────────────────────────┐  │                   │ │
+│ │ src/fetch.ts      │  │+line 0                                                             ┃  │                   │ │
+│ │ Updated src/fetch.│  │+line 1                                                             │  │                   │ ┃
+│ │   import { sleep }│  │+line 2                                                             │  │                   │ ┃
+│ │ - export const get│  │+line 3                                                             │  │                   │ ┃
+│ │ + export const get│  │+line 4                                                             │  │                   │ ┃
+│ ╰───────────────────│  │+line 5                                                             │  │───────────────────╯ ┃
+│                     │  │+line 6                                                             │  │                     ┃
+│ Assistant           │  │+line 7                                                             │  │                     ┃
+│ Done. The helper now│  │+line 8                                                             │  │                     ┃
+│                     │  │+line 9                                                             │  │                     ┃
+│ Assistant ⠿  waiting│  │+line 10                                                            │  │                     ┃
 │                     │  │+line 11                                                            │  │                     ┃
 │ ╭─ Edit ────────────│  └────────────────────────────────────────────────────────────────────┘  │───────────────────╮ ┃
 │ │ ⠋  waiting for app│  preview truncated: session grant unavailable                            │                   │ ┃
@@ -26,6 +26,6 @@
 │                     │                                                                          │                     ┃
 └─────────────────────╰──────────────────────────────────────────────────────────────────────────╯─────────────────────┘
 ╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
-│ Generating…                                                                                                          │
+│ Type to queue a message                                                                                              │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
- ⠋  Preview truncated · y allow · n deny · Esc deny                    a session  ! always  pgup/pgdn scroll            
+ Preview truncated · y allow · n deny · Esc deny   a session  ! always  pgup/pgdn scroll  home/end top/end              

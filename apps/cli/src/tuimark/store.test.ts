@@ -13,10 +13,13 @@ import {
   grantCovers,
   grantFor,
   grantsLabel,
+  headState,
+  idleStatus,
   initialStore,
   mcpLines,
   mcpParts,
   NO_DETAILS_STATUS,
+  NO_HEAD,
   noApproval,
   noDetails,
   noPanel,
@@ -99,6 +102,7 @@ test("the initial store has every path the document reads", () => {
       "draft",
       "earlier",
       "empty",
+      "head",
       "mouse_on",
       "found",
       "header",
@@ -109,7 +113,6 @@ test("the initial store has every path the document reads", () => {
       "panel",
       "placeholder",
       "question",
-      "rate",
       "slash",
       "status",
       "thinking",
@@ -1048,4 +1051,43 @@ test("statusLines and providerLines say a context warning once", () => {
     providerLines({ provider: said, probe: { latencyMs: 3 } }).join("\n"),
   ).not.toContain("Warning:");
   expect(statusLines(facts(base)).join("\n")).not.toContain("Warning:");
+});
+
+test("the ambient status holds the mode, the MCP state and the last turn, nothing else", () => {
+  expect(idleStatus(0, "build")).toBe("build");
+  expect(idleStatus(2, "build")).toBe("build · MCP 2");
+  expect(idleStatus(1, "plan", { failed: 1 })).toBe(
+    "plan · MCP 1 · 1 failed (/mcp)",
+  );
+  expect(idleStatus(0, "chat", { connecting: true })).toBe(
+    "chat · MCP connecting…",
+  );
+  expect(idleStatus(2, "build", {}, { seconds: 66, speed: "32 tok/s" })).toBe(
+    "build · MCP 2 · last 1m 06s · 32 tok/s",
+  );
+  expect(idleStatus(0, "build", {}, { seconds: 7 })).toBe("build · last 7s");
+  expect(idleStatus(0, "build", {}, { seconds: 0 })).toBe("build · last <1s");
+  // Gone with the busy text: no Ready, no key tip.
+  expect(idleStatus(0, "build")).not.toMatch(/Ready|help for keys/);
+});
+
+test("the head names the phase and the elapsed time; a wait on the person shows a still glyph", () => {
+  expect(headState("waiting", 0)).toEqual({
+    on: true,
+    spin: true,
+    still: false,
+    glyph: "⠿",
+    text: "waiting for the model · 0s",
+  });
+  expect(headState("mcp", 3).text).toBe("connecting MCP servers · 3s");
+  expect(headState("thinking", 12).text).toBe("thinking · 12s");
+  // The reply is the indication while it streams: the elapsed alone.
+  expect(headState("streaming", 65).text).toBe("1m 05s");
+  for (const phase of ["approval", "answer"] as const) {
+    const head = headState(phase, 9);
+    expect(head).toMatchObject({ on: true, spin: false, still: true });
+  }
+  expect(headState("approval", 9).text).toBe("waiting for your approval · 9s");
+  expect(headState("answer", 9).text).toBe("waiting for your answer · 9s");
+  expect(NO_HEAD).toMatchObject({ on: false, spin: false, still: false });
 });

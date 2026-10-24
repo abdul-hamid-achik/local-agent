@@ -56,6 +56,13 @@
       "The user wants a retry around the fetch helper.\nI should read src/fetch.ts first to see how get() is written.\nThen wrap the call: three attempts, exponential backoff,\nand rethrow the last error so callers still see it."
     ]
   },
+  "head": {
+    "on": true,
+    "spin": true,
+    "still": false,
+    "glyph": "⠿",
+    "text": "thinking · 7s"
+  },
   "approval": {
     "open": false,
     "title": "",
@@ -309,10 +316,9 @@
     ]
   },
   "draft": "",
-  "placeholder": "Generating…",
+  "placeholder": "Type to queue a message",
   "busy": true,
-  "status": "Generating…",
-  "rate": [],
+  "status": "build · last 1m 06s · 32 tok/s",
   "commit_buf": {
     "id": "commit",
     "is_user": false,

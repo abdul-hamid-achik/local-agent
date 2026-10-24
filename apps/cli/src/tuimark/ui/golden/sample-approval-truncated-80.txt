@@ -1,13 +1,13 @@
 === grid 80x30 ===
  Local Agent         qwen3-coder:30b  build          ctx 9.6k/32k  ███▋░░░░░░░░ 
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│    for (let attempt = 1; ; attempt++) {                                      │
-│      try { return await fetch(url); }                                        │
+│      catch (e) { if (attempt === tries) throw e; }                           │
+│    }                                                                         │
 │ ╭─ Edit big.txt? ──────────────────────────────────────────────────────────╮ │
 │ │                                                                          │ │
 │ │  Preview truncated. Deny unless you have read the whole change.          │ │
 │ │  ┌────────────────────────────────────────────────────────────────────┐  │ │
-│ │  │+line 0                                                             ┃  │ ┃
+│ │  │+line 0                                                             ┃  │ │
 │ │  │+line 1                                                             │  │ ┃
 │ │  │+line 2                                                             │  │ ┃
 │ │  │+line 3                                                             │  │ ┃
@@ -26,6 +26,6 @@
 │ │                                                                          │ ┃
 └─╰──────────────────────────────────────────────────────────────────────────╯─┘
 ╭──────────────────────────────────────────────────────────────────────────────╮
-│ Generating…                                                                  │
+│ Type to queue a message                                                      │
 ╰──────────────────────────────────────────────────────────────────────────────╯
- ⠋  Preview truncated · y allow · n deny · Esc deny                             
+ Preview truncated · y allow · n deny · Esc deny   a session  ! always          

@@ -17,6 +17,6 @@
 ╰──────────────────────────────────────╯
                                         
 ╭──────────────────────────────────────╮
-│ Generating…                          │
+│ Type to queue a message              │
 ╰──────────────────────────────────────╯
- ⠋  Waiting for approv… y allow         
+ Waiting for approv… y allow  a session 

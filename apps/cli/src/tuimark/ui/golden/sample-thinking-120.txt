@@ -19,13 +19,13 @@
 │ Assistant                                                                                                            ┃
 │ Done. The helper now retries three times.                                                                            ┃
 │                                                                                                                      ┃
-│ ⠋  Thinking…                                                                                                         ┃
+│ Assistant ⠋  thinking · 7s                                                                                           ┃
 │   I should read src/fetch.ts first to see how get() is written.                                                      ┃
 │   Then wrap the call: three attempts, exponential backoff,                                                           ┃
 │   and rethrow the last error so callers still see it.                                                                ┃
 │                                                                                                                      ┃
 └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
 ╔══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╗
-║ Generating…                                                                                                          ║
+║ Type to queue a message                                                                                              ║
 ╚══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╝
- ⠋  Generating…                    ^P commands  esc cancel  ↑/↓ history  ^O earlier  pgup/pgdn scroll  ^L latest        
+ build · last 1m 06s · 32 tok/s   ^P commands  esc cancel  ↑/↓ history  ^O earlier  pgup/pgdn scroll  ^L latest         

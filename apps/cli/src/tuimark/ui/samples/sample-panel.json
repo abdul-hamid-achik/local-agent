@@ -306,6 +306,13 @@
     "on": false,
     "runs": []
   },
+  "head": {
+    "on": false,
+    "spin": false,
+    "still": false,
+    "glyph": "⠿",
+    "text": ""
+  },
   "approval": {
     "open": false,
     "title": "",
@@ -666,7 +673,6 @@
   "placeholder": "Message the model",
   "busy": false,
   "status": "Status",
-  "rate": [],
   "commit_buf": {
     "id": "commit",
     "is_user": false,

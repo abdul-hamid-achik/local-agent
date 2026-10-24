@@ -22,4 +22,4 @@
 │                 [ Deny ]  [ Allow ]  │
 │                                      │
 ╰──────────────────────────────────────╯
- ⠋  Waiting for approv… a session       
+ Waiting for approv… a session          

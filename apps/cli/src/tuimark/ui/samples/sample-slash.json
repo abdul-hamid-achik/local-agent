@@ -306,6 +306,13 @@
     "on": false,
     "runs": []
   },
+  "head": {
+    "on": false,
+    "spin": false,
+    "still": false,
+    "glyph": "⠿",
+    "text": ""
+  },
   "approval": {
     "open": false,
     "title": "",
@@ -595,8 +602,7 @@
   "draft": "/m",
   "placeholder": "Message the model",
   "busy": false,
-  "status": "build · Ready · /help for keys",
-  "rate": [],
+  "status": "build · last 1m 06s · 32 tok/s",
   "commit_buf": {
     "id": "commit",
     "is_user": false,

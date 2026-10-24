@@ -38,7 +38,7 @@ steps:
     - press: esc
     - wait:
         screen:
-            contains: "Ready"
+            contains: "Message the model"
         timeoutMs: 15000
     - type: "edit once more"
     - wait:

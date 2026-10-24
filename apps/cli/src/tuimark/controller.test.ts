@@ -48,7 +48,6 @@ import {
   APPROVAL_UNARMED_STATUS,
   APPROVAL_UNCHECKED_STATUS,
   APPROVAL_WAIT_STATUS,
-  IDLE_STATUS,
   NO_DETAILS_STATUS,
   PROVIDER_NO_ANSWER_STATUS,
   QUESTION_CHOOSE_STATUS,
@@ -136,7 +135,7 @@ test("a turn publishes the prompt, streams, keeps the reply and returns to idle"
   expect(store(ui).busy).toBe(true);
   expect(store(ui).messages[0]).toMatchObject({ is_user: true });
   expect(store(ui).draft).toBe("");
-  expect(store(ui).placeholder).toBe("Generating…");
+  expect(store(ui).placeholder).toBe("Type to queue a message");
   await client.idle();
   const s = store(ui);
   expect(s.messages.map((m: MessageView) => [m.is_user, m.is_asst])).toEqual([
@@ -146,7 +145,7 @@ test("a turn publishes the prompt, streams, keeps the reply and returns to idle"
   expect(s.live.active).toBe(false);
   expect(s.busy).toBe(false);
   expect(s.placeholder).toBe("Message the model");
-  expect(s.status).toBe(`build · ${IDLE_STATUS}`);
+  expect(s.status).toBe("build · last <1s");
   expect(s.header.ctx_label).toBe("120/8.0k");
   expect(client.writeErrors).toEqual([]);
 });
@@ -193,7 +192,7 @@ test("thinking streams into its own block, appended as it comes, and is gone onc
   expect(s.thinking).toEqual({ on: false, runs: [] });
   // The reasoning is not in the committed history, and the speed is on the status line.
   expect(JSON.stringify(s.messages)).not.toContain("three");
-  expect(s.status).toBe(`build · ${IDLE_STATUS} · 40 tok/s`);
+  expect(s.status).toBe("build · last <1s · 40 tok/s");
   expect(client.writeErrors).toEqual([]);
 });
 
@@ -201,7 +200,7 @@ test("a turn without timings leaves the idle status alone", async () => {
   const { ui, client } = setup(reply("hello there"));
   await ui.fire("send", "hi");
   await client.idle();
-  expect(store(ui).status).toBe(`build · ${IDLE_STATUS}`);
+  expect(store(ui).status).toBe("build · last <1s");
 });
 
 test("the model sees the history like the Vue client sends it", async () => {
@@ -321,7 +320,7 @@ test("while busy, a slash command says Busy and a prompt is queued and runs next
     [true, false],
     [false, true],
   ]);
-  expect(store(ui).status).toBe(`build · ${IDLE_STATUS}`);
+  expect(store(ui).status).toBe("build · last <1s");
 });
 
 test("a second send while one is queued is added to it, never in its place", async () => {
@@ -459,7 +458,7 @@ test("a queued prompt runs after a failed turn too, without duplicating the fail
   // No session: the failed prompt left the model's history, so the queued
   // turn is the whole conversation — nothing duplicated, notice never sent.
   expect(seen[1]?.messages).toEqual(["user:queued one"]);
-  expect(store(ui).status).toBe(`build · ${IDLE_STATUS}`);
+  expect(store(ui).status).toBe("build · last <1s");
 });
 
 function editProposal(diff = "-x\n+y"): ApprovalRequest {
@@ -1361,178 +1360,297 @@ test("elapsed reads as seconds, then minutes and seconds", () => {
   expect(formatElapsed(600)).toBe("10m 00s");
 });
 
-test("waiting becomes generating at the first event, with elapsed, and idle writes nothing", async () => {
+/** Every status value the turn wrote, in order. */
+const statusWrites = (ui: FakeHost) =>
+  ui.batches
+    .flat()
+    .filter((w: { path: string }) => w.path === "status")
+    .map((w: { value: unknown }) => w.value);
+
+test("the head walks waiting, thinking, streaming and done; the status bar never moves", async () => {
   let nowMs = 1_000_000;
-  let toText: () => void = () => {};
-  let toEnd: () => void = () => {};
-  const gate1 = new Promise<void>((r) => {
-    toText = r;
-  });
-  const gate2 = new Promise<void>((r) => {
-    toEnd = r;
+  const gates = [0, 1, 2].map(() => {
+    let open: () => void = () => {};
+    const done = new Promise<void>((r) => {
+      open = r;
+    });
+    return { open, done };
   });
   const { ui, client } = setup(
     async function* () {
-      await gate1;
+      await gates[0]?.done;
+      yield { type: "thinking", text: "hmm\n" };
+      await gates[1]?.done;
       yield { type: "text", text: "hi " };
-      await gate2;
+      await gates[2]?.done;
+      yield {
+        type: "done",
+        inputTokens: 10,
+        outputTokens: 40,
+        evalCount: 40,
+        evalDuration: 1_000_000_000,
+      };
       yield { type: "message", message: { role: "assistant", content: "hi" } };
     },
     { now: () => nowMs },
   );
+  expect(store(ui).head.on).toBe(false);
+  const rest = store(ui).status;
+  expect(rest).toBe("build");
   await ui.fire("send", "go");
-  expect(store(ui).status).toBe("Waiting for the model… · 0s");
+  // From the moment the turn starts: the assistant's head, a spinner, and
+  // what it waits for. No "Generating", no sparkline path, one status.
+  expect(store(ui).head).toEqual({
+    on: true,
+    spin: true,
+    still: false,
+    glyph: "⠿",
+    text: "waiting for the model · 0s",
+  });
+  expect(store(ui).status).toBe(rest);
+  expect(store(ui).placeholder).toBe("Type to queue a message");
+  expect("rate" in store(ui)).toBe(false);
   nowMs += 12_000;
   await client.flush();
-  expect(store(ui).status).toBe("Waiting for the model… · 12s");
-  toText();
-  await until(() => store(ui).status.startsWith("Generating…"));
-  expect(store(ui).status).toBe("Generating… · 12s");
+  expect(store(ui).head.text).toBe("waiting for the model · 12s");
+  // Within the same second nothing more is written.
+  const batches = ui.batches.length;
+  await client.flush();
+  await client.flush();
+  expect(ui.batches.length).toBe(batches);
+  gates[0]?.open();
+  await until(() => store(ui).head.text.startsWith("thinking"));
+  expect(store(ui).head).toMatchObject({ on: true, spin: true, still: false });
+  expect(store(ui).head.text).toBe("thinking · 12s");
+  // The reasoning is in the message, under the head.
+  await until(() => store(ui).thinking.on);
+  gates[1]?.open();
+  await until(() => store(ui).head.text === "12s");
+  // Streaming: the elapsed alone, the text is the indication.
+  expect(store(ui).head.spin).toBe(true);
+  await until(() => store(ui).live.active);
+  expect(store(ui).thinking.on).toBe(false);
   nowMs += 53_000;
   await client.flush();
-  expect(store(ui).status).toBe("Generating… · 1m 05s");
-  toEnd();
+  expect(store(ui).head.text).toBe("1m 05s");
+  expect(store(ui).status).toBe(rest);
+  gates[2]?.open();
   await client.idle();
-  expect(store(ui).status).toBe(`build · ${IDLE_STATUS}`);
+  // Done: no head, so no spinner anywhere, and the bar keeps the last turn.
+  expect(store(ui).head).toEqual({
+    on: false,
+    spin: false,
+    still: false,
+    glyph: "⠿",
+    text: "",
+  });
+  expect(store(ui).status).toBe("build · last 1m 05s · 40 tok/s");
+  expect(store(ui).placeholder).toBe("Message the model");
+  // Busy or not, the bar only ever held the one ambient value until the end.
+  expect(new Set(statusWrites(ui))).toEqual(
+    new Set([rest, "build · last 1m 05s · 40 tok/s"]),
+  );
   // The timer is gone with the turn: time passing writes nothing more.
-  const batches = ui.batches.length;
+  const after = ui.batches.length;
   nowMs += 120_000;
   await client.flush();
   await new Promise((r) => setTimeout(r, 20));
-  expect(ui.batches.length).toBe(batches);
-  expect(store(ui).status).toBe(`build · ${IDLE_STATUS}`);
+  expect(ui.batches.length).toBe(after);
+  expect(client.writeErrors).toEqual([]);
 });
 
-test("the stream's pace is sampled once a second, with the elapsed status", async () => {
-  let nowMs = 1_000_000;
+test("a printed or history turn never carries a spinner", async () => {
+  const { ui, client } = setup(reply("hello there"));
+  await ui.fire("send", "hi");
+  await client.idle();
+  // The finished messages are plain views; the head is its own path, off.
+  expect(JSON.stringify(store(ui).messages)).not.toContain("indeterminate");
+  expect(store(ui).head.on).toBe(false);
+  expect(store(ui).head.spin).toBe(false);
+});
+
+test("inline: the head is region state, never printed, and gone when the turn ends", async () => {
   let release: () => void = () => {};
   const gate = new Promise<void>((r) => {
     release = r;
   });
-  let toEnd: () => void = () => {};
-  const end = new Promise<void>((r) => {
-    toEnd = r;
-  });
   const { ui, client } = setup(
     async function* () {
-      yield { type: "thinking", text: "hmm" };
-      for (const piece of ["a", "b", "c"]) yield { type: "text", text: piece };
+      yield { type: "text", text: "First block.\n\nSecond " };
       await gate;
-      yield { type: "text", text: "d" };
-      await end;
       yield {
         type: "message",
-        message: { role: "assistant", content: "abcd" },
+        message: { role: "assistant", content: "First block.\n\nSecond" },
       };
     },
-    { now: () => nowMs },
+    { presentation: "inline" },
   );
   await ui.fire("send", "go");
-  // A new turn starts with no samples.
-  expect(store(ui).rate).toEqual([]);
-  await until(() => store(ui).status.startsWith("Generating…"));
-  nowMs += 1_000;
-  await client.flush();
-  // Four pieces (reasoning counts) in the first second.
-  expect(store(ui).rate).toEqual([4]);
-  const batches = ui.batches.length;
-  // Within the same second nothing more is written.
-  await client.flush();
-  expect(ui.batches.length).toBe(batches);
+  expect(store(ui).head).toMatchObject({ on: true, spin: true });
+  expect(store(ui).head.text).toBe("waiting for the model · 0s");
+  await until(() => store(ui).head.text === "0s");
   release();
-  // The piece is counted when it arrives, whether or not a flush painted it.
-  await until(() => {
-    void client.flush();
-    return liveText(store(ui)).includes("d");
-  });
-  nowMs += 1_000;
-  await client.flush();
-  expect(store(ui).rate).toEqual([4, 1]);
-  // The sample rides the status write: one batch carries both.
-  const last = ui.batches.at(-1) ?? [];
-  expect(last.map((w: { path: string }) => w.path).sort()).toEqual([
-    "rate",
-    "status",
-  ]);
-  toEnd();
   await client.idle();
+  expect(store(ui).head.on).toBe(false);
+  // Only finished views and blocks reach the scrollback: no commit carries the head.
+  for (const { commit, buf } of ui.commits) {
+    expect(commit.template).not.toBe("head");
+    expect(JSON.stringify(buf)).not.toContain("waiting for");
+  }
+  expect(printed(ui).join("\n")).toContain("First block.");
+  expect(client.writeErrors).toEqual([]);
 });
 
-test("the pace keeps one sample per second: missed seconds read zero, an activity change swallows none", async () => {
+test("a running tool keeps its card; no second assistant spinner stands beside it", async () => {
   let nowMs = 1_000_000;
   let release: () => void = () => {};
   const gate = new Promise<void>((r) => {
     release = r;
   });
-  let toEnd: () => void = () => {};
-  const end = new Promise<void>((r) => {
-    toEnd = r;
+  let end: () => void = () => {};
+  const last = new Promise<void>((r) => {
+    end = r;
   });
   const { ui, client } = setup(
     async function* () {
-      yield { type: "text", text: "a" };
+      yield { type: "text", text: "Reading. " };
+      yield {
+        type: "message",
+        message: {
+          role: "assistant",
+          content: "Reading.",
+          tool_calls: [
+            {
+              id: "r1",
+              function: { name: "read", arguments: { path: "a.txt" } },
+            },
+          ],
+        },
+      };
+      yield { type: "tool_requested", id: "r1", name: "read" };
+      yield { type: "tool_start", id: "r1", name: "read" };
       await gate;
       yield {
+        type: "message",
+        message: {
+          role: "tool",
+          tool_name: "read",
+          tool_call_id: "r1",
+          content: JSON.stringify({ status: "succeeded", output: "o" }),
+        },
+      };
+      yield {
         type: "tool_result",
-        id: "t1",
+        id: "r1",
         name: "read",
         status: "succeeded",
         output: "o",
       };
-      await end;
-      yield {
-        type: "message",
-        message: { role: "assistant", content: "a" },
-      };
+      await last;
+      yield { type: "message", message: { role: "assistant", content: "ok" } };
     },
     { now: () => nowMs },
   );
   await ui.fire("send", "go");
-  await until(() => store(ui).status.startsWith("Generating…"));
-  // The timer missed two seconds: the piece closes the first, zeros the rest.
+  await until(() => store(ui).live.is_tool && store(ui).live.card.running);
+  await client.flush();
+  // The card has its own spinner; the head steps aside.
+  expect(store(ui).head.on).toBe(false);
+  expect(store(ui).head.spin).toBe(false);
   nowMs += 3_000;
-  await client.flush();
-  expect(store(ui).rate).toEqual([1, 0, 0]);
-  // A new activity mid-second repaints the status first; the tick that
-  // follows still takes that second's sample.
-  nowMs += 1_000;
   release();
-  await until(() => store(ui).status === "read: succeeded · 4s");
-  await client.flush();
-  expect(store(ui).rate).toEqual([1, 0, 0, 0]);
-  toEnd();
+  // The tool is done: the model has the turn again.
+  await until(() => store(ui).head.on);
+  expect(store(ui).head.text).toBe("waiting for the model · 3s");
+  expect(store(ui).live.is_tool).toBe(false);
+  end();
   await client.idle();
+  expect(store(ui).head.on).toBe(false);
 });
 
-test("an open approval keeps its status line while the pace still samples", async () => {
+test("an open approval freezes the head: a still glyph, the elapsed stops, and it resumes after", async () => {
   let nowMs = 1_000_000;
-  const talky: Script = async function* (ctx) {
-    yield { type: "text", text: "Editing it now." };
-    yield* withApproval(ctx);
-  };
-  const { ui, client } = setup(talky, { now: () => nowMs });
+  let release: () => void = () => {};
+  const gate = new Promise<void>((r) => {
+    release = r;
+  });
+  const { ui, client } = setup(
+    async function* (ctx) {
+      yield* withApproval(ctx);
+      await gate;
+      yield { type: "message", message: { role: "assistant", content: "ok" } };
+    },
+    { now: () => nowMs },
+  );
   await ui.fire("send", "edit");
-  await untilApproval(ui);
   nowMs += 2_000;
   await client.flush();
+  await untilApproval(ui);
+  // A glyph where the spinner was; the card is the tool's, not a second spinner.
+  expect(store(ui).head).toEqual({
+    on: true,
+    spin: false,
+    still: true,
+    glyph: "⠿",
+    text: "waiting for your approval · 2s",
+  });
+  // A long wait does not run the clock.
+  nowMs += 30_000;
+  await client.flush();
+  expect(store(ui).head.text).toBe("waiting for your approval · 2s");
   expect(store(ui).status).toBe(APPROVAL_STATUS);
-  // The piece closes the first second; the wait is a zero after it.
-  expect(store(ui).rate).toEqual([1, 0]);
-  await ui.fire("dialog_cancel");
+  await ui.fire("dialog_confirm");
+  // The wait is not counted: 2 s before it, 3 s after.
+  nowMs += 3_000;
+  await until(() => store(ui).head.on);
+  await client.flush();
+  expect(store(ui).head).toMatchObject({ spin: true, still: false });
+  expect(store(ui).head.text).toBe("waiting for the model · 5s");
+  release();
   await client.idle();
+  expect(store(ui).status).toBe("build · last 5s");
 });
 
-test("with nothing streamed in the window the pace draws no line", async () => {
+test("an open question freezes the head the same way", async () => {
   let nowMs = 1_000_000;
-  const { ui, client } = setup(withApproval, { now: () => nowMs });
-  await ui.fire("send", "edit");
-  await untilApproval(ui);
-  nowMs += 2_000;
+  const answers: Answer[] = [];
+  let release: () => void = () => {};
+  const gate = new Promise<void>((r) => {
+    release = r;
+  });
+  const { ui, client } = setup(asking(STORE_QUESTION, answers, gate), {
+    now: () => nowMs,
+  });
+  await ui.fire("send", "go");
+  release();
+  await untilQuestion(ui);
+  expect(store(ui).head).toMatchObject({
+    on: true,
+    spin: false,
+    still: true,
+    text: "waiting for your answer · 0s",
+  });
+  nowMs += 20_000;
   await client.flush();
-  // All zeros would scale to mid-height bars and read as a stream.
-  expect(store(ui).rate).toEqual([]);
-  await ui.fire("dialog_cancel");
+  expect(store(ui).head.text).toBe("waiting for your answer · 0s");
+  await ui.fire("question_skip");
   await client.idle();
+  expect(store(ui).head.on).toBe(false);
+});
+
+test("servers still connecting show in the head, not in a busy status", async () => {
+  let open: (failed: { name: string; error: string }[]) => void = () => {};
+  const mcpReady = new Promise<{ name: string; error: string }[]>((r) => {
+    open = r;
+  });
+  const { ui, client } = setup(reply("x"), { mcpReady });
+  await ui.fire("send", "go");
+  await until(() => store(ui).head.text.startsWith("connecting MCP"));
+  expect(store(ui).head.text).toBe("connecting MCP servers · 0s");
+  expect(store(ui).status).toBe("build · MCP connecting…");
+  open([]);
+  await client.idle();
+  expect(store(ui).head.on).toBe(false);
 });
 
 test("an open approval owns the status line over the elapsed ticker", async () => {
@@ -1705,31 +1823,26 @@ test("servers still connecting: the status says so, a turn waits, failures reach
     },
     { mcp, mcpNames, mcpReady },
   );
-  expect(store(ui).status).toBe(
-    "build · Ready · /help for keys · MCP connecting…",
-  );
+  expect(store(ui).status).toBe("build · MCP connecting…");
   await ui.fire("send", "/mcp");
   expect(store(ui).status).toBe("MCP servers: connecting…");
   expect(store(ui).panel.lines.map((line) => line.t)).toEqual([
     "Connecting to MCP servers…",
   ]);
   await ui.fire("panel_close");
-  expect(store(ui).status).toBe(
-    "build · Ready · /help for keys · MCP connecting…",
-  );
+  expect(store(ui).status).toBe("build · MCP connecting…");
   // A send waits for the servers: the model is offered their tools.
   await ui.fire("send", "hello");
   await Bun.sleep(20);
   expect(offered).toEqual([]);
-  expect(store(ui).status).toContain("Connecting MCP servers…");
+  expect(store(ui).head.text).toBe("connecting MCP servers · 0s");
+  expect(store(ui).status).toBe("build · MCP connecting…");
   mcp.push({ tools: [{ name: "db__query" }] } as unknown as McpConnection);
   mcpNames.push("db");
   settle([{ name: "hub", error: "Connection closed" }]);
   await client.idle();
   expect(offered).toEqual([1]);
-  expect(store(ui).status).toMatch(
-    /^build · Ready · \/help for keys · MCP 1 · 1 failed \(\/mcp\)/,
-  );
+  expect(store(ui).status).toMatch(/^build · MCP 1 · 1 failed \(\/mcp\)/);
   await ui.fire("send", "/mcp");
   expect(store(ui).status).toBe("MCP servers: 1 · 1 tools · 1 failed");
   expect(store(ui).panel.lines.map((line) => line.t)).toEqual([
@@ -1770,7 +1883,7 @@ test("servers that settle while idle repaint the status, unless something newer 
   const { ui } = setup(reply("x"), { mcpReady });
   settle([]);
   await Bun.sleep(10);
-  expect(store(ui).status).toBe("build · Ready · /help for keys");
+  expect(store(ui).status).toBe("build");
   let late: (failed: { name: string; error: string }[]) => void = () => {};
   const second = setup(reply("x"), {
     mcpReady: new Promise((resolve) => {
@@ -2414,7 +2527,7 @@ test("enter completes over the popup only when the choice differs", async () => 
   await ui.fire("slash_next", "/m");
   await ui.fire("send", "/m");
   expect(store(ui).draft).toBe("/mcp");
-  expect(store(ui).status).toBe(`build · ${IDLE_STATUS}`);
+  expect(store(ui).status).toBe("build");
   // Fully typed, the same enter runs the command.
   await ui.fire("typed", "/mcp");
   expect(store(ui).slash.open).toBe(true);
@@ -2941,7 +3054,7 @@ test("/details shows the lines the card truncated, and closing rests at idle", a
   expect(detailsText(ui)).toContain("output line 20");
   await ui.fire("details_close");
   expect(store(ui).details.open).toBe(false);
-  expect(store(ui).status).toBe(`build · ${IDLE_STATUS}`);
+  expect(store(ui).status).toBe("build · last <1s");
   expect(client.writeErrors).toEqual([]);
 });
 
@@ -3450,7 +3563,7 @@ test("/status opens the panel with the config the client actually holds", async 
   expect(lines).toContain("Context: 0/8.0k");
   await ui.fire("panel_close");
   expect(store(ui).panel.open).toBe(false);
-  expect(store(ui).status).toBe(`build · ${IDLE_STATUS}`);
+  expect(store(ui).status).toBe("build");
 });
 
 test("/provider asks the endpoint once, read-only, and opens the panel over its answer", async () => {

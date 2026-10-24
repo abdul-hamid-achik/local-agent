@@ -22,4 +22,4 @@
 │                                     [ Deny ]  [ Allow ]  │
 │                                                          │
 ╰──────────────────────────────────────────────────────────╯
- ⠋  Waiting for approval · y all… a session  ! always       
+ Waiting for approval · y all… a session  ! always          

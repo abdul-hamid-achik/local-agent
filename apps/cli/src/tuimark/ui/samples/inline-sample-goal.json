@@ -70,6 +70,13 @@
     "on": false,
     "runs": []
   },
+  "head": {
+    "on": true,
+    "spin": true,
+    "still": false,
+    "glyph": "⠿",
+    "text": "41s"
+  },
   "approval": {
     "open": false,
     "title": "",
@@ -323,10 +330,9 @@
     ]
   },
   "draft": "",
-  "placeholder": "Generating…",
+  "placeholder": "Type to queue a message",
   "busy": true,
-  "status": "Generating…",
-  "rate": [],
+  "status": "build · last 1m 06s · 32 tok/s",
   "commit_buf": {
     "id": "commit",
     "is_user": false,

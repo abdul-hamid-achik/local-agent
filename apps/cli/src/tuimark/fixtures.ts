@@ -16,12 +16,14 @@ import {
   APPROVAL_STATUS,
   APPROVAL_TRUNCATED_STATUS,
   approvalState,
-  BUSY_STATUS_LINE,
   contextLabel,
   contextPct,
   detailsState,
+  headState,
+  idleStatus,
   initialStore,
   mcpLines,
+  PLACEHOLDER_BUSY,
   panelState,
   QUESTION_PLACEHOLDER_CHOICE,
   QUESTION_PLACEHOLDER_TEXT,
@@ -298,6 +300,8 @@ function base(messages: Message[] = MESSAGES): {
   });
   store.header.ctx_label = contextLabel(9_800, provider.context_size);
   store.header.ctx_pct = contextPct(9_800, provider.context_size);
+  // The ambient status, the same idle and busy: the mode and the last turn.
+  store.status = idleStatus(0, "build", {}, { seconds: 66, speed: "32 tok/s" });
   return { store, builder };
 }
 
@@ -375,7 +379,8 @@ export function approvalSample(): Store {
   store.live = liveToolView(call, "edit", "approval");
   store.approval = approvalState(EDIT_PROPOSAL);
   store.busy = true;
-  store.placeholder = "Generating…";
+  store.placeholder = PLACEHOLDER_BUSY;
+  store.head = headState("approval", 12);
   store.status = APPROVAL_STATUS;
   return store;
 }
@@ -428,6 +433,7 @@ function questionStore(question: Question, sel = -1): Store {
   };
   store.question = questionState(question, sel);
   store.busy = true;
+  store.head = headState("answer", 12);
   store.placeholder =
     question.kind === "freetext"
       ? QUESTION_PLACEHOLDER_TEXT
@@ -493,10 +499,8 @@ export function streamingSample(): Store {
   );
   store.earlier = { n: 250 };
   store.busy = true;
-  store.placeholder = "Generating…";
-  store.status = BUSY_STATUS_LINE;
-  // Eight seconds of pace: the wait for the first token, then the stream.
-  store.rate = [0, 0, 4, 11, 14, 13, 15, 14];
+  store.placeholder = PLACEHOLDER_BUSY;
+  store.head = headState("streaming", 12);
   return store;
 }
 
@@ -512,8 +516,8 @@ export function thinkingSample(): Store {
     ].join("\n"),
   );
   store.busy = true;
-  store.placeholder = "Generating…";
-  store.status = BUSY_STATUS_LINE;
+  store.placeholder = PLACEHOLDER_BUSY;
+  store.head = headState("thinking", 7);
   return store;
 }
 
@@ -570,8 +574,8 @@ export function goalSample(): Store {
   store.header.goal_on = true;
   store.live = streamingView("Running the fetch tests next.");
   store.busy = true;
-  store.placeholder = "Generating…";
-  store.status = BUSY_STATUS_LINE;
+  store.placeholder = PLACEHOLDER_BUSY;
+  store.head = headState("streaming", 41);
   return store;
 }
 
@@ -601,7 +605,8 @@ export function commandApprovalSample(): Store {
     "/home/me/project",
   );
   store.busy = true;
-  store.placeholder = "Generating…";
+  store.placeholder = PLACEHOLDER_BUSY;
+  store.head = headState("approval", 12);
   store.status = APPROVAL_STATUS;
   return store;
 }

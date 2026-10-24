@@ -26,7 +26,7 @@ steps:
         timeoutMs: 10000
     - wait:
         screen:
-            contains: "Ready"
+            contains: "Message the model"
         timeoutMs: 10000
     - snapshot: reply_done
     # The turn has ended (the idle placeholder is back), so ctrl+c quits

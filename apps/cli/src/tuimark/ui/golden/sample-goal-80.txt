@@ -21,11 +21,11 @@
 │  [goal 2/8] Continue toward the goal: make the fetch tests pass. Last        ┃
 │  status: the retry is in; the tests are next.                                ┃
 │                                                                              ┃
-│ Assistant ⠋                                                                  ┃
+│ Assistant ⠋  41s                                                             ┃
 │ Running the fetch tests next.                                                ┃
 │                                                                              ┃
 └──────────────────────────────────────────────────────────────────────────────┘
 ╔══════════════════════════════════════════════════════════════════════════════╗
-║ Generating…                                                                  ║
+║ Type to queue a message                                                      ║
 ╚══════════════════════════════════════════════════════════════════════════════╝
- ⠋  Generating…                    ^P commands  esc cancel  ↑/↓ history         
+ build · last 1m 06s · 32 tok/s   ^P commands  esc cancel  ↑/↓ history          

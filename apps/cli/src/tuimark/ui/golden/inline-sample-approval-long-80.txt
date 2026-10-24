@@ -17,6 +17,6 @@
 ╰──────────────────────────────────────────────────────────────────────────────╯
                                                                                 
 ╭──────────────────────────────────────────────────────────────────────────────╮
-│ Generating…                                                                  │
+│ Type to queue a message                                                      │
 ╰──────────────────────────────────────────────────────────────────────────────╯
- ⠋  Waiting for approval · y allow · a session · ! always · n deny · Esc deny   
+ Waiting for approval · y allow · a session · ! always · n deny · Esc deny      

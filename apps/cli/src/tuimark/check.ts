@@ -245,7 +245,7 @@ for (const [name, make] of Object.entries(INLINE_SAMPLES)) {
       `dump inline approval at 15 rows: ${JSON.stringify(json.errors)}`,
     );
   const screen = json.grid.join("\n");
-  for (const text of ["--- a/install.sh", "Generating…", "y allow"])
+  for (const text of ["--- a/install.sh", "Type to queue a message", "y allow"])
     if (!screen.includes(text))
       failures.push(`dump inline approval at 15 rows: no ${text}`);
   const text =
@@ -1045,7 +1045,7 @@ const plays: Expect[] = [
     rows: 15,
     input: "end",
     actions: [],
-    screen: ["+echo step 249", "Generating…"],
+    screen: ["+echo step 249", "Type to queue a message"],
   },
   {
     sample: "inline-sample-palette",
@@ -1324,7 +1324,7 @@ const plays: Expect[] = [
       "✓ succeeded",
       "Done. The helper now retries three times.",
     ],
-    notScrollback: ["Generating…", "Thinking…"],
+    notScrollback: ["waiting for the model", "Type to queue a message"],
     scrollbackGolden: "inline-commit-80.txt",
   },
   // A cleared buffer commits nothing.
