@@ -1,3 +1,5 @@
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, test } from "vitest";
@@ -46,3 +48,37 @@ test.skipIf(policy === "skip")(
   },
   60_000,
 );
+
+test("a tuimark run that fails says why, from stdout when stderr is empty", async () => {
+  // `tuimark validate` writes its diagnostics to stdout.
+  const dir = await mkdtemp(join(tmpdir(), "local-agent-check-"));
+  try {
+    const fake = join(dir, "tuimark");
+    await writeFile(
+      fake,
+      '#!/bin/sh\necho "error V005 app.tui:3:1 unknown node"\nexit 2\n',
+      { mode: 0o755 },
+    );
+    const check = Bun.spawn(
+      [
+        process.execPath,
+        join(dirname(fileURLToPath(import.meta.url)), "check.ts"),
+      ],
+      {
+        env: { ...process.env, TUIMARK_BINARY: fake },
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    );
+    const [err, code] = await Promise.all([
+      new Response(check.stderr).text(),
+      check.exited,
+    ]);
+    expect(code).toBe(1);
+    expect(err).toContain(
+      "FAIL tuimark validate app.tui: exit 2: error V005 app.tui:3:1 unknown node",
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});

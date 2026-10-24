@@ -399,6 +399,30 @@ test("inline: past the bounds the note is a final block and the region keeps its
   expect(notes).toHaveLength(1);
 });
 
+test("fullscreen: a stopped finish does not promise the finished message", () => {
+  const long = (r: ReturnType<typeof rig>) => {
+    for (let n = 0; n < MAX_MESSAGE_BLOCKS + 20; n++) {
+      r.stream.pushText(`paragraph ${n}\n\n`);
+      r.advance(40);
+      r.drain();
+    }
+  };
+  const text = (blocks: Block[]) =>
+    blocks.map((b) => runsText(b.runs)).join("\n");
+  const finished = rig();
+  long(finished);
+  expect(text(finished.live().blocks)).toContain("shown when it is finished");
+  const promised = finished.stream.finishTail();
+  expect(text(promised)).toContain("shown when it is finished");
+  const stopped = rig();
+  long(stopped);
+  const kept = stopped.stream.finishTail(true);
+  expect(text(kept)).not.toContain("shown when it is finished");
+  expect(text(kept)).toContain("the turn stopped before it finished");
+  // The note keeps its place: same blocks, same ids.
+  expect(kept.map((b) => b.id)).toEqual(promised.map((b) => b.id));
+});
+
 test("reset forgets everything and streamingView is the first write of a stream", () => {
   const r = rig();
   r.stream.pushText("text\n\nmore");

@@ -76,6 +76,9 @@ export class LiveStream {
   private tail: Block[] = [];
   private chars = 0;
   private cut = false;
+  /** Where the truncation note starts in `blocks`, and how many blocks it has. */
+  private cutAt = -1;
+  private cutLength = 0;
   /** What the store holds now. */
   private inStore = { live: false, tail: 0, thinking: false, thinkChars: 0 };
   private lastParse = Number.NEGATIVE_INFINITY;
@@ -114,6 +117,8 @@ export class LiveStream {
     this.tail = [];
     this.chars = 0;
     this.cut = false;
+    this.cutAt = -1;
+    this.cutLength = 0;
     this.inStore = { live: false, tail: 0, thinking: false, thinkChars: 0 };
     this.lastParse = Number.NEGATIVE_INFINITY;
     this.raw = false;
@@ -215,15 +220,31 @@ export class LiveStream {
    * live message ends (the finished message, a tool call, a cancel, a quit):
    * parses what is pending, promotes the tail to final blocks, and offers
    * the uncommitted rest. The stream is left drained. The truncation note of
-   * the live region is not part of it: that line is region-only.
+   * the live region is not part of it: that line is region-only. `stopped`
+   * says no finished message follows (a cancel, a failure): fullscreen, the
+   * note then stops promising one.
    */
-  finishTail(): Block[] {
+  finishTail(stopped = false): Block[] {
     if (!this.cut) {
       this.parse(this.pending);
       if (!this.cut && this.tail.length > 0) {
         this.blocks.push(...this.tail);
         this.tail = [];
       }
+    }
+    // After the parse: the cut may have happened just now.
+    if (
+      stopped &&
+      !this.inline &&
+      this.cutAt >= this.committedCount + this.offeredCount
+    ) {
+      const note = parseBlocksAt(
+        `> … the rest of this reply is not shown: the turn stopped before it finished`,
+        PREFIX,
+        this.cutAt,
+      ).blocks;
+      this.blocks.splice(this.cutAt, this.cutLength, ...note);
+      this.cutLength = note.length;
     }
     this.pending = "";
     this.unsent = "";
@@ -400,6 +421,8 @@ export class LiveStream {
           PREFIX,
           this.blocks.length,
         ).blocks;
+        this.cutAt = this.blocks.length;
+        this.cutLength = note.length;
         this.blocks.push(...note);
       }
       this.cut = true;

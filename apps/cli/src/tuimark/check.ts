@@ -40,8 +40,9 @@ const RUN_MS = 60_000;
 
 /**
  * One tuimark run. A run that exits non-zero or hangs is a failure of its
- * own, with the end of its stderr, so a later check never reads its output
- * as if it had succeeded.
+ * own, with the end of its stderr (or of its stdout, where `validate`
+ * writes its diagnostics), so a later check never reads its output as if
+ * it had succeeded.
  */
 function tuimark(args: string[]): { code: number; out: string; err: string } {
   const run = Bun.spawnSync([bin, ...args], { cwd: ui, timeout: RUN_MS });
@@ -53,10 +54,12 @@ function tuimark(args: string[]): { code: number; out: string; err: string } {
   const what = `tuimark ${args.slice(0, 2).join(" ")}`;
   if (run.exitedDueToTimeout)
     failures.push(`${what}: no result after ${RUN_MS / 1000} s (killed)`);
-  else if (result.code !== 0)
+  else if (result.code !== 0) {
+    const why = result.err.trim() || result.out.trim();
     failures.push(
-      `${what}: exit ${result.code}${result.err.trim() ? `: ${result.err.trim().slice(-500)}` : ""}`,
+      `${what}: exit ${result.code}${why ? `: ${why.slice(-500)}` : ""}`,
     );
+  }
   return result;
 }
 

@@ -659,8 +659,8 @@ export function tableRuns(rows: string[]): Run[] {
 
 /**
  * An opening fence: three or more backticks or tildes, then an info string.
- * Any indent opens one, not only up to three spaces: inside a list item the
- * fence sits under the item's text, and models indent it by four or more.
+ * Indented four or more, it opens one only under a list item (`fenceOpens`),
+ * where it sits under the item's text and models indent it that far.
  */
 const FENCE_OPEN = /^(\s*)(`{3,}|~{3,})\s*([^`]*)$/;
 /** A bullet (`-`, `*`, `+`) or a numbered (`1.`, `1)`) list item. */
@@ -672,6 +672,26 @@ function closesFence(line: string, open: string, indent: number): boolean {
   return new RegExp(
     `^\\s{0,${indent + 3}}\\${mark}{${open.length},}\\s*$`,
   ).test(line);
+}
+
+/**
+ * Whether a fence line opens a code block: indented up to three, always;
+ * further, only under a list item. A paragraph's indented "```" is text
+ * (CommonMark: such a line cannot interrupt a paragraph).
+ */
+function fenceOpens(indent: number, underItem: boolean): boolean {
+  return indent <= 3 || underItem;
+}
+
+/**
+ * A list item less indented than an indented fence: the next item of the
+ * list the fence sits in. It ends the code block (CommonMark ends it with
+ * its item) and starts the item.
+ */
+function leavesFence(line: string, indent: number): boolean {
+  if (indent === 0) return false;
+  const item = LIST_ITEM.exec(line);
+  return item !== null && (item[1]?.length ?? 0) < indent;
 }
 
 /** A code line without the fence's own indent (a lazier line loses what it has). */
@@ -690,8 +710,11 @@ export function startsOpenFence(text: string): boolean {
   if (!fence) return false;
   const open = fence[2] ?? "```";
   const indent = fence[1]?.length ?? 0;
-  for (let i = 1; i < lines.length; i++)
-    if (closesFence(lines[i] ?? "", open, indent)) return false;
+  for (let i = 1; i < lines.length; i++) {
+    const line = lines[i] ?? "";
+    if (closesFence(line, open, indent) || leavesFence(line, indent))
+      return false;
+  }
   return true;
 }
 
@@ -745,6 +768,9 @@ export function parseBlocksAt(
   let item:
     | { marker: string; nest: boolean; lines: string[]; at: number }
     | undefined;
+  // Under a list item: from an item to the next unindented paragraph line,
+  // heading, quote or table. Blank lines and an item's code keep it.
+  let underItem = false;
   const next = () => `${prefix}${first + blocks.length}`;
   const flush = () => {
     if (para.length > 0) {
@@ -773,7 +799,7 @@ export function parseBlocksAt(
     const line = lines[i] ?? "";
     const fence = FENCE_OPEN.exec(line);
     const listItem = LIST_ITEM.exec(line);
-    if (fence) {
+    if (fence && fenceOpens(fence[1]?.length ?? 0, underItem)) {
       flush();
       const at = i;
       const open = fence[2] ?? "```";
@@ -784,6 +810,11 @@ export function parseBlocksAt(
         i < lines.length && !closesFence(lines[i] ?? "", open, indent);
         i++
       ) {
+        if (leavesFence(lines[i] ?? "", indent)) {
+          // The next item: the outer loop reads it.
+          i--;
+          break;
+        }
         body.push(unindent(lines[i] ?? "", indent));
       }
       const lang = clip((fence[3] ?? "").trim().split(/\s+/)[0] ?? "", 24);
@@ -791,6 +822,7 @@ export function parseBlocksAt(
       blocks.push(codeBlock(next(), lang, body));
     } else if (TABLE_ROW.test(line)) {
       flush();
+      underItem = false;
       const at = i;
       const table: string[] = [line.trim()];
       while (TABLE_ROW.test(lines[i + 1] ?? "")) {
@@ -803,6 +835,7 @@ export function parseBlocksAt(
       );
     } else if (/^#{1,6}\s/.test(line)) {
       flush();
+      underItem = false;
       starts.push(i);
       blocks.push(
         textBlock(
@@ -814,10 +847,12 @@ export function parseBlocksAt(
       );
     } else if (/^\s*>\s?/.test(line)) {
       if (para.length > 0 || item) flush();
+      underItem = false;
       if (quote.length === 0) quoteAt = i;
       quote.push(line.replace(/^\s*>\s?/, ""));
     } else if (listItem) {
       flush();
+      underItem = true;
       const mark = listItem[2] ?? "-";
       item = {
         marker: /^\d/.test(mark) ? `${mark.slice(0, -1)}.` : "•",
@@ -832,6 +867,8 @@ export function parseBlocksAt(
       item.lines.push(line.trim());
     } else {
       if (quote.length > 0) flush();
+      // An indented paragraph is the item's own; an unindented one ends it.
+      if (!/^\s{2,}/.test(line)) underItem = false;
       if (para.length === 0) paraAt = i;
       para.push(line);
     }

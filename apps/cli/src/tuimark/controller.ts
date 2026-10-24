@@ -659,17 +659,16 @@ export class TuimarkClient {
   /**
    * `/details`: the latest receipt whole, in the viewer. Refused while a
    * turn runs or an approval is open — an armed dialog is never covered.
-   * Says whether the viewer opened.
    */
-  private async openDetails(): Promise<boolean> {
+  private async openDetails(): Promise<void> {
     if (this.busy || this.proposal) {
       await this.write([{ path: "status", value: BUSY_STATUS }]);
-      return false;
+      return;
     }
     const receipt = this.lastReceipt;
     if (!receipt) {
       await this.write([{ path: "status", value: NO_DETAILS_STATUS }]);
-      return false;
+      return;
     }
     this.detailsOpen = true;
     await this.write([
@@ -677,7 +676,6 @@ export class TuimarkClient {
       { path: "details", value: this.detailsFor(receipt) },
       { path: "status", value: `Latest tool output: ${receipt.name}` },
     ]);
-    return true;
   }
 
   // ------------------------------------------------------------------ the panel
@@ -2005,21 +2003,17 @@ export class TuimarkClient {
       grants: this.grantLabels(),
       ...(rules !== undefined ? { rules } : {}),
     });
-    // `/details` and `/model` run on controller state and can still be
-    // refused there (no receipt, a model admission refuses): their line is
-    // cleared only once they are accepted, so a refused one can be fixed.
+    // `/model` runs on controller state and can still be refused there (a
+    // model admission refuses): its line is cleared only once accepted, so
+    // a refused one can be fixed. `/details` takes no argument, so even
+    // "no tool output yet" leaves nothing to fix: its line goes at once.
     const clearDraft = () => this.write([{ path: "draft", value: "" }]);
-    if (
-      sent &&
-      !outcome.unknown &&
-      !outcome.details &&
-      outcome.model === undefined
-    )
+    if (sent && !outcome.unknown && outcome.model === undefined)
       await clearDraft();
     // `/details` opens over controller state (the retained receipt), so
     // its whole outcome — refusal included — is written there.
     if (outcome.details) {
-      if ((await this.openDetails()) && sent) await clearDraft();
+      await this.openDetails();
       return;
     }
     // The panel and export commands likewise run on controller state.
@@ -2553,7 +2547,7 @@ export class TuimarkClient {
       // took its prompt back takes its reply too.
       const withdrawn = aborted && !session && !receivedMessage;
       if (!this.inline && !withdrawn && !this.liveTool) {
-        const blocks = this.stream.finishTail();
+        const blocks = this.stream.finishTail(true);
         if (blocks.length > 0)
           this.transcript.push(this.builder.partial(blocks, this.stream.links));
       }

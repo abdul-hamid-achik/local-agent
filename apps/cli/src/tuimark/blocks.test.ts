@@ -534,6 +534,50 @@ test("fences: one under a list item is code, without the item's indent", () => {
   expect(open[1]?.para).toBe(true);
   expect(startsOpenFence("    ```sh\n    bun i")).toBe(true);
   expect(startsOpenFence("    ```sh\n    bun i\n    ```")).toBe(false);
+  // The item's own indented paragraph keeps the fence under it.
+  const nested = parseBlocks(
+    [
+      "1. Install:",
+      "",
+      "   Run this:",
+      "",
+      "    ```sh",
+      "    ls",
+      "    ```",
+    ].join("\n"),
+  );
+  expect(nested.map((b) => Boolean(b.code))).toEqual([false, false, true]);
+});
+
+test("fences: an indented one in a paragraph is text; the next item ends one left open", () => {
+  // Four spaces in a paragraph do not open code: the prose after stays prose.
+  const prose = parseBlocks(
+    ["Use this marker:", "    ```", "After that, run the tests."].join("\n"),
+  );
+  expect(prose.map((b) => Boolean(b.code))).toEqual([false]);
+  expect(runsText(prose[0]?.runs ?? [])).toContain(
+    "After that, run the tests.",
+  );
+  // Nor after a paragraph that ended the list.
+  const after = parseBlocks(
+    ["1. One", "", "Then:", "    ```", "text"].join("\n"),
+  );
+  expect(after.some((b) => b.code)).toBe(false);
+  // An item's fence left open ends at the next item, which stays an item.
+  const open = parseBlocks(
+    ["1. Run:", "    ```", "    ls", "2. Next"].join("\n"),
+  );
+  expect(open.map((b) => [Boolean(b.item), Boolean(b.code)])).toEqual([
+    [true, false],
+    [false, true],
+    [true, false],
+  ]);
+  expect(runsText(open[1]?.runs ?? [])).toBe("ls");
+  // The stream sees the same end.
+  expect(startsOpenFence("    ```\n    ls\n2. Next")).toBe(false);
+  // A fence at column 0 is never ended by an item inside it.
+  const top = parseBlocks(["```md", "1. inside", "```"].join("\n"));
+  expect(top.map((b) => Boolean(b.code))).toEqual([true]);
 });
 
 test("a message view is bounded: characters, blocks and code line width", () => {

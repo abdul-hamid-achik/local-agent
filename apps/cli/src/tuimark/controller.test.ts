@@ -15,6 +15,7 @@ import type {
 import { expect, test } from "vitest";
 import {
   type Block,
+  MAX_MESSAGE_BLOCKS,
   type MessageView,
   parseBlocks,
   runsText,
@@ -543,6 +544,46 @@ test("fullscreen: a cancelled or failed reply keeps what had arrived", async () 
   const views = store(failed.ui).messages;
   expect(views.map(viewText)).toEqual(["go", "partway", "connection reset"]);
   expect(views[2]?.is_notice).toBe(true);
+});
+
+test("fullscreen: a stopped reply past the view's bounds does not promise the rest", async () => {
+  const long = function* () {
+    yield {
+      type: "message",
+      message: { role: "assistant", content: "First, the plan." },
+    } as const;
+    for (let n = 0; n < MAX_MESSAGE_BLOCKS + 20; n++)
+      yield { type: "text", text: `paragraph ${n}\n\n` } as const;
+  };
+  const check = (reply: string) => {
+    expect(reply).toContain("paragraph 0");
+    expect(reply).not.toContain("shown when it is finished");
+    expect(reply).toContain("the turn stopped before it finished");
+  };
+  const cancelled = setup(async function* ({ options }) {
+    yield* long();
+    await new Promise((_, reject) =>
+      options.signal.addEventListener("abort", () =>
+        reject(new Error("aborted")),
+      ),
+    );
+  });
+  await cancelled.ui.fire("send", "long one");
+  await new Promise((r) => setTimeout(r, 15));
+  await cancelled.ui.fire("cancel");
+  await cancelled.client.idle();
+  expect(store(cancelled.ui).status).toBe("Cancelled");
+  check(viewText(store(cancelled.ui).messages.at(-1) as MessageView));
+
+  const failed = setup(async function* () {
+    yield* long();
+    throw new Error("connection reset");
+  });
+  await failed.ui.fire("send", "long one");
+  await failed.client.idle();
+  const views = store(failed.ui).messages;
+  check(viewText(views.at(-2) as MessageView));
+  expect(viewText(views.at(-1) as MessageView)).toBe("connection reset");
 });
 
 test("esc while an approval is pending denies it", async () => {
@@ -2255,8 +2296,9 @@ test("/details before any tool ran says so and opens nothing", async () => {
   await ui.fire("send", "/details");
   expect(store(ui).status).toBe(NO_DETAILS_STATUS);
   expect(store(ui).details.open).toBe(false);
-  // Refused, so the line stays.
-  expect(store(ui).draft).toBe("/details");
+  // Nothing to fix or send again: the line goes, so the next message does
+  // not land after it.
+  expect(store(ui).draft).toBe("");
 });
 
 test("/details shows the lines the card truncated, and closing rests at idle", async () => {
