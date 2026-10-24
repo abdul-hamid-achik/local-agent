@@ -68,6 +68,19 @@ To let `fetch` reach a local dev server or your LAN, set
 resolves the host itself, so a DNS server that answers differently between
 that lookup and the connection (DNS rebinding) is not covered.
 
+### What a read can send
+
+`fetch` and `web_search` do not ask, so text the model reads can steer what
+it fetches next. A page, a search result or an MCP reply that tells the
+model to put a file's contents in a URL can make it send them to that host.
+Results from `fetch`, `web_search`, MCP and `task` reach the model marked
+`"source": "external"`, and it is told that such text is data, not
+instructions. That is guidance to the model, not a guarantee. Deny rules
+(see [Persistent rules](#persistent-rules)) stop the two tools that never
+ask: `fetch` with `domain:*` and `web_search` with `*`. MCP tools and
+commands can still reach the network once you approve them or a rule
+allows them.
+
 ### Interactive approval
 
 The dialog shows the action: a bounded diff for edits, the exact command for
@@ -139,7 +152,11 @@ are `{effect, tool, pattern}`, evaluated before any card, in every client:
 the Tuimark client, the Vue client, the desktop app and headless runs.
 
 - `edit` — a gitignore-style path glob relative to the workspace (`*` one
-  segment, `**` recursive);
+  segment, `**` recursive). Without a leading `/` it matches at any depth
+  (`a.ts` also matches `src/a.ts`); `!` saves the path anchored
+  (`/src/a.ts`). A deny or ask rule ignores case and Unicode normalization,
+  as macOS's default filesystem does, so `/src/secrets/**` also refuses
+  `src/Secrets/key`; an allow rule matches the path as written;
 - `run_command` — the argument list word for word, with `"…"` around a word
   that holds spaces or quotes. A trailing `*` written by hand makes it a
   prefix, so `npm test *` also matches bare `npm test`. A deny or ask rule

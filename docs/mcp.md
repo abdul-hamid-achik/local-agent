@@ -86,7 +86,11 @@ agent as `browser__*` tools:
 
 STDIO servers start with a scrubbed environment: `PATH` and `HOME` are empty
 unless your config provides them, which is why the `env` block above exists.
-Verify the connection before a session with `--mcp-status`.
+A command that runs in your shell may not be on that `PATH`: Homebrew
+installs to `/opt/homebrew/bin` on Apple silicon and Bun to `~/.bun/bin`.
+Give the command's full path (`command -v bunx` prints it) or add its
+directory to `env.PATH`; a server that cannot start says which. Verify the
+connection before a session with `--mcp-status`.
 
 ## Tool invocation
 
