@@ -55,7 +55,12 @@ test("a clean biome run appends a single labeled line", async () => {
   expect(appended).toBe("\n\n--- diagnostics: clean (biome) ---");
   expect(calls).toEqual([
     {
-      argv: ["/w/node_modules/@biomejs/cli/biome", "check", "./src/a.ts"],
+      argv: [
+        "/w/node_modules/@biomejs/cli/biome",
+        "check",
+        `--config-path=${join(process.cwd(), "biome.json")}`,
+        "./src/a.ts",
+      ],
       timeoutMs: 30_000,
     },
   ]);
@@ -135,6 +140,8 @@ test("LOCAL_AGENT_DIAGNOSTICS_TSC=1 adds tsc output only when it fails", async (
     "/usr/bin/bun",
     "/w/node_modules/typescript/bin/tsc",
     "--noEmit",
+    "-p",
+    join(process.cwd(), "tsconfig.json"),
   ]);
   expect(calls[1]?.timeoutMs).toBe(90_000);
 });
@@ -234,7 +241,7 @@ test("a path that looks like an option stays a path", async () => {
     ON,
     TOOLS,
   );
-  expect(calls[0]?.argv.slice(1)).toEqual(["check", "./--write.ts"]);
+  expect(calls[0]?.argv.at(-1)).toBe("./--write.ts");
 });
 
 test("workspace tools resolve inside the workspace only", async () => {
@@ -259,4 +266,40 @@ test("workspace tools resolve inside the workspace only", async () => {
   expect(workspaceTools.tsc(process.cwd())?.[1]).toContain(
     "typescript/bin/tsc",
   );
+});
+
+test("biome and tsc use the root's own config, or say there is none", async () => {
+  const bare = await mkdtemp(join(tmpdir(), "la-diag-bare-"));
+  try {
+    const calls: Call[] = [];
+    const appended = await postEditDiagnostics(
+      ["src/a.ts"],
+      bare,
+      signal,
+      fakeRunner([{ exitCode: 0 }], calls),
+      { ...ON, LOCAL_AGENT_DIAGNOSTICS_TSC: "1" },
+      TOOLS,
+    );
+    // No biome.json: Biome's own defaults, no --config-path.
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.argv.slice(1)).toEqual(["check", "./src/a.ts"]);
+    // No tsconfig.json: tsc never runs (it would walk up to a parent's).
+    expect(appended).toContain(
+      "--- diagnostics unavailable: no tsconfig.json at the workspace root ---",
+    );
+    await writeFile(join(bare, "biome.jsonc"), "{}");
+    await postEditDiagnostics(
+      ["a.ts"],
+      bare,
+      signal,
+      fakeRunner([{ exitCode: 0 }], calls),
+      ON,
+      TOOLS,
+    );
+    expect(calls[1]?.argv[2]).toBe(
+      `--config-path=${join(bare, "biome.jsonc")}`,
+    );
+  } finally {
+    await rm(bare, { recursive: true, force: true });
+  }
 });

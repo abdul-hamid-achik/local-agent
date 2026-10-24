@@ -6,7 +6,15 @@
 // fetches whatever npm calls "biome" (an unrelated package) or "tsc".
 
 import { realpathSync, statSync } from "node:fs";
-import { basename, dirname, extname, join } from "node:path";
+import {
+  basename,
+  dirname,
+  extname,
+  isAbsolute,
+  join,
+  relative,
+  sep,
+} from "node:path";
 import {
   createCommandProposal,
   executeApprovedCommand,
@@ -94,7 +102,10 @@ function installedFile(
   from: string,
   file: string,
 ): string | undefined {
-  const inside = (path: string) => path === root || path.startsWith(`${root}/`);
+  const inside = (path: string) => {
+    const rest = relative(root, path);
+    return rest !== ".." && !rest.startsWith(`..${sep}`) && !isAbsolute(rest);
+  };
   for (let dir = from; inside(dir); dir = dirname(dir)) {
     if (basename(dir) !== "node_modules") {
       const candidate = join(dir, "node_modules", file);
@@ -151,6 +162,17 @@ export const workspaceTools: DiagnosticsTools = {
   tsc: workspaceTsc,
 };
 
+/** The first of `names` that is a file directly in `root`. */
+function rootFile(root: string, names: readonly string[]): string | undefined {
+  for (const name of names)
+    try {
+      if (statSync(join(root, name)).isFile()) return name;
+    } catch {
+      // Not there.
+    }
+  return undefined;
+}
+
 function unavailable(error: unknown): string {
   return `--- diagnostics unavailable: ${
     error instanceof Error ? error.message : String(error)
@@ -186,9 +208,17 @@ export async function postEditDiagnostics(
     const biomeBin = tools.biome(cwd);
     if (biomeBin === undefined)
       throw new Error("no @biomejs/biome install in this workspace");
-    // `./` keeps a path that starts with `-` from reading as an option.
+    // The workspace's own config, when it has one, rather than whatever
+    // Biome finds first walking up from it. `./` keeps a path that starts
+    // with `-` from reading as an option.
+    const config = rootFile(cwd, ["biome.json", "biome.jsonc"]);
     const biome = await runner(
-      [biomeBin, "check", ...targets.map((path) => `./${path}`)],
+      [
+        biomeBin,
+        "check",
+        ...(config ? [`--config-path=${join(cwd, config)}`] : []),
+        ...targets.map((path) => `./${path}`),
+      ],
       cwd,
       BIOME_TIMEOUT_MS,
       signal,
@@ -210,8 +240,11 @@ export async function postEditDiagnostics(
       const tscArgv = tools.tsc(cwd);
       if (tscArgv === undefined)
         throw new Error("no typescript install in this workspace");
+      // Bare `tsc` walks up to any parent's tsconfig.json: name the root's.
+      if (!rootFile(cwd, ["tsconfig.json"]))
+        throw new Error("no tsconfig.json at the workspace root");
       const tsc = await runner(
-        [...tscArgv, "--noEmit"],
+        [...tscArgv, "--noEmit", "-p", join(cwd, "tsconfig.json")],
         cwd,
         TSC_TIMEOUT_MS,
         signal,
