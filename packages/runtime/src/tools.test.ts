@@ -771,8 +771,9 @@ async function childGone(file: string): Promise<void> {
     if (pid > 0) {
       try {
         process.kill(pid, 0);
-      } catch {
-        return;
+      } catch (error) {
+        // EPERM: a process is there, only not ours to signal.
+        if ((error as { code?: unknown }).code === "ESRCH") return;
       }
     }
     await Bun.sleep(50);

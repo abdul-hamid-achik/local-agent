@@ -460,18 +460,20 @@ export type McpStartup = {
   failed: { name: string; error: string }[];
 };
 
-/**
- * Connects every server at once: one slow or broken server neither delays
- * nor sinks the others. An abort closes whatever did connect and throws.
- */
 const STARTUP_ERROR_CHARS = 200;
 
 /**
- * Why a server did not start, on one line of at most 200 characters. What
- * the server said is kept whole; the reason ahead of it gives way.
+ * Why a server did not start, on one line of at most 200 characters, with
+ * no escape sequences or control characters (a server's error can carry
+ * them). What the server said is kept whole; the reason ahead of it gives
+ * way.
  */
 export function startupError(reason: unknown): string {
-  const flat = (text: string) => text.replace(/\s+/g, " ").trim();
+  const flat = (text: string) =>
+    Bun.stripANSI(text)
+      // biome-ignore lint/suspicious/noControlCharactersInRegex: remove control characters from a server's error
+      .replace(/[\s\u0000-\u001f\u007f-\u009f]+/g, " ")
+      .trim();
   if (reason instanceof McpStartError) {
     const tail = `; it said: ${reason.said}`;
     const room = STARTUP_ERROR_CHARS - tail.length;
@@ -482,6 +484,10 @@ export function startupError(reason: unknown): string {
   return flat(text).slice(0, STARTUP_ERROR_CHARS) || "failed";
 }
 
+/**
+ * Connects every server at once: one slow or broken server neither delays
+ * nor sinks the others. An abort closes whatever did connect and throws.
+ */
 export async function connectMcpServers(
   configs: readonly McpServerConfig[],
   signal?: AbortSignal,

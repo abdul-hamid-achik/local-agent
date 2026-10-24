@@ -147,6 +147,9 @@ describe("MCP adapter boundary", () => {
       "closed early; it said: it broke",
     );
     expect(startupError(new Error("x".repeat(300)))).toHaveLength(200);
+    expect(
+      startupError(new Error("\u001b]0;title\u0007bad\u0085\r\nreply")),
+    ).toBe("bad reply");
   }, 15_000);
 
   test("a call to a server that has stopped is refused without being sent", async () => {
@@ -163,6 +166,9 @@ describe("MCP adapter boundary", () => {
         env: {},
         cwd,
       },
+    }).catch(async (error: unknown) => {
+      await rm(cwd, { recursive: true, force: true });
+      throw error;
     });
     try {
       expect((await adapter.callTool("stopping__stop", {})).text).toBe(
