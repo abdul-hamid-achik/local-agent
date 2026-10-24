@@ -2251,9 +2251,12 @@ const detailsText = (ui: FakeHost) =>
 
 test("/details before any tool ran says so and opens nothing", async () => {
   const { ui } = setup(reply("x"));
+  store(ui).draft = "/details";
   await ui.fire("send", "/details");
   expect(store(ui).status).toBe(NO_DETAILS_STATUS);
   expect(store(ui).details.open).toBe(false);
+  // Refused, so the line stays.
+  expect(store(ui).draft).toBe("/details");
 });
 
 test("/details shows the lines the card truncated, and closing rests at idle", async () => {
@@ -2727,8 +2730,10 @@ test("/model reports the current model, then switches the provider the next turn
   expect(store(ui).status).toBe(
     "Current model: fixture. Use /model NAME to switch",
   );
+  store(ui).draft = "/model llama3.2";
   await ui.fire("send", "/model llama3.2");
   expect(store(ui).status).toBe("Model changed to llama3.2");
+  expect(store(ui).draft).toBe("");
   expect(store(ui).header.model).toBe("llama3.2");
   await ui.fire("send", "hi");
   await client.idle();
@@ -2789,7 +2794,7 @@ test("/model plans the new model's context unless the user chose a size", async 
   expect(providers.at(-1)).toMatchObject({
     context_size: 8192,
     context_plan:
-      "set by --context or LOCAL_AGENT_CONTEXT; its KV cache takes 0.3 GiB of the 7.7 GiB left after the weights",
+      "set by --context or LOCAL_AGENT_CONTEXT; its KV cache takes 0.3 GiB of the 5.2 GiB left after the weights and headroom",
   });
   expect(providers.at(-1)?.context_warning).toBeUndefined();
 
@@ -2802,8 +2807,27 @@ test("/model plans the new model's context unless the user chose a size", async 
   });
   await large.ui.fire("send", "/model qwen3.5:4b");
   expect(store(large.ui).status).toBe(
-    "Model changed to qwen3.5:4b · context 262144 needs a 8.0 GiB KV cache, more than the 7.7 GiB left after the weights: Ollama may run part of the model on the CPU, or fail to load it",
+    "Model changed to qwen3.5:4b · context 262144 needs a 8.0 GiB KV cache, more than the 5.2 GiB left after the weights and headroom: Ollama may run part of the model on the CPU, or fail to load it",
   );
+
+  // Chalupa's size does not change with the model, and nor does its warning.
+  const remote = setup(reply("ok"), {
+    admitModel,
+    run,
+    provider: {
+      ...provider,
+      type: "ollama_remote",
+      context_warning: "Chalupa set a context of 8192 tokens",
+    } as Provider,
+  });
+  await remote.ui.fire("send", "/model qwen3.5:4b");
+  await remote.ui.fire("send", "hi");
+  await remote.client.idle();
+  expect(providers.at(-1)).toMatchObject({
+    type: "ollama_remote",
+    context_size: 8192,
+    context_warning: "Chalupa set a context of 8192 tokens",
+  });
 });
 
 test("a model the Ollama inventory rejects is refused: no switch, no header write", async () => {
@@ -2820,10 +2844,13 @@ test("a model the Ollama inventory rejects is refused: no switch, no header writ
       return reply("ok")({ options, messages });
     },
   });
+  store(ui).draft = "/model nope";
   await ui.fire("send", "/model nope");
   expect(store(ui).status).toBe(
     "Model nope is not installed. Run: ollama pull nope",
   );
+  // The typo stays in the composer to fix.
+  expect(store(ui).draft).toBe("/model nope");
   expect(store(ui).header.model).toBe("fixture");
   await ui.fire("send", "hi");
   await client.idle();

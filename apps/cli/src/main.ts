@@ -9,7 +9,7 @@ import {
   type McpConnection,
   type McpServerConfig,
   PLANNED_CONTEXT_MAX,
-  planContext,
+  planContextAdmitted,
   readMcpConfig,
   resolveProvider,
   runAgent,
@@ -289,7 +289,7 @@ Interrupted tool outcomes require inspection; they are never automatically repla
         // Without --context, the size comes from the model and this
         // machine's memory (planContext); a failed look leaves 16384. A
         // size the user set stays, with a warning when it does not fit.
-        const provider = await planContext(
+        const { provider, admission: planned } = await planContextAdmitted(
           resolved,
           AbortSignal.timeout(15_000),
         );
@@ -301,13 +301,15 @@ Interrupted tool outcomes require inspection; they are never automatically repla
           // An interactive client must not open its screen for a model that is
           // missing, or a --context beyond its native one: say so in one line.
           // (Headless runs report the same line from the agent's own admission.)
+          // The plan's admission, when it made one, already answers.
           const admission =
-            provider.type === "openai_local"
+            planned ??
+            (provider.type === "openai_local"
               ? await admitOpenAILocalModel(
                   provider,
                   AbortSignal.timeout(15_000),
                 )
-              : await admitOllamaModel(provider, AbortSignal.timeout(15_000));
+              : await admitOllamaModel(provider, AbortSignal.timeout(15_000)));
           if (admission.status === "rejected")
             throw new Error(admission.message);
         }

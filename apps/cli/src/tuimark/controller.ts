@@ -659,16 +659,17 @@ export class TuimarkClient {
   /**
    * `/details`: the latest receipt whole, in the viewer. Refused while a
    * turn runs or an approval is open — an armed dialog is never covered.
+   * Says whether the viewer opened.
    */
-  private async openDetails(): Promise<void> {
+  private async openDetails(): Promise<boolean> {
     if (this.busy || this.proposal) {
       await this.write([{ path: "status", value: BUSY_STATUS }]);
-      return;
+      return false;
     }
     const receipt = this.lastReceipt;
     if (!receipt) {
       await this.write([{ path: "status", value: NO_DETAILS_STATUS }]);
-      return;
+      return false;
     }
     this.detailsOpen = true;
     await this.write([
@@ -676,6 +677,7 @@ export class TuimarkClient {
       { path: "details", value: this.detailsFor(receipt) },
       { path: "status", value: `Latest tool output: ${receipt.name}` },
     ]);
+    return true;
   }
 
   // ------------------------------------------------------------------ the panel
@@ -1040,10 +1042,10 @@ export class TuimarkClient {
    * at the endpoint (and carries no remote redirect) before the swap; only
    * then does the provider the next turn runs on change, with the header.
    */
-  private async switchModel(name: string): Promise<void> {
+  private async switchModel(name: string): Promise<boolean> {
     if (this.busy || this.proposal || this.queued !== undefined) {
       await this.write([{ path: "status", value: BUSY_STATUS }]);
-      return;
+      return false;
     }
     await this.write([
       { path: "status", value: `Switching model to ${name}…` },
@@ -1072,11 +1074,11 @@ export class TuimarkClient {
           ),
         },
       ]);
-      return;
+      return false;
     }
     if (admission.status !== "validated") {
       await this.write([{ path: "status", value: oneLine(admission.message) }]);
-      return;
+      return false;
     }
     const facts = {
       nativeContext: admission.nativeContext,
@@ -1090,7 +1092,10 @@ export class TuimarkClient {
       !planned && this.provider.type === "ollama"
         ? explicitContextNote(facts, this.provider.context_size)
         : undefined;
-    const { context_warning: _, ...previous } = this.provider;
+    // A local model's warning is for its own size; Chalupa's size, and so
+    // its warning, stays with the profile.
+    const { context_warning: _, ...rest } = this.provider;
+    const previous = this.provider.type === "ollama" ? rest : this.provider;
     this.provider = {
       ...previous,
       model: admission.model,
@@ -1110,6 +1115,7 @@ export class TuimarkClient {
       { path: "header.model", value: clip(cleanText(admission.model), 40) },
       ...this.ctxWrites(this.ctx.current),
     ]);
+    return true;
   }
 
   /** `/find TEXT`: the workspace's saved sessions searched, hits in a panel. */
@@ -1999,12 +2005,21 @@ export class TuimarkClient {
       grants: this.grantLabels(),
       ...(rules !== undefined ? { rules } : {}),
     });
-    if (sent && !outcome.unknown)
-      await this.write([{ path: "draft", value: "" }]);
+    // `/details` and `/model` run on controller state and can still be
+    // refused there (no receipt, a model admission refuses): their line is
+    // cleared only once they are accepted, so a refused one can be fixed.
+    const clearDraft = () => this.write([{ path: "draft", value: "" }]);
+    if (
+      sent &&
+      !outcome.unknown &&
+      !outcome.details &&
+      outcome.model === undefined
+    )
+      await clearDraft();
     // `/details` opens over controller state (the retained receipt), so
     // its whole outcome — refusal included — is written there.
     if (outcome.details) {
-      await this.openDetails();
+      if ((await this.openDetails()) && sent) await clearDraft();
       return;
     }
     // The panel and export commands likewise run on controller state.
@@ -2025,7 +2040,7 @@ export class TuimarkClient {
       return;
     }
     if (outcome.model !== undefined) {
-      await this.switchModel(outcome.model);
+      if ((await this.switchModel(outcome.model)) && sent) await clearDraft();
       return;
     }
     if (outcome.find !== undefined) {

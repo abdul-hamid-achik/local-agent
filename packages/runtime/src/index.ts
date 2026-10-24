@@ -35,6 +35,7 @@ export {
   explicitContextNote,
   PLANNED_CONTEXT_MAX,
   planContext,
+  planContextAdmitted,
   planContextSize,
 } from "#runtime/context";
 export {

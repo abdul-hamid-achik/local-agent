@@ -4,6 +4,7 @@ import { resolveProvider } from "#runtime/config";
 import {
   explicitContextNote,
   planContext,
+  planContextAdmitted,
   planContextSize,
 } from "#runtime/context";
 
@@ -173,10 +174,12 @@ test("planContext keeps a chosen size and says what it costs", async () => {
     );
     expect(kept).toMatchObject({ context_size: 8_192, context_explicit: true });
     expect(kept.context_plan).toBe(
-      "set by --context or LOCAL_AGENT_CONTEXT; its KV cache takes 0.3 GiB of the 7.7 GiB left after the weights",
+      "set by --context or LOCAL_AGENT_CONTEXT; its KV cache takes 0.3 GiB of the 5.2 GiB left after the weights and headroom",
     );
     expect(kept.context_warning).toBeUndefined();
-    // 256k tokens at 32 KiB a token is 8 GiB: more than is left.
+    // 256k tokens at 32 KiB a token is 8 GiB: more than is left. The
+    // budget is the planner's: 11/16 of 16 GiB, less 3.3 GiB of weights,
+    // less 2.5 GiB of headroom.
     const big = await planContext(
       resolveProvider({ LOCAL_AGENT_CONTEXT: "262144" }, "qwen3.5:4b"),
       AbortSignal.timeout(5_000),
@@ -184,7 +187,7 @@ test("planContext keeps a chosen size and says what it costs", async () => {
     );
     expect(big.context_size).toBe(262_144);
     expect(big.context_warning).toBe(
-      "context 262144 needs a 8.0 GiB KV cache, more than the 7.7 GiB left after the weights: Ollama may run part of the model on the CPU, or fail to load it",
+      "context 262144 needs a 8.0 GiB KV cache, more than the 5.2 GiB left after the weights and headroom: Ollama may run part of the model on the CPU, or fail to load it",
     );
     expect(big.context_plan).toContain(big.context_warning);
   } finally {
@@ -213,14 +216,60 @@ test("planContext keeps Chalupa's negotiated size, and warns when it is small", 
   try {
     expect(
       await planContext(chalupa(65_536), AbortSignal.timeout(5_000)),
-    ).toEqual({ ...chalupa(65_536), context_plan: "negotiated by Chalupa" });
+    ).toEqual({ ...chalupa(65_536), context_plan: "set by Chalupa" });
     const small = await planContext(chalupa(8_192), AbortSignal.timeout(5_000));
     expect(small.context_size).toBe(8_192);
     expect(small.context_warning).toBe(
-      "Chalupa negotiated a context of 8192 tokens: long turns are compacted early. A larger GPU or a smaller model gives more.",
+      "Chalupa set a context of 8192 tokens: long turns are compacted early. A larger GPU or a smaller model gives more.",
     );
     // Nothing is asked of the remote host.
     expect(fetchMock).not.toHaveBeenCalled();
+  } finally {
+    fetchMock.mockRestore();
+  }
+});
+
+test("planContextAdmitted hands back the one admission it made, for the size it returns", async () => {
+  const fetchMock = ollama(qwen35);
+  try {
+    const planned = await planContextAdmitted(
+      resolveProvider({}, "qwen3.5:4b"),
+      AbortSignal.timeout(5_000),
+      MAC_16GB,
+    );
+    expect(planned.provider.context_size).toBe(32_768);
+    expect(planned.admission?.status).toBe("validated");
+    // One look: /api/tags and /api/show, nothing asked twice.
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    // A size the user set is the size checked: beyond the native context,
+    // the plan's admission is the refusal a client shows.
+    const beyond = await planContextAdmitted(
+      resolveProvider({ LOCAL_AGENT_CONTEXT: "524288" }, "qwen3.5:4b"),
+      AbortSignal.timeout(5_000),
+      MAC_16GB,
+    );
+    expect(beyond.provider.context_size).toBe(524_288);
+    expect(beyond.admission?.status).toBe("rejected");
+    // Chalupa's profile is not admitted here.
+    expect(
+      (
+        await planContextAdmitted(
+          resolveProvider({
+            LOCAL_AGENT_PROVIDER: "chalupa",
+            LOCAL_AGENT_LOCAL_ONLY: "false",
+            LOCAL_AGENT_PROVIDER_CONFIG: JSON.stringify({
+              type: "ollama_remote",
+              base_url: "http://127.0.0.1:1",
+              model: "large:35b",
+              context_size: 32_768,
+              max_model_bytes: 32 * GIB,
+              stream_idle_timeout: "10m",
+            }),
+          }),
+          AbortSignal.timeout(5_000),
+        )
+      ).admission,
+    ).toBeUndefined();
   } finally {
     fetchMock.mockRestore();
   }
