@@ -3,7 +3,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "vitest";
 import { type AgentEvent, runAgent, sessionProblem } from "#runtime/agent";
-import { compactHistory, promptChars } from "#runtime/compact";
+import {
+  compactHistory,
+  compactState,
+  promptChars,
+  STATE_SOFT_BYTES,
+  STATE_TARGET_BYTES,
+  stateBytes,
+} from "#runtime/compact";
 import { resolveProvider } from "#runtime/config";
 import type { Message } from "#runtime/index";
 import { SessionStore } from "#runtime/session";
@@ -325,4 +332,135 @@ test("without compact the history is never rewritten", async () => {
     await server.stop(true);
     await rm(root, { recursive: true, force: true });
   }
+});
+
+/**
+ * `n` exchanges, each a user message, a read call and its result (`size`
+ * characters, and an image of `imageSize` when given), then the current
+ * turn's user message.
+ */
+function exchanges(n: number, size: number, imageSize = 0): Message[] {
+  return [
+    ...Array.from({ length: n }, (_, i): Message[] => [
+      { role: "user", content: `question ${i}` },
+      { role: "assistant", content: "", tool_calls: [call(`r${i}`)] },
+      {
+        role: "tool",
+        tool_name: "read",
+        tool_call_id: `r${i}`,
+        content: receipt("succeeded", "x".repeat(size)),
+        ...(imageSize ? { images: ["A".repeat(imageSize)] } : {}),
+      },
+      { role: "assistant", content: `answer ${i}` },
+    ]).flat(),
+    { role: "user", content: "and now?" },
+  ];
+}
+
+test("an image counts as its own length only for the saved state", () => {
+  const images = exchanges(1, 10, 50_000);
+  const window = compactHistory(images, 1);
+  const exact = compactHistory(images, 1, 0, { state: true });
+  expect(window.saved).toBe(3_000);
+  expect(exact.saved).toBe(50_000);
+});
+
+test("state under the soft budget is left alone", () => {
+  const small = exchanges(30, 100_000);
+  expect(stateBytes(small)).toBeLessThan(STATE_SOFT_BYTES);
+  const result = compactState(small);
+  expect(result.elided).toBe(0);
+  expect(result.messages).toEqual(small);
+});
+
+test("past the soft budget the state is shortened to the target, images first", () => {
+  // 3.2 MB of images and 3.6 MB of results: dropping the images is enough.
+  const big = exchanges(36, 100_000, 90_000);
+  expect(stateBytes(big)).toBeGreaterThan(STATE_SOFT_BYTES);
+  const result = compactState(big);
+  expect(result.before).toBe(stateBytes(big));
+  expect(result.after).toBe(stateBytes(result.messages));
+  expect(result.after).toBeLessThanOrEqual(STATE_TARGET_BYTES);
+  // Oldest first, and only as many as needed.
+  const withImage = result.messages.flatMap((message, index) =>
+    message.images ? [index] : [],
+  );
+  expect(result.messages[2]?.images).toBeUndefined();
+  expect(withImage.length).toBeGreaterThan(0);
+  expect(withImage.at(-1)).toBe(big.length - 3);
+  // No result was shortened that did not have to be.
+  expect(
+    result.messages.filter((message) => message.content.includes(" elided ")),
+  ).toEqual([]);
+  expect(result.elided).toBe(36 - withImage.length);
+  expect(big[2]?.images).toBeDefined();
+});
+
+test("past the soft budget the state is shortened to the target, then old results, oldest first", () => {
+  const big = exchanges(70, 100_000);
+  expect(stateBytes(big)).toBeGreaterThan(STATE_SOFT_BYTES);
+  const result = compactState(big);
+  expect(result.after).toBeLessThanOrEqual(STATE_TARGET_BYTES);
+  const elided = result.messages.flatMap((message, index) =>
+    message.content.includes(" elided ") ? [index] : [],
+  );
+  expect(elided.length).toBeGreaterThan(0);
+  // The oldest go; the newest results stay whole.
+  expect(elided[0]).toBe(2);
+  expect(elided.at(-1)).toBeLessThan(big.length - 4);
+  expect(result.messages.at(-2)?.content).toBe(big.at(-2)?.content);
+  expect(result.messages.at(-1)).toEqual(big.at(-1));
+  expect(result.elided).toBe(elided.length);
+  // It stops when it is down, rather than shortening everything.
+  expect(elided.length).toBeLessThan(70);
+});
+
+test("the current work stays whole, whatever the state holds", () => {
+  const huge = [
+    ...exchanges(3, 10),
+    {
+      role: "assistant" as const,
+      content: "",
+      tool_calls: [call("now")],
+    },
+    {
+      role: "tool" as const,
+      tool_name: "read",
+      tool_call_id: "now",
+      content: receipt("succeeded", "N".repeat(900_000)),
+      images: ["I".repeat(6_900_000)],
+    },
+  ];
+  const result = compactState(huge);
+  expect(result.messages.at(-1)).toEqual(huge.at(-1));
+  expect(result.after).toBeGreaterThan(STATE_SOFT_BYTES);
+});
+
+test("the state also sheds the reasoning of earlier turns, which a request never carries", () => {
+  const reasoned: Message[] = [
+    ...Array.from({ length: 8 }, (_, i): Message[] => [
+      { role: "user", content: `question ${i}` },
+      {
+        role: "assistant",
+        content: `answer ${i}`,
+        thinking: "t".repeat(900_000),
+      },
+    ]).flat(),
+    { role: "user", content: "and now?" },
+  ];
+  expect(stateBytes(reasoned)).toBeGreaterThan(STATE_SOFT_BYTES);
+  // The window leaves earlier turns' reasoning alone: it frees nothing.
+  expect(compactHistory(reasoned, 1).saved).toBe(0);
+  const result = compactState(reasoned);
+  expect(result.after).toBeLessThanOrEqual(STATE_TARGET_BYTES);
+  const left = result.messages.flatMap((message, index) =>
+    message.thinking ? [index] : [],
+  );
+  // Oldest first, and only as many as needed; the answers stay.
+  expect(result.messages[1]?.thinking).toBeUndefined();
+  expect(left.length).toBeGreaterThan(0);
+  expect(result.messages.map((message) => message.content)).toEqual(
+    reasoned.map((message) => message.content),
+  );
+  expect(result.elided).toBe(8 - left.length);
 });

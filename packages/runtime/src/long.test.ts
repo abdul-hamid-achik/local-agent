@@ -1,3 +1,4 @@
+import { Database } from "bun:sqlite";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -9,10 +10,19 @@ import {
   runAgent,
   type SessionContext,
 } from "#runtime/agent";
-import { promptChars, windowStart } from "#runtime/compact";
+import {
+  promptChars,
+  STATE_SOFT_BYTES,
+  stateBytes,
+  windowStart,
+} from "#runtime/compact";
 import { resolveProvider } from "#runtime/config";
 import type { Message } from "#runtime/index";
-import { ConversationFullError, SessionStore } from "#runtime/session";
+import {
+  ConversationFullError,
+  MAX_STATE_BYTES,
+  SessionStore,
+} from "#runtime/session";
 import { Workspace } from "#runtime/workspace";
 
 type Call = { name: string; arguments: Record<string, unknown> };
@@ -331,6 +341,284 @@ test("a session whose saved state would pass 8 MiB is full, not a bare error", a
         })),
       ]),
     ).toThrow(ConversationFullError);
+  } finally {
+    store.close();
+  }
+});
+
+/**
+ * Earlier exchanges whose tool results carry images, so that the saved state
+ * (with a closing user message) is `slack` bytes under the 8 MiB cap.
+ */
+function nearCap(slack: number): Message[] {
+  const exchange = (i: number, image: number): Message[] => [
+    { role: "user", content: `question ${i}` },
+    {
+      role: "assistant",
+      content: "",
+      tool_calls: [
+        {
+          id: `i${i}`,
+          function: { name: "read", arguments: { path: "a.txt" } },
+        },
+      ],
+    },
+    {
+      role: "tool",
+      tool_name: "read",
+      tool_call_id: `i${i}`,
+      content: JSON.stringify({ status: "succeeded", output: "an image" }),
+      images: ["A".repeat(image)],
+    },
+    { role: "assistant", content: `answer ${i}` },
+  ];
+  const close: Message = { role: "user", content: "and now?" };
+  const base = [...exchange(0, 4_000_000), ...exchange(1, 0), close];
+  const missing = MAX_STATE_BYTES - slack - stateBytes(base);
+  return [...exchange(0, 4_000_000), ...exchange(1, missing), close];
+}
+
+/** The ledger's events, oldest first, as `tool:type`. */
+function ledger(path: string): string[] {
+  const raw = new Database(path, { readonly: true });
+  try {
+    return raw
+      .query<{ tool_name: string; event_type: string }, []>(
+        "SELECT tool_name, event_type FROM execution_events ORDER BY id",
+      )
+      .all()
+      .map((row) => `${row.tool_name}:${row.event_type}`);
+  } finally {
+    raw.close();
+  }
+}
+
+const catBig: Call = {
+  name: "run_command",
+  arguments: { argv: "cat big.txt" },
+};
+const readBig: Call = { name: "read", arguments: { path: "big.txt" } };
+
+/** A session holding `nearCap(slack)`, and a file whose read result (3,900 characters) is more than `slack` leaves room for. */
+async function nearCapSession(slack: number) {
+  const root = await workspaceRoot();
+  await writeFile(join(root, "big.txt"), "y".repeat(3_900));
+  const dbPath = join(root, "sessions.db");
+  const store = await SessionStore.open(dbPath);
+  const history = nearCap(slack);
+  const state = await store.createSession(root, history);
+  expect(stateBytes(history)).toBe(MAX_STATE_BYTES - slack);
+  return { root, dbPath, store, history, session: { store, state } };
+}
+
+const messageEvents = (events: AgentEvent[]) =>
+  events.flatMap((event) => (event.type === "message" ? [event.message] : []));
+
+test("a result the saved state cannot hold is saved as a note with its terminal event, and the turn goes on", async () => {
+  const { root, dbPath, store, history, session } = await nearCapSession(1_500);
+  try {
+    const result = await run(history, [[catBig]], { root, session });
+    expect(result.thrown).toBeUndefined();
+    // The model answered the note: a second request, then "Done".
+    expect(result.requests).toHaveLength(2);
+    const sentResult = result.requests[1]?.find((m) => m.role === "tool");
+    const kept = await store.loadSession(
+      session.state.publicId,
+      session.state.workspaceId,
+    );
+    const note = kept.messages.findLast((message) => message.role === "tool");
+    expect(JSON.parse(note?.content ?? "{}")).toEqual({
+      status: "succeeded",
+      output: expect.stringContaining("too large for the session to keep"),
+    });
+    expect(kept.messages.at(-1)?.content).toBe("Done");
+    expect(kept.messages.some((m) => m.content.includes("yyyy"))).toBe(false);
+    // What the client was shown, and what the model read, is what is saved.
+    expect(messageEvents(result.events)).toContainEqual(note);
+    expect(
+      result.requests[1]?.filter((m) => m.role === "tool").at(-1)?.content,
+    ).toBe(note?.content);
+    expect(sentResult).toBeDefined();
+    // The tool_result event still carries the output, for display.
+    expect(
+      result.events.find((event) => event.type === "tool_result"),
+    ).toMatchObject({ status: "succeeded" });
+    expect(ledger(dbPath)).toEqual([
+      "run_command:requested",
+      "run_command:approval_requested",
+      "run_command:approved",
+      "run_command:started",
+      "run_command:completed",
+    ]);
+    const raw = new Database(dbPath, { readonly: true });
+    const receipt = raw
+      .query<{ result_receipt: string }, []>(
+        "SELECT result_receipt FROM execution_events WHERE event_type = 'completed'",
+      )
+      .get();
+    raw.close();
+    expect(receipt?.result_receipt).toContain("yyyy");
+    expect(
+      store.listHazards(session.state.id, session.state.workspaceId),
+    ).toEqual([]);
+  } finally {
+    store.close();
+  }
+});
+
+test("a note that does not fit ends the turn with the sentence, and the call stays started", async () => {
+  // After the call's message (160 bytes), less than its note takes (316).
+  const { root, dbPath, store, history, session } = await nearCapSession(300);
+  try {
+    const result = await run(history, [[catBig]], { root, session });
+    expect(result.thrown).toBeInstanceOf(ConversationFullError);
+    expect((result.thrown as Error).message).toBe(
+      "This session is full: its saved state would pass 8 MiB.",
+    );
+    expect(ledger(dbPath).at(-1)).toBe("run_command:started");
+    expect(
+      store.listHazards(session.state.id, session.state.workspaceId),
+    ).toHaveLength(1);
+  } finally {
+    store.close();
+  }
+});
+
+test("every call of a batch the state cannot hold ends in the ledger with a note", async () => {
+  const { root, dbPath, store, history, session } = await nearCapSession(1_500);
+  try {
+    const result = await run(history, [[readBig, readBig, readBig]], {
+      root,
+      session,
+    });
+    expect(result.thrown).toBeUndefined();
+    const events = ledger(dbPath);
+    expect(events.filter((entry) => entry.endsWith(":started"))).toHaveLength(
+      3,
+    );
+    expect(events.filter((entry) => entry.endsWith(":completed"))).toHaveLength(
+      3,
+    );
+    const kept = await store.loadSession(
+      session.state.publicId,
+      session.state.workspaceId,
+    );
+    const notes = kept.messages.filter(
+      (message) =>
+        message.role === "tool" &&
+        message.tool_call_id?.startsWith("i") !== true,
+    );
+    expect(notes).toHaveLength(3);
+    for (const note of notes)
+      expect(note.content).toContain("too large for the session to keep");
+    // The client was shown the notes, in call order, as saved.
+    expect(
+      messageEvents(result.events).filter((m) => m.role === "tool"),
+    ).toEqual(notes);
+    expect(kept.messages.at(-1)?.content).toBe("Done");
+  } finally {
+    store.close();
+  }
+});
+
+test("in a batch, only a call whose own note does not fit is left started", async () => {
+  // After the batch's message (361 bytes), room for one note (316), not two.
+  const { root, dbPath, store, history, session } = await nearCapSession(800);
+  try {
+    const result = await run(history, [[readBig, readBig, readBig]], {
+      root,
+      session,
+    });
+    expect(result.thrown).toBeInstanceOf(ConversationFullError);
+    const events = ledger(dbPath);
+    expect(events.filter((entry) => entry.endsWith(":completed"))).toHaveLength(
+      1,
+    );
+    expect(events.filter((entry) => entry.endsWith(":started"))).toHaveLength(
+      3,
+    );
+    const kept = await store.loadSession(
+      session.state.publicId,
+      session.state.workspaceId,
+    );
+    // The one that ended has its answer; the rest are not in the history.
+    expect(kept.messages.at(-1)?.content).toContain("too large");
+    expect(kept.messages.at(-2)?.role).toBe("assistant");
+  } finally {
+    store.close();
+  }
+});
+
+test("past the soft budget a compacting client shortens the saved state, and the result is kept whole", async () => {
+  const { root, dbPath, store, history, session } = await nearCapSession(1_500);
+  try {
+    expect(stateBytes(history)).toBeGreaterThan(STATE_SOFT_BYTES);
+    const result = await run(history, [[catBig]], {
+      root,
+      session,
+      compact: true,
+    });
+    expect(result.thrown).toBeUndefined();
+    expect(result.requests).toHaveLength(2);
+    const compacted = result.events.flatMap((event) =>
+      event.type === "compacted" ? [event] : [],
+    );
+    // Once, before the first request: the images go, and that is enough.
+    expect(compacted).toHaveLength(1);
+    expect(result.events.indexOf(compacted[0] as AgentEvent)).toBeLessThan(
+      result.events.findIndex((event) => event.type === "tool_requested"),
+    );
+    expect(compacted[0]?.elided).toBe(2);
+    expect(compacted[0]?.messages.some((message) => message.images)).toBe(
+      false,
+    );
+    expect(compacted[0]?.messages.at(-1)?.content).toBe("and now?");
+    // The history the client now holds is the one saved, and it is small.
+    const saved = await store.loadSession(
+      session.state.publicId,
+      session.state.workspaceId,
+    );
+    expect(stateBytes(saved.messages)).toBeLessThan(STATE_SOFT_BYTES);
+    expect(saved.messages.slice(0, compacted[0]?.messages.length)).toEqual(
+      compacted[0]?.messages,
+    );
+    expect(saved.messages.at(-1)?.content).toBe("Done");
+    // The result fit: it is the output, not a note.
+    expect(
+      saved.messages.some((message) => message.content.includes("yyyy")),
+    ).toBe(true);
+    expect(
+      saved.messages.some((message) => message.content.includes("too large")),
+    ).toBe(false);
+    expect(ledger(dbPath)).toEqual([
+      "run_command:requested",
+      "run_command:approval_requested",
+      "run_command:approved",
+      "run_command:started",
+      "run_command:completed",
+    ]);
+  } finally {
+    store.close();
+  }
+});
+
+test("the state budget does not apply without a session, nor without compact", async () => {
+  const without = await run(nearCap(1_500), [], { compact: true });
+  expect(without.thrown).toBeUndefined();
+  expect(without.events.some((event) => event.type === "compacted")).toBe(
+    false,
+  );
+  const { root, store, history, session } = await nearCapSession(1_500);
+  try {
+    const plain = await run(history, [], { root, session });
+    expect(plain.events.some((event) => event.type === "compacted")).toBe(
+      false,
+    );
+    const kept = await store.loadSession(
+      session.state.publicId,
+      session.state.workspaceId,
+    );
+    expect(kept.messages.filter((message) => message.images)).toHaveLength(2);
   } finally {
     store.close();
   }

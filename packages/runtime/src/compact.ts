@@ -20,6 +20,15 @@ const PREVIEW = 240;
 /** A result shorter than this is left alone: its note would save little. */
 const MIN_ELIDED = 800;
 
+/**
+ * A session's saved state is shortened (compactState) once its JSON passes
+ * this many bytes... Under session.ts's 8 MiB cap, with room for the next
+ * step's results (a fetched image alone runs to several MiB).
+ */
+export const STATE_SOFT_BYTES = 6 * 1024 * 1024;
+/** ...and down to this many. */
+export const STATE_TARGET_BYTES = 4 * 1024 * 1024;
+
 const ELIDED =
   "characters elided to keep the conversation within the context window. Run the tool again if you need them.]";
 
@@ -132,12 +141,17 @@ function isElided(content: string): boolean {
  * user message, the last assistant message and every result after it are
  * the model's current work and stay whole, and so does everything before
  * `from` (the part a windowed request leaves out: shortening it saves the
- * request nothing). Messages are copied, not changed.
+ * request nothing). With `state`, what is freed is measured as saved state
+ * rather than as window: an image counts as its own length (not
+ * IMAGE_CHARS), and the reasoning of earlier turns goes too (a request
+ * leaves it out already, so only the state holds it). Messages are copied,
+ * not changed.
  */
 export function compactHistory(
   history: readonly Message[],
   chars: number,
   from = 0,
+  { state = false }: { state?: boolean } = {},
 ): { messages: Message[]; elided: number; saved: number } {
   const messages = history.map((message) => ({ ...message }));
   const lastUser = messages.findLastIndex((message) => message.role === "user");
@@ -151,7 +165,9 @@ export function compactHistory(
   const passes: ((message: Message, index: number) => number)[] = [
     (message) => {
       if (!message.images?.length) return 0;
-      const freed = message.images.length * IMAGE_CHARS;
+      const freed = state
+        ? message.images.reduce((total, image) => total + image.length, 0)
+        : message.images.length * IMAGE_CHARS;
       delete message.images;
       return freed;
     },
@@ -167,7 +183,11 @@ export function compactHistory(
       return before - message.content.length;
     },
     (message, index) => {
-      if (message.role !== "assistant" || !message.thinking || index < lastUser)
+      if (
+        message.role !== "assistant" ||
+        !message.thinking ||
+        (index < lastUser && !state)
+      )
         return 0;
       const freed = message.thinking.length;
       delete message.thinking;
@@ -185,4 +205,45 @@ export function compactHistory(
       }
     }
   return { messages, elided: changed.size, saved };
+}
+
+/** The UTF-8 bytes `history` takes as saved state (its JSON). */
+export function stateBytes(history: readonly Message[]): number {
+  return Buffer.byteLength(JSON.stringify(history), "utf8");
+}
+
+/**
+ * `history` shortened to `target` bytes of saved state when it passes
+ * `soft` (else untouched): all of it, from the start, since the state keeps
+ * what a request's window leaves out. Images go first, then results the
+ * model has read, then old reasoning (compactHistory); the current work
+ * stays whole, so the result may still be over `target`. Goes on only as
+ * long as something more can be freed.
+ */
+export function compactState(
+  history: readonly Message[],
+  soft = STATE_SOFT_BYTES,
+  target = STATE_TARGET_BYTES,
+): { messages: Message[]; elided: number; before: number; after: number } {
+  const before = stateBytes(history);
+  if (before <= soft)
+    return { messages: history.slice(), elided: 0, before, after: before };
+  let messages = history.slice();
+  let after = before;
+  while (after > target) {
+    // Characters stand for bytes only roughly (wide text, JSON escapes):
+    // ask for what is missing, then look again.
+    const next = compactHistory(messages, after - target, 0, { state: true });
+    if (next.saved <= 0) break;
+    messages = next.messages;
+    after = stateBytes(messages);
+  }
+  // compactHistory copies every message: what changed is what differs.
+  const elided = messages.filter(
+    (message, index) =>
+      message.content !== history[index]?.content ||
+      message.thinking !== history[index]?.thinking ||
+      message.images !== history[index]?.images,
+  ).length;
+  return { messages, elided, before, after };
 }

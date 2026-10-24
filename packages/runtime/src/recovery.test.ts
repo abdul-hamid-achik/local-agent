@@ -13,6 +13,7 @@ import {
   settleInterrupted,
 } from "#runtime/recovery";
 import {
+  ConversationFullError,
   type ExecutionEvent,
   type Session,
   SessionStore,
@@ -946,6 +947,128 @@ test("a call id an earlier run used again is matched within its own run", async 
     expect(closed).toBe(2);
     expect(output(state.messages[5])).toContain("Not run");
     expect(output(state.messages[6])).toContain("Not run");
+  } finally {
+    await cleanup();
+  }
+});
+
+/** Earlier chat of about `bytes` bytes of saved state, in whole user/assistant pairs. */
+function bulk(bytes: number): Message[] {
+  const messages: Message[] = [];
+  let left = bytes - 2;
+  while (left > 140) {
+    const room = Math.min(999_999, Math.floor((left - 80) / 2));
+    messages.push(
+      { role: "user", content: "x".repeat(room) },
+      { role: "assistant", content: "x".repeat(room) },
+    );
+    left -= 2 * room + 80;
+  }
+  return messages;
+}
+
+/** An effectful call that started, after chat taking `chat` bytes of the saved state. */
+async function startedAfter(store: SessionStore, root: string, chat: number) {
+  const created = await store.createSession(root);
+  const session = store.saveStateCAS(created.id, created.workspaceId, 0, [
+    ...bulk(chat),
+    { role: "user", content: "go" },
+    {
+      role: "assistant",
+      content: "",
+      tool_calls: [call("c1", "run_command", { argv: ["make"] })],
+    },
+  ]);
+  const base = execution(session, "e1", "c1", "run_command", 1, "effectful");
+  record(store, base, "requested", "approval_requested", "approved", "started");
+  return { session, base };
+}
+
+const commitBig = (
+  store: SessionStore,
+  session: Session,
+  base: Omit<ExecutionEvent, "type">,
+  size: number,
+) => {
+  const content = JSON.stringify({
+    status: "succeeded",
+    output: "o".repeat(size),
+  });
+  return store.commitOutcome(
+    {
+      ...base,
+      type: "completed",
+      resultSha256: sha256(content),
+      resultReceipt: content,
+    },
+    session.revision,
+    [
+      ...session.messages,
+      { role: "tool", tool_name: "run_command", tool_call_id: "c1", content },
+    ],
+  );
+};
+
+test("a result saved as a note ends its call: a reload finds nothing to close, and the call is not told it never ran", async () => {
+  const { root, store, cleanup } = await fixture();
+  try {
+    const { session, base } = await startedAfter(
+      store,
+      root,
+      8 * 1024 * 1024 - 100_000,
+    );
+    commitBig(store, session, base, 300_000);
+    const loaded = await store.loadSession(
+      session.publicId,
+      session.workspaceId,
+    );
+    const answer = loaded.messages.at(-1);
+    expect(answer?.tool_call_id).toBe("c1");
+    expect(output(answer)).toContain("too large for the session to keep");
+    expect(output(answer)).not.toContain("Not run");
+    expect(settleInterrupted(store, loaded)).toEqual({
+      state: loaded,
+      closed: 0,
+    });
+    expect(sessionProblem(store, loaded)).toBeUndefined();
+    expect(recoveryItems(store, loaded)).toEqual([]);
+  } finally {
+    await cleanup();
+  }
+});
+
+test("a note that does not fit leaves the call started, and /recover lists it", async () => {
+  const { root, store, cleanup } = await fixture();
+  try {
+    const { session, base } = await startedAfter(
+      store,
+      root,
+      8 * 1024 * 1024 - 100,
+    );
+    expect(() => commitBig(store, session, base, 300)).toThrow(
+      ConversationFullError,
+    );
+    const loaded = await store.loadSession(
+      session.publicId,
+      session.workspaceId,
+    );
+    expect(loaded).toEqual(session);
+    expect(settleInterrupted(store, loaded)).toEqual({
+      state: loaded,
+      closed: 0,
+    });
+    expect(sessionProblem(store, loaded)).toBe(
+      "Session has an uncertain tool outcome; inspect recovery before continuing",
+    );
+    expect(recoveryItems(store, loaded)).toEqual([
+      {
+        executionId: "e1",
+        toolName: "run_command",
+        state: "ran",
+        summary: "make",
+        at: expect.any(String),
+      },
+    ]);
   } finally {
     await cleanup();
   }

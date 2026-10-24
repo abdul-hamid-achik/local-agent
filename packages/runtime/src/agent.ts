@@ -14,6 +14,7 @@ import {
   COMPACT_HIGH,
   COMPACT_LOW,
   compactHistory,
+  compactState,
   promptChars,
   windowStart,
 } from "#runtime/compact";
@@ -40,6 +41,7 @@ import { sandboxUnavailable } from "#runtime/sandbox";
 import {
   ConversationFullError,
   type ExecutionEvent,
+  resultThatFits,
   type Session,
   type SessionStore,
 } from "#runtime/session";
@@ -2009,6 +2011,26 @@ async function* agentTurn(
     // only what compaction could not free.
     const room = MAX_REQUEST_MESSAGES - 1 - (nudge ? 1 : 0);
     let start: number | undefined;
+    // The saved state has its own cap (8 MiB of JSON, session.ts): past a
+    // soft budget it is shortened from the start, whatever the window
+    // holds, since a turn that reaches the cap ends and an effect's
+    // result may not fit it. Results come first (images, then tool
+    // output), as with the window.
+    if (options.compact && saved) {
+      const { messages, elided } = compactState(history);
+      if (elided > 0) {
+        const tokensBefore = promptChars(history) / CHARS_PER_TOKEN;
+        history.splice(0, history.length, ...messages);
+        checkpoint();
+        yield {
+          type: "compacted",
+          messages: history.slice(),
+          elided,
+          tokensBefore: Math.round(tokensBefore),
+          tokensAfter: Math.round(promptChars(history) / CHARS_PER_TOKEN),
+        };
+      }
+    }
     if (options.compact) {
       const window = provider.context_size;
       // What the request cannot carry is not shortened: it saves the
@@ -2778,21 +2800,23 @@ async function* agentTurn(
       if (images.length) message.images = images.splice(0);
       return { status, output, message, uncertain };
     };
+    const endedAs = (oc: CallOutcome): ExecutionEvent["type"] =>
+      oc.uncertain
+        ? "outcome_unknown"
+        : oc.status === "succeeded" || oc.status === "unverified"
+          ? "completed"
+          : oc.status === "denied"
+            ? "denied"
+            : signal.aborted
+              ? "cancelled"
+              : "failed";
     const commit = (ctx: CallContext, oc: CallOutcome) => {
       history.push(oc.message);
       if (saved && ctx.execution) {
         saved.state = saved.store.commitOutcome(
           {
             ...ctx.execution,
-            type: oc.uncertain
-              ? "outcome_unknown"
-              : oc.status === "succeeded" || oc.status === "unverified"
-                ? "completed"
-                : oc.status === "denied"
-                  ? "denied"
-                  : signal.aborted
-                    ? "cancelled"
-                    : "failed",
+            type: endedAs(oc),
             resultSha256: createHash("sha256")
               .update(oc.message.content)
               .digest("hex"),
@@ -2801,6 +2825,15 @@ async function* agentTurn(
           saved.state.revision,
           history,
         );
+        // A result the state could not hold is saved as a note (the
+        // model's answer to its call), and the turn goes on with that: the
+        // call ran, the history is whole, and the model can ask for less.
+        // What the client was shown must be what is saved.
+        const kept = saved.state.messages.at(-1);
+        if (kept && kept.content !== oc.message.content) {
+          history[history.length - 1] = kept;
+          oc.message = kept;
+        }
       }
     };
     function* emitOutcome(
@@ -2896,6 +2929,7 @@ async function* agentTurn(
       // out in call order, as history and the session hold them, so a
       // client that builds its history from messages keeps the same one.
       let nextMessage = 0;
+      const shownSoFar: Message[] = [];
       try {
         while (remaining > 0 || completedIndices.length) {
           while (!completedIndices.length && remaining > 0) {
@@ -2915,7 +2949,18 @@ async function* agentTurn(
             };
           }
           while (nextMessage < contexts.length && outcomes[nextMessage]) {
-            yield { type: "message", message: outcomes[nextMessage]!.message };
+            const oc = outcomes[nextMessage]!;
+            // What commit will save: a result the state cannot hold goes
+            // out as its note, as it will be in the history.
+            const shown = saved
+              ? resultThatFits(
+                  [...history, ...shownSoFar],
+                  oc.message,
+                  endedAs(oc),
+                )
+              : oc.message;
+            shownSoFar.push(shown);
+            yield { type: "message", message: shown };
             nextMessage++;
           }
         }

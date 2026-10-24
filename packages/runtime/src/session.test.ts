@@ -6,7 +6,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, test } from "vitest";
-import { type ExecutionEvent, SessionStore, sha256 } from "./session";
+import {
+  ConversationFullError,
+  type ExecutionEvent,
+  MAX_STATE_BYTES,
+  type SessionMessage,
+  SessionStore,
+  sha256,
+} from "./session";
 
 async function fixture() {
   const root = await mkdtemp(join(tmpdir(), "local-agent-session-"));
@@ -365,6 +372,208 @@ test("a terminal event is written only with a history that answers its call", as
   expect(store.listHazards(session.id, session.workspaceId)).toHaveLength(1);
   expect(store.recover({ ...change, messages: [answer] }).revision).toBe(1);
   expect(store.listHazards(session.id, session.workspaceId)).toHaveLength(0);
+  store.close();
+});
+
+/** Earlier chat of about `bytes` bytes of saved state, as user and assistant messages. */
+function bulk(bytes: number): SessionMessage[] {
+  const messages: SessionMessage[] = [];
+  // `{"role":"user","content":""},` is 30 bytes; "assistant" is 5 more.
+  let left = bytes - 2;
+  while (left > 40) {
+    const room = Math.min(999_999, left - 40);
+    messages.push({
+      role: messages.length % 2 === 0 ? "user" : "assistant",
+      content: "x".repeat(room),
+    });
+    left -= room + 40;
+  }
+  return messages;
+}
+
+const stateOf = (messages: SessionMessage[]) =>
+  Buffer.byteLength(JSON.stringify(messages), "utf8");
+
+const ledgerRows = (db: string) => {
+  const raw = new Database(db, { readonly: true });
+  try {
+    return raw
+      .query<
+        {
+          event_type: string;
+          result_receipt: string;
+          result_sha256: string;
+          detail: string;
+        },
+        []
+      >(
+        "SELECT event_type, result_receipt, result_sha256, detail FROM execution_events ORDER BY id",
+      )
+      .all();
+  } finally {
+    raw.close();
+  }
+};
+
+test("commitOutcome saves a short note in place of a result the state cannot hold, with its terminal event", async () => {
+  const { db, workspace } = await fixture();
+  const store = await SessionStore.open(db);
+  const session = await store.createSession(workspace);
+  store.appendEvent(event(session.id, session.workspaceId, "requested"));
+  store.appendEvent(event(session.id, session.workspaceId, "started"));
+  const earlier = bulk(MAX_STATE_BYTES - 200_000);
+  const content = JSON.stringify({
+    status: "unverified",
+    output: "y".repeat(400_000),
+  });
+  const history: SessionMessage[] = [
+    ...earlier,
+    { role: "tool", tool_name: "read", tool_call_id: "call-1", content },
+  ];
+  expect(stateOf(history)).toBeGreaterThan(MAX_STATE_BYTES);
+  const saved = store.commitOutcome(
+    {
+      ...event(session.id, session.workspaceId, "completed"),
+      resultSha256: sha256(content),
+      resultReceipt: content,
+    },
+    session.revision,
+    history,
+  );
+  // The call has its answer, and the answer is the note.
+  expect(saved.revision).toBe(session.revision + 1);
+  expect(saved.messages).toHaveLength(history.length);
+  const note = saved.messages.at(-1);
+  expect(note).toMatchObject({
+    role: "tool",
+    tool_name: "read",
+    tool_call_id: "call-1",
+  });
+  const parsed = JSON.parse(note?.content ?? "{}") as {
+    status: string;
+    output: string;
+  };
+  expect(parsed.status).toBe("unverified");
+  expect(parsed.output).toContain("too large for the session to keep");
+  expect(parsed.output).toContain("(391 KiB)");
+  expect(parsed.output).toContain("Ask for less");
+  expect(parsed.output).not.toContain("yyyy");
+  expect(saved.messages.slice(0, -1)).toEqual(earlier);
+  // The ledger ends the call with the full receipt, and no hazard is left.
+  expect(store.listHazards(session.id, session.workspaceId)).toHaveLength(0);
+  const rows = ledgerRows(db);
+  expect(rows.map((row) => row.event_type)).toEqual([
+    "requested",
+    "started",
+    "completed",
+  ]);
+  expect(rows[2]).toMatchObject({
+    result_receipt: content,
+    result_sha256: sha256(content),
+    detail: expect.stringContaining("too large"),
+  });
+  store.close();
+});
+
+test("an overflowing commit still rolls its event back when the revision is stale", async () => {
+  const { db, workspace } = await fixture();
+  const store = await SessionStore.open(db);
+  const session = await store.createSession(workspace);
+  store.appendEvent(event(session.id, session.workspaceId, "requested"));
+  store.appendEvent(event(session.id, session.workspaceId, "started"));
+  const history: SessionMessage[] = [
+    ...bulk(MAX_STATE_BYTES - 200_000),
+    {
+      role: "tool",
+      tool_name: "read",
+      tool_call_id: "call-1",
+      content: "z".repeat(400_000),
+    },
+  ];
+  expect(stateOf(history)).toBeGreaterThan(MAX_STATE_BYTES);
+  expect(() =>
+    store.commitOutcome(
+      event(session.id, session.workspaceId, "completed"),
+      session.revision + 1,
+      history,
+    ),
+  ).toThrow("revision conflict");
+  // Neither the event nor the note: the call is as it was.
+  expect(ledgerRows(db).map((row) => row.event_type)).toEqual([
+    "requested",
+    "started",
+  ]);
+  expect(store.listHazards(session.id, session.workspaceId)).toHaveLength(1);
+  const loaded = await store.loadSession(session.publicId, workspace);
+  expect(loaded.revision).toBe(session.revision);
+  expect(loaded.messages).toEqual([]);
+  store.close();
+});
+
+test("a note that does not fit either writes nothing, and the call stays started", async () => {
+  const { db, workspace } = await fixture();
+  const store = await SessionStore.open(db);
+  const session = await store.createSession(workspace);
+  store.appendEvent(event(session.id, session.workspaceId, "requested"));
+  store.appendEvent(event(session.id, session.workspaceId, "started"));
+  const earlier = bulk(MAX_STATE_BYTES - 100);
+  // Room for a few dozen bytes: not for the result, nor for its note.
+  expect(stateOf(earlier)).toBeLessThanOrEqual(MAX_STATE_BYTES - 40);
+  const history: SessionMessage[] = [
+    ...earlier,
+    {
+      role: "tool",
+      tool_name: "read",
+      tool_call_id: "call-1",
+      content: "s".repeat(300),
+    },
+  ];
+  expect(stateOf(history)).toBeGreaterThan(MAX_STATE_BYTES);
+  expect(() =>
+    store.commitOutcome(
+      event(session.id, session.workspaceId, "completed"),
+      session.revision,
+      history,
+    ),
+  ).toThrow(ConversationFullError);
+  expect(ledgerRows(db).map((row) => row.event_type)).toEqual([
+    "requested",
+    "started",
+  ]);
+  // Still a hazard to recover: its outcome is recorded nowhere.
+  expect(store.listHazards(session.id, session.workspaceId)).toHaveLength(1);
+  const loaded = await store.loadSession(session.publicId, workspace);
+  expect(loaded.messages).toEqual([]);
+  store.close();
+});
+
+test("a receipt past the ledger's bound is replaced by the note there, its hash still of the whole", async () => {
+  const { db, workspace } = await fixture();
+  const store = await SessionStore.open(db);
+  const session = await store.createSession(workspace);
+  store.appendEvent(event(session.id, session.workspaceId, "requested"));
+  store.appendEvent(event(session.id, session.workspaceId, "started"));
+  const receipt = "r".repeat(1_000_001);
+  const saved = store.commitOutcome(
+    {
+      ...event(session.id, session.workspaceId, "completed"),
+      resultSha256: sha256(receipt),
+      resultReceipt: receipt,
+    },
+    session.revision,
+    [
+      ...bulk(MAX_STATE_BYTES - 100_000),
+      {
+        role: "tool",
+        tool_name: "read",
+        tool_call_id: "call-1",
+        content: "q".repeat(200_000),
+      },
+    ],
+  );
+  const stored = ledgerRows(db).at(-1);
+  expect(stored?.result_sha256).toBe(sha256(receipt));
+  expect(stored?.result_receipt).toBe(saved.messages.at(-1)?.content);
   store.close();
 });
 

@@ -8,7 +8,10 @@ import { type Message, MessageSchema } from "#runtime/index";
 import { tryLockFile } from "#runtime/workspace_native";
 
 const SCHEMA_VERSION = 3;
-const MAX_STATE_BYTES = 8 * 1024 * 1024;
+/** The most a session's saved state may hold, as UTF-8 JSON. */
+export const MAX_STATE_BYTES = 8 * 1024 * 1024;
+/** The longest result receipt the ledger takes, in characters (EventSchema). */
+const MAX_RECEIPT_CHARS = 1_000_000;
 /** How long a write waits for another process's lock before SQLITE_BUSY. */
 const BUSY_TIMEOUT_MS = 5000;
 const EVENT_TYPES = [
@@ -390,6 +393,19 @@ export class SessionStore {
       .immediate();
   }
 
+  /**
+   * Ends an execution and saves its result in one transaction: the
+   * terminal event and the history (`messages`, whose last message is the
+   * result) land together or not at all. Recovery relies on it
+   * (planSettlement): an execution's end is never in the ledger without
+   * its answer in the history, so a call with no open record never ran.
+   *
+   * A result the state cannot hold (the history would pass 8 MiB) is saved
+   * as a short note in its place (`shortenedResult`), with the event, and
+   * the returned session holds the note. The ledger keeps the full
+   * receipt. Only when the note does not fit either is nothing written and
+   * ConversationFullError thrown: the call stays `started`, to recover.
+   */
   commitOutcome(
     event: ExecutionEvent,
     expectedRevision: number,
@@ -398,10 +414,39 @@ export class SessionStore {
     if (!isTerminal(event.type))
       throw new Error("commitOutcome requires a terminal event");
     answers([event], messages);
-    const encoded = encodeMessages(messages);
+    let ended = event;
+    let encoded: string;
+    try {
+      encoded = encodeMessages(messages);
+    } catch (error) {
+      const result = messages.at(-1);
+      if (!(error instanceof ConversationFullError) || result?.role !== "tool")
+        throw error;
+      const note = shortenedResult(result, event.type);
+      try {
+        encoded = encodeMessages([...messages.slice(0, -1), note]);
+      } catch (noteError) {
+        // Not even the note: the first error stands, and nothing is written.
+        if (noteError instanceof ConversationFullError) throw error;
+        throw noteError;
+      }
+      ended = {
+        ...event,
+        // The receipt is what the tool returned, as far as the ledger can
+        // hold it; past that the note stands for it.
+        resultReceipt:
+          (event.resultReceipt ?? "").length <= MAX_RECEIPT_CHARS
+            ? (event.resultReceipt ?? "")
+            : note.content,
+        detail: [event.detail, "result too large for the session to keep"]
+          .filter(Boolean)
+          .join("; ")
+          .slice(0, 4096),
+      };
+    }
     return this.db
       .transaction(() => {
-        this.appendEventUnsafe(event);
+        this.appendEventUnsafe(ended);
         return this.saveStateUnsafe(
           event.sessionId,
           event.workspaceId,
@@ -776,6 +821,72 @@ function encodeMessages(messages: SessionMessage[]): string {
     );
   return encoded;
 }
+/** A result's size in the units a person reads. */
+function sizeNote(bytes: number): string {
+  return bytes >= 1024 * 1024
+    ? `${(bytes / (1024 * 1024)).toFixed(1)} MiB`
+    : `${Math.max(1, Math.round(bytes / 1024))} KiB`;
+}
+
+/**
+ * The tool result `result` as a note the state can hold in its place: the
+ * same call identity and status, what happened (too large to keep, and how
+ * large) and what to do (ask for less). The model reads it as the answer
+ * to its call.
+ */
+export function shortenedResult(
+  result: SessionMessage,
+  endedAs: EventType,
+): SessionMessage {
+  let status =
+    endedAs === "completed"
+      ? "succeeded"
+      : endedAs === "outcome_unknown" || endedAs === "denied"
+        ? endedAs
+        : "failed";
+  try {
+    const parsed = JSON.parse(result.content) as { status?: unknown };
+    if (typeof parsed.status === "string" && parsed.status.length <= 32)
+      status = parsed.status;
+  } catch {
+    // Not the runtime's receipt: the event says how it ended.
+  }
+  const bytes = Buffer.byteLength(
+    JSON.stringify({ content: result.content, images: result.images }),
+    "utf8",
+  );
+  return {
+    role: "tool",
+    ...(result.tool_name !== undefined ? { tool_name: result.tool_name } : {}),
+    ...(result.tool_call_id !== undefined
+      ? { tool_call_id: result.tool_call_id }
+      : {}),
+    content: JSON.stringify({
+      status,
+      output: `The output (${sizeNote(bytes)}) was too large for the session to keep, so it is not in this conversation; the status above stands. Ask for less, for example a narrower read or a filter.`,
+    }),
+  };
+}
+/**
+ * What commitOutcome would save for `result` after `history`: the result
+ * itself, its note when the state cannot hold it, and the result again
+ * when not even the note fits (then commitOutcome throws). For a caller
+ * that must show the result before it commits.
+ */
+export function resultThatFits(
+  history: readonly SessionMessage[],
+  result: SessionMessage,
+  endedAs: EventType,
+): SessionMessage {
+  for (const candidate of [result, shortenedResult(result, endedAs)])
+    try {
+      encodeMessages([...history, candidate]);
+      return candidate;
+    } catch (error) {
+      if (!(error instanceof ConversationFullError)) throw error;
+    }
+  return result;
+}
 function decodeMessages(encoded: string): SessionMessage[] {
   if (Buffer.byteLength(encoded, "utf8") > MAX_STATE_BYTES)
     throw new Error("session state exceeds 8 MiB");
@@ -806,7 +917,7 @@ const EventSchema = z.strictObject({
     .string()
     .regex(/^[0-9a-f]{64}$/)
     .optional(),
-  resultReceipt: z.string().max(1_000_000).optional(),
+  resultReceipt: z.string().max(MAX_RECEIPT_CHARS).optional(),
   detail: z.string().max(4096).optional(),
 });
 function validateEvent(event: ExecutionEvent): void {
