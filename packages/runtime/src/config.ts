@@ -138,8 +138,12 @@ const checkOpenAIKeyTransport = (
     ctx.addIssue({
       code: "custom",
       path: ["base_url"],
-      message:
-        "api_key would be sent in cleartext over http to a non-loopback host; use an https base URL or drop the api_key",
+      // A rooted name that is loopback without its dot: say the fix too.
+      message: `api_key would be sent in cleartext over http to a non-loopback host; ${
+        url.hostname.endsWith(".") && isLoopbackHost(url.hostname.slice(0, -1))
+          ? "write the host without its trailing dot, use"
+          : "use"
+      } an https base URL or drop the api_key`,
     });
 };
 

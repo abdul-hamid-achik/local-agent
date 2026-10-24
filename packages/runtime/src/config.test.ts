@@ -325,6 +325,29 @@ describe("openai_local provider configuration", () => {
     ).toThrow(/use an https base URL or drop the api_key/);
   });
 
+  // The URL parser folds 127.0.0.1. itself; localhost. it keeps.
+  test.each(["http://localhost./v1", "http://LOCALHOST./v1"])(
+    "says how to fix a rooted loopback name: %s",
+    (url) => {
+      expect(() =>
+        resolveProvider({
+          ...local(url, { api_key: "k" }),
+          LOCAL_AGENT_LOCAL_ONLY: "false",
+        }),
+      ).toThrow(
+        "write the host without its trailing dot, use an https base URL or drop the api_key",
+      );
+      // Only a name that is loopback without its dot gets the hint.
+      for (const other of ["http://evil.com./v1", "http://localhosts/v1"])
+        expect(() =>
+          resolveProvider({
+            ...local(other, { api_key: "k" }),
+            LOCAL_AGENT_LOCAL_ONLY: "false",
+          }),
+        ).toThrow(/^(?![\s\S]*trailing dot)[\s\S]*use an https base URL/);
+    },
+  );
+
   test("a userinfo trick is refused whatever the key", () => {
     expect(() =>
       resolveProvider({
