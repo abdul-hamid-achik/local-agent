@@ -167,6 +167,31 @@ test("a tool that never reads its stdin is killed when the time is up, even for 
   expect(Date.now() - started).toBeLessThan(5000);
 });
 
+test("a timed-out tool that ignores SIGTERM does not outlive the copy", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "clip-kill-"));
+  const pidFile = join(dir, "pid");
+  // An ignored signal stays ignored across exec: `sleep` is the tool, deaf
+  // to SIGTERM.
+  const result = await spawnTool(
+    ["sh", "-c", `trap '' TERM; echo $$ > ${pidFile}; exec sleep 30`],
+    "x",
+    { PATH: process.env.PATH ?? "/usr/bin:/bin" },
+    300,
+  );
+  expect(result).toEqual({ kind: "timeout" });
+  const pid = Number(await Bun.file(pidFile).text());
+  const alive = () => {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  for (let wait = 0; wait < 50 && alive(); wait++) await Bun.sleep(20);
+  expect(alive()).toBe(false);
+});
+
 test("the tool gets exactly the environment it was given, not the process's", async () => {
   // `env -i` prints nothing of ours: the spawned program has only `env`.
   const dir = mkdtempSync(join(tmpdir(), "clip-env-"));
@@ -227,6 +252,21 @@ test("the environment of a tool: the session's display and locale, never the res
     PATH: "/bin",
     LC_ALL: "C.UTF-8",
   });
+  // A locale that is not UTF-8 keeps its messages; the text's encoding wins.
+  expect(clipboardEnv({ PATH: "/bin", LANG: "C" }, "darwin")).toEqual({
+    PATH: "/bin",
+    LANG: "C",
+    LC_CTYPE: "en_US.UTF-8",
+  });
+  expect(
+    clipboardEnv(
+      { PATH: "/bin", LANG: "de_DE.UTF-8", LC_ALL: "POSIX" },
+      "darwin",
+    ),
+  ).toEqual({ PATH: "/bin", LANG: "de_DE.UTF-8", LC_CTYPE: "en_US.UTF-8" });
+  expect(
+    clipboardEnv({ PATH: "/bin", LC_CTYPE: "ja_JP.eucJP" }, "linux"),
+  ).toEqual({ PATH: "/bin", LC_CTYPE: "en_US.UTF-8" });
 });
 
 test("copyToClipboard hands the tool the minimal environment and the resolved path", async () => {

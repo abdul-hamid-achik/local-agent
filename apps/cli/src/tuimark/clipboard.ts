@@ -93,7 +93,8 @@ export async function spawnTool(
   try {
     const outcome = await Promise.race([run, timeout]);
     if (outcome === "timeout") {
-      proc.kill();
+      // A hung tool may ignore SIGTERM, and would outlive the client.
+      proc.kill("SIGKILL");
       // The feed may still be blocked on the pipe; the kill ends it.
       run.catch(() => {});
       return { kind: "timeout" };
@@ -119,6 +120,8 @@ export type CopyResult =
 
 // ------------------------------------------------------------- the environment
 
+const UTF8_LOCALE = "en_US.UTF-8";
+
 /** What a clipboard tool needs of the environment; nothing else is passed on. */
 const ENV_KEEP = [
   "PATH",
@@ -136,8 +139,9 @@ const ENV_KEEP = [
 /**
  * The environment a clipboard tool runs with: the few variables it needs
  * (the session's display, its locale), never the rest of the process's, which
- * holds provider keys. pbcopy picks its encoding from the locale, so with no
- * LANG or LC_* at all it gets a UTF-8 one.
+ * holds provider keys. pbcopy decodes its input by the locale, and the text
+ * is UTF-8: with no locale it gets a UTF-8 one, and with one that is not
+ * UTF-8 (LANG=C, LC_ALL=POSIX) its character type becomes UTF-8.
  */
 export function clipboardEnv(
   source: Record<string, string | undefined>,
@@ -150,7 +154,13 @@ export function clipboardEnv(
     const value = source[name];
     if (value !== undefined && value !== "") env[name] = value;
   }
-  if (!env.LANG && !env.LC_ALL && !env.LC_CTYPE) env.LANG = "en_US.UTF-8";
+  const ctype = env.LC_ALL || env.LC_CTYPE || env.LANG;
+  if (!ctype) env.LANG = UTF8_LOCALE;
+  else if (!/utf-?8/i.test(ctype)) {
+    // LC_ALL wins over LC_CTYPE.
+    delete env.LC_ALL;
+    env.LC_CTYPE = UTF8_LOCALE;
+  }
   return env;
 }
 

@@ -3051,13 +3051,14 @@ export class TuimarkClient {
       await status(NO_CODE_STATUS);
       return;
     }
+    // While a turn runs the reply being written is not in the history yet:
+    // what is copied is the last one that finished, and the status says so.
+    // Taken with the text: the turn may end while the tool runs.
+    const running = this.busy;
     const copied: CopyResult = (await this.options.copy?.(text)) ?? {
       ok: false,
       reason: "none",
     };
-    // While a turn runs the reply being written is not in the history yet:
-    // what is copied is the last one that finished, and the status says so.
-    const running = this.busy;
     const label =
       what === "reply"
         ? running

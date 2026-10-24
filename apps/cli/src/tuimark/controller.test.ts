@@ -6356,6 +6356,41 @@ test("/copy is not refused while a turn runs: it copies the last finished reply"
   await client.idle();
 });
 
+test("a turn that ends while the tool runs does not make the copy the newest reply", async () => {
+  let release: () => void = () => {};
+  const gate = new Promise<void>((r) => {
+    release = r;
+  });
+  const copied: string[] = [];
+  const { ui, client } = setup(
+    seededThen(
+      "the earlier answer",
+      quiet(async () => {
+        await gate;
+      }),
+    ),
+    {
+      // The turn ends while the copy is on its way.
+      copy: async (text) => {
+        copied.push(text);
+        release();
+        for (let wait = 0; wait < 100 && isBusy(ui); wait++) await Bun.sleep(5);
+        return { ok: true, tool: "slowclip" };
+      },
+    },
+  );
+  await ui.fire("send", "seed");
+  await client.idle();
+  await ui.fire("send", "go");
+  await ui.fire("copy_reply");
+  await client.idle();
+  expect(isBusy(ui)).toBe(false);
+  expect(copied).toEqual(["the earlier answer"]);
+  expect(store(ui).status).toBe(
+    "Copied the last finished reply (18 chars) with slowclip; the one being written is not done yet",
+  );
+});
+
 // -------------------------------------------------------- the selection hint
 
 test("the welcome and the help name the modifier of the terminal, from TERM_PROGRAM", () => {
