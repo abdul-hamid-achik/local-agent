@@ -4873,6 +4873,70 @@ test("sandbox: a sandbox that stops being available makes the next command ask, 
   expect(decisions).toEqual(["sandbox", false]);
 });
 
+test("a command that names a secret path always gets its card: no allow rule, grant or sandbox spares it, and the card says why", async () => {
+  const root = await mkdtemp(join(tmpdir(), "la-secret-"));
+  await writeRules(root, [
+    { effect: "allow", tool: "run_command", pattern: "cat *" },
+  ]);
+  await trustRules(root);
+  const secret = {
+    ...commandProposal(["cat", ".env"]),
+    secretPaths: [".env"],
+  } as ApprovalRequest;
+  const { ui, client } = setup(
+    turnsAsking([
+      [commandProposal(["cat", "README.md"]), secret],
+      [commandProposal(["cat", "README.md"]), secret],
+    ]),
+    {
+      workspace: { root } as Workspace,
+      sandboxUnavailable: () => undefined,
+    },
+  );
+  // No sandbox: the allow rule runs the plain one; the secret one asks.
+  await ui.fire("send", "one");
+  await untilApproval(ui);
+  expect(store(ui).approval.body).toContain(
+    "names a path the workspace treats as secret: .env",
+  );
+  expect(
+    store(ui)
+      .approval.lines.map((line) => line.t)
+      .join("\n"),
+  ).toContain("names a path the workspace treats as secret: .env");
+  await ui.fire("dialog_session");
+  await client.idle();
+  expect(decisions).toEqual([true, true]);
+  // The session grant just made does not spare the next card either, and
+  // with the sandbox on neither does the sandbox.
+  await ui.fire("send", "/sandbox on");
+  await ui.fire("send", "two");
+  await untilApproval(ui);
+  expect(store(ui).approval.body).toContain("treats as secret");
+  await ui.fire("dialog_cancel");
+  await client.idle();
+  expect(decisions).toEqual([true, true, "sandbox", false]);
+});
+
+test("a session grant for a command never covers a later one that names a secret path", async () => {
+  const secret = {
+    ...commandProposal(["cat", ".env"]),
+    secretPaths: [".env"],
+  } as ApprovalRequest;
+  const { ui, client } = setup(turnsAsking([[secret], [secret]]), {
+    workspace: { root: "/w" } as Workspace,
+  });
+  await ui.fire("send", "one");
+  await untilApproval(ui);
+  await ui.fire("dialog_session");
+  await client.idle();
+  await ui.fire("send", "two");
+  await untilApproval(ui);
+  await ui.fire("dialog_cancel");
+  await client.idle();
+  expect(decisions).toEqual([true, false]);
+});
+
 // ------------------------------------------------------------------ the goal loop
 
 /** One script per turn, in order; past the last, a plain reply. */

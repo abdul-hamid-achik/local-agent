@@ -263,6 +263,9 @@ async function handleAgentStart(id: number, params: unknown): Promise<void> {
               argv: [...proposal.argv],
               timeout_ms: proposal.timeoutMs,
               cwd: proposal.cwd,
+              ...(proposal.secretPaths?.length
+                ? { secret_paths: [...proposal.secretPaths] }
+                : {}),
             },
           });
         } else {

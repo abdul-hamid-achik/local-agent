@@ -24,6 +24,22 @@ test("a command approval is one command line, then where, how long, and with wha
   );
 });
 
+test("a command that names a secret path says so under the command line", () => {
+  const command = {
+    kind: "command" as const,
+    argv: ["cat", ".env"] as const,
+    cwd: "/w",
+    timeoutMs: 1000,
+    secretPaths: [".env", "~/my keys/id_rsa"],
+  };
+  expect(approvalPreview(command, "/w")).toBe(
+    "$ cat .env\nin the workspace · timeout 1s · runs with your permissions\nnames a path the workspace treats as secret: .env, '~/my keys/id_rsa'",
+  );
+  expect(approvalPreview({ ...command, secretPaths: [] }, "/w")).not.toContain(
+    "secret",
+  );
+});
+
 test("tokensPerSecond needs both of Ollama's counters", () => {
   expect(tokensPerSecond(30, 1_000_000_000)).toBe("30 tok/s");
   expect(tokensPerSecond(5, 1_000_000_000)).toBe("5.0 tok/s");

@@ -34,8 +34,15 @@ export function approvalPreview(
       `${proposal.inner && proposal.gateway ? `${proposal.inner} via ${proposal.gateway}` : proposal.name}\n${proposal.argumentsJson}\nMCP effects are not verified by transport success.`,
     );
   return terminalText(
-    `$ ${proposal.argv.map(shellQuote).join(" ")}\nin ${commandWhere(proposal.cwd, root)} · timeout ${proposal.timeoutMs / 1000}s · runs with your permissions`,
+    `$ ${proposal.argv.map(shellQuote).join(" ")}\nin ${commandWhere(proposal.cwd, root)} · timeout ${proposal.timeoutMs / 1000}s · runs with your permissions${secretNote(proposal)}`,
   );
+}
+
+/** A command's arguments that name a path the file tools refuse, as a line under the command. */
+export function secretNote(proposal: ApprovalRequest): string {
+  return proposal.kind === "command" && proposal.secretPaths?.length
+    ? `\nnames a path the workspace treats as secret: ${proposal.secretPaths.map(shellQuote).join(", ")}`
+    : "";
 }
 
 /** "31 tok/s" from Ollama's counters, or undefined when it reported none. */

@@ -2886,11 +2886,16 @@ export class TuimarkClient {
     // a card. An allow rule or a session grant only spares the card: run
     // outside, it could run what a sandboxed command wrote in the
     // workspace. An ask rule still shows the card.
+    // A command that names a path the file tools refuse always gets its
+    // card, which says so: no allow rule, grant or sandbox spares it.
+    const secret =
+      proposal.kind === "command" && !!proposal.secretPaths?.length;
     let sandboxLost = false;
     if (
       this.sandbox &&
       proposal.kind === "command" &&
       this.intent === "build" &&
+      !secret &&
       !(verdict.effect === "ask" && verdict.rule)
     ) {
       const why = this.sandboxProblem();
@@ -2911,7 +2916,7 @@ export class TuimarkClient {
         },
       ]);
     }
-    if (verdict.effect === "allow" && !sandboxLost) {
+    if (verdict.effect === "allow" && !sandboxLost && !secret) {
       this.noteActivity(oneLine(`allowed by rule: ${verdict.rule?.pattern}`));
       return true;
     }
@@ -2922,6 +2927,7 @@ export class TuimarkClient {
     const grantedLabel =
       this.intent === "build" &&
       !sandboxLost &&
+      !secret &&
       !(this.sandbox && proposal.kind === "command")
         ? [...this.grants.entries()].find(([key, remembered]) =>
             grantCovers({ key, ...remembered }, proposal),

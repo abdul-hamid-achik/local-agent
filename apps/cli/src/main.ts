@@ -23,6 +23,7 @@ import {
   workspaceRules,
 } from "@local-agent/runtime";
 import { terminalText } from "@local-agent/vue-tui/text";
+import { secretNote } from "#cli/preview";
 import { recoverCommand } from "#cli/recover";
 import { terminalTrustIO, trustRulesCommand } from "#cli/trust-rules";
 import { interactiveClient, parseUi } from "#cli/ui-flag";
@@ -522,14 +523,24 @@ A resumed session first closes the calls it was interrupted before running.`);
                 compact: true,
                 approve: async (proposal) => {
                   const verdict = await fileRules.verdict(proposal);
+                  // A command that names a path the file tools refuse (an
+                  // allow rule has already been turned into an ask) is said
+                  // on stderr, run or not: there is no card to show it on.
+                  const secret = secretNote(proposal);
+                  if (secret)
+                    process.stderr.write(
+                      `${terminalText(`${proposal.kind === "command" ? proposal.argv.join(" ") : ""}${secret}`)}\n`,
+                    );
                   // --sandbox-commands: no command runs outside the sandbox.
                   // A deny rule refuses; an ask rule wants a person, and
-                  // unattended there is none; an allow rule runs confined
-                  // too, since outside it could run what a sandboxed
-                  // command wrote in the workspace.
+                  // unattended there is none, nor for a secret path, which
+                  // the sandbox can read; an allow rule runs confined too,
+                  // since outside it could run what a sandboxed command
+                  // wrote in the workspace.
                   if (proposal.kind === "command" && values["sandbox-commands"])
                     return verdict.effect === "deny" ||
-                      (verdict.effect === "ask" && verdict.rule)
+                      (verdict.effect === "ask" && verdict.rule) ||
+                      secret
                       ? false
                       : "sandbox";
                   if (verdict.effect !== "ask")

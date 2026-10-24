@@ -324,6 +324,41 @@ test("parseArgv keeps an array as it is and also reads a JSON array sent as a st
   expect(parseArgv("ls -la")).toEqual(["ls", "-la"]);
 });
 
+test("a command whose arguments name a secret path is flagged on its proposal, and still runs", async () => {
+  const root = await temp();
+  const flagged = await createCommandProposal(
+    [
+      process.execPath,
+      "-e",
+      "process.stdout.write(process.argv[1] ?? '')",
+      ".env",
+      "--env-file=config/.env.production",
+      ".env",
+    ],
+    root,
+    2000,
+  );
+  expect(flagged.secretPaths).toEqual([".env", "config/.env.production"]);
+  expect(Object.isFrozen(flagged.secretPaths)).toBe(true);
+  // Flagged is not refused: the host decides, and shows the note.
+  const result = await executeApprovedCommand(
+    flagged,
+    new AbortController().signal,
+  );
+  expect(result.exitCode).toBe(0);
+  expect(result.output).toBe(".env");
+  for (const argv of [
+    ["cat", "README.md"],
+    ["cat", ".env.example"],
+    ["curl", "https://example.com/.env"],
+    ["grep", "-rn", "slugify", "src"],
+  ]) {
+    const plain = await createCommandProposal(argv, root, 2000);
+    expect(plain.secretPaths, argv.join(" ")).toBeUndefined();
+    expect("secretPaths" in plain).toBe(false);
+  }
+});
+
 function alive(pid: number): boolean {
   try {
     process.kill(pid, 0);

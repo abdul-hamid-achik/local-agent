@@ -11,7 +11,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, test, vi } from "vitest";
-import { changeLines, Workspace } from "#runtime/workspace";
+import { changeLines, secretPathIn, Workspace } from "#runtime/workspace";
 
 const roots: string[] = [];
 const workspaces: Workspace[] = [];
@@ -227,6 +227,44 @@ test("well-known credential files are excluded by name, not ordinary source that
     await writeFile(join(root, name), "fine");
     expect(await workspace.read(name), name).toBe("fine");
   }
+});
+
+test("secretPathIn names the arguments the file tools would refuse, by the same rule", () => {
+  for (const [argument, named] of [
+    [".env", ".env"],
+    ["./.env", "./.env"],
+    ["config/.env.production", "config/.env.production"],
+    ["--env-file=.env", ".env"],
+    ["~/.ssh/id_rsa", "~/.ssh/id_rsa"],
+    ["/Users/x/.aws/credentials", "/Users/x/.aws/credentials"],
+    ["deploy.pem", "deploy.pem"],
+    ["infra/terraform.tfstate", "infra/terraform.tfstate"],
+    [".git/config", ".git/config"],
+    ["a/../.NPMRC", "a/../.NPMRC"],
+    [
+      "/home/x/.config/local-agent/trust.json",
+      "/home/x/.config/local-agent/trust.json",
+    ],
+  ] as const)
+    expect(secretPathIn(argument), argument).toBe(named);
+  for (const argument of [
+    "README.md",
+    "src/credentials.ts",
+    ".env.example",
+    "config/.env.template",
+    "--config=tsconfig.json",
+    "-rn",
+    "https://example.com/.env",
+    "http://example.com/credentials",
+    "slugify",
+    ".",
+    "",
+  ])
+    expect(secretPathIn(argument), argument).toBeUndefined();
+  // A template is allowed only as the leaf, exactly as the file tools have it.
+  expect(secretPathIn(".env.example/hidden.txt")).toBe(
+    ".env.example/hidden.txt",
+  );
 });
 
 test("accepts an absolute path under the root and a leading ./, normalized to the relative form", async () => {

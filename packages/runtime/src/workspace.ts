@@ -987,6 +987,28 @@ function isExcludedName(part: string, leaf: boolean): boolean {
   );
 }
 
+/**
+ * The part of a command-line argument that names a path the file tools would
+ * hide, as the argument spells it (`--config=.env` is `.env`), or undefined.
+ * Lexical only: a symlink or a glob that expands to a secret is not seen.
+ */
+export function secretPathIn(argument: string): string | undefined {
+  const equals = argument.indexOf("=");
+  const value =
+    argument.startsWith("-") && equals >= 0
+      ? argument.slice(equals + 1)
+      : argument;
+  // A web address is not a workspace path.
+  if (/^https?:\/\//iu.test(value)) return undefined;
+  const parts = value.split("/").filter((part) => part && part !== ".");
+  const hidden = parts.some(
+    (part, index) =>
+      isExcludedName(part, index === parts.length - 1) ||
+      isUserConfig(parts[index - 1], part),
+  );
+  return hidden ? value : undefined;
+}
+
 /** A workspace at the home directory still cannot reach the user's
  * local-agent config: the permission trust store lives there. */
 function isUserConfig(parent: string | undefined, name: string): boolean {

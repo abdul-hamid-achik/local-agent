@@ -126,7 +126,14 @@ export type AgentStreamEvent =
             after: string;
             diff: string;
           }
-        | { kind: "command"; argv: string[]; timeout_ms: number; cwd: string }
+        | {
+            kind: "command";
+            argv: string[];
+            timeout_ms: number;
+            cwd: string;
+            /** Arguments that name a path the file tools treat as secret. */
+            secret_paths?: string[];
+          }
         | {
             kind: "mcp";
             name: string;

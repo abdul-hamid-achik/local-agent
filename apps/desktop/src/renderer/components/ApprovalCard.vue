@@ -10,6 +10,9 @@
     </div>
     <pre v-if="proposal.kind === 'edit' || proposal.kind === 'write'" class="diff">{{ proposal.diff }}</pre>
     <pre v-if="proposal.kind === 'command'">[{{ proposal.cwd }}]$ {{ argvText }}</pre>
+    <div v-if="proposal.kind === 'command' && proposal.secret_paths?.length" class="dim">
+      names a path the workspace treats as secret: {{ proposal.secret_paths.join(", ") }}
+    </div>
     <pre v-if="proposal.kind === 'mcp'">{{ proposal.argumentsJson }}</pre>
     <div class="row">
       <button class="primary small" :disabled="status !== 'pending'" @click="$emit('decide', true)">

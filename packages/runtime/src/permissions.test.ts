@@ -13,6 +13,7 @@ import {
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "vitest";
+import { createCommandProposal } from "#runtime/command";
 import { userConfigDir } from "#runtime/paths";
 import {
   appendRule,
@@ -26,6 +27,7 @@ import {
   readPermissionFile,
   trustRules,
   trustStorePath,
+  workspaceRules,
 } from "#runtime/permissions";
 
 const edit = (target: string): PermissionRequest => ({ tool: "edit", target });
@@ -466,6 +468,24 @@ test("a repository's allow rules are ignored until trusted; deny and ask always 
   ).toBe("deny");
   // The raw read still sees every rule (for rewriting and listing).
   expect((await readPermissionFile(root)).rules).toEqual(planted);
+});
+
+test("an allow rule does not spare the card of a command that names a secret path", async () => {
+  const root = await tempRoot();
+  await plant(root, [
+    rule("allow", "run_command", "cat *"),
+    rule("deny", "run_command", "rm *"),
+  ]);
+  await trustRules(root);
+  const rules = workspaceRules(root);
+  const verdict = async (argv: string[]) =>
+    (await rules.verdict(await createCommandProposal(argv, root, 1000))).effect;
+  expect(await verdict(["cat", "README.md"])).toBe("allow");
+  // The same rule, but a path the file tools refuse: it asks, never allows.
+  expect(await verdict(["cat", ".env"])).toBe("ask");
+  expect(await verdict(["cat", "/home/x/.ssh/id_rsa"])).toBe("ask");
+  // A deny rule still denies.
+  expect(await verdict(["rm", ".env"])).toBe("deny");
 });
 
 test("'always' trusts only the rule it adds, never the planted ones beside it", async () => {

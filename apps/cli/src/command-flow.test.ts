@@ -279,6 +279,57 @@ test("--sandbox-commands runs every command confined, refuses deny and ask rules
   }
 });
 
+test("headless: a command that names a secret path is flagged on stderr, and no allow rule or sandbox flag lets it through", async () => {
+  const root = await mkdtemp(join(tmpdir(), "local-agent-secret-flow-"));
+  try {
+    await writeFile(join(root, ".env"), "TOKEN=planted");
+    await writeFile(join(root, "notes.txt"), "plain");
+    await Bun.write(
+      join(root, ".local-agent", "permissions.json"),
+      JSON.stringify({
+        version: 1,
+        rules: [
+          { effect: "allow", tool: "run_command", pattern: "/bin/cat *" },
+        ],
+      }),
+    );
+    await trustRules(root);
+    const calls = [
+      { name: "run_command", arguments: { argv: ["/bin/cat", "notes.txt"] } },
+      { name: "run_command", arguments: { argv: ["/bin/cat", ".env"] } },
+    ];
+    const note = "names a path the workspace treats as secret: .env";
+    // The trusted allow rule runs the plain one and says nothing; the
+    // secret one is not waved through, and the flag is the only way in.
+    const rule = await headless(root, calls, []);
+    expect(rule.results.map((result) => result.status)).toEqual([
+      "succeeded",
+      "denied",
+    ]);
+    expect(rule.stderr).toContain(`/bin/cat .env\n${note}`);
+    expect(rule.stderr.match(/names a path/g)).toHaveLength(1);
+    // Pre-approved by the user's flag: it runs, and is not silent.
+    const approved = await headless(root, calls, ["--approve-commands"]);
+    expect(approved.results.map((result) => result.status)).toEqual([
+      "succeeded",
+      "succeeded",
+    ]);
+    expect(approved.stderr).toContain(note);
+    // --sandbox-commands: the sandbox can read the workspace, so the secret
+    // one is refused unattended, not run confined.
+    if (process.platform === "darwin") {
+      const sandboxed = await headless(root, calls, ["--sandbox-commands"]);
+      expect(sandboxed.results.map((result) => result.status)).toEqual([
+        "succeeded",
+        "denied",
+      ]);
+      expect(sandboxed.stderr).toContain(note);
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("--sandbox-commands and --approve-commands cannot be combined", async () => {
   const root = await mkdtemp(join(tmpdir(), "local-agent-sandbox-flags-"));
   try {

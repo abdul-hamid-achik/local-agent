@@ -5,6 +5,7 @@ import {
   sandboxedCommand,
   sandboxUnavailable,
 } from "#runtime/sandbox";
+import { secretPathIn } from "#runtime/workspace";
 
 const MAX_OUTPUT_BYTES = 1 << 20;
 const MAX_TIMEOUT_MS = 2_147_483_647;
@@ -111,6 +112,13 @@ export type ApprovedCommandProposal = Readonly<{
   argv: readonly [string, ...string[]];
   cwd: string;
   timeoutMs: number;
+  /**
+   * Arguments that name a path the workspace file tools treat as secret
+   * (`.env`, `~/.ssh/id_rsa`). Present only when there are some: the host
+   * shows them on the approval, and does not let a rule or the sandbox
+   * approve such a command without that.
+   */
+  secretPaths?: readonly string[];
 }>;
 
 export type CommandResult = Readonly<{
@@ -168,11 +176,15 @@ export async function createCommandProposal(
   const info = await stat(canonicalCwd, { bigint: true });
   if (!info.isDirectory()) throw new Error("Command cwd must be a directory");
 
+  const secretPaths = [
+    ...new Set(argv.flatMap((argument) => secretPathIn(argument) ?? [])),
+  ].slice(0, 8);
   const proposal = Object.freeze({
     kind: "command" as const,
     argv: Object.freeze([...argv]) as readonly [string, ...string[]],
     cwd: canonicalCwd,
     timeoutMs,
+    ...(secretPaths.length ? { secretPaths: Object.freeze(secretPaths) } : {}),
   });
   proposalCwdIdentity.set(proposal, {
     dev: info.dev,

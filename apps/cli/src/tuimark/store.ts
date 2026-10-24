@@ -967,9 +967,16 @@ export function approvalState(
         // With the sandbox on, the card is the one way out of it, and what
         // it runs may be what a sandboxed command wrote.
         body: body(
-          sandboxOn
-            ? "Runs outside the sandbox, as you, exactly as written (no shell). It can run files that sandboxed commands changed."
-            : "Runs exactly as written: there is no shell.",
+          `${
+            sandboxOn
+              ? "Runs outside the sandbox, as you, exactly as written (no shell). It can run files that sandboxed commands changed."
+              : "Runs exactly as written: there is no shell."
+          }${
+            // Said here too: the preview below can be long.
+            proposal.secretPaths?.length
+              ? ` It names a path the workspace treats as secret: ${proposal.secretPaths.map(cleanText).join(", ")}.`
+              : ""
+          }`,
         ),
         danger: true,
       };

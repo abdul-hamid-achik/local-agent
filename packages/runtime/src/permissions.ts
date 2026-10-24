@@ -985,8 +985,16 @@ export function workspaceRules(
     return loaded.rules;
   };
   return {
-    verdict: async (proposal) =>
-      evaluate(await rules(), permissionRequest(proposal)),
+    verdict: async (proposal) => {
+      const verdict = evaluate(await rules(), permissionRequest(proposal));
+      // A command that names a secret path (see ApprovedCommandProposal) is
+      // never waved through by an allow rule: it asks, so its card can say so.
+      return verdict.effect === "allow" &&
+        proposal.kind === "command" &&
+        proposal.secretPaths?.length
+        ? { effect: "ask" }
+        : verdict;
+    },
     deniedRead: async (request) => {
       const verdict = evaluate(await rules(), request);
       return verdict.effect === "deny"
