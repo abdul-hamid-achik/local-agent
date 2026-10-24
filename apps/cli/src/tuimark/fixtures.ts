@@ -504,7 +504,7 @@ export function streamingSample(): Store {
   return store;
 }
 
-/** The model is reasoning: the dim "Thinking…" block shows the last three lines. */
+/** The model is reasoning: the head says "thinking" and the dim box under it shows the last three lines. */
 export function thinkingSample(): Store {
   const { store } = base();
   store.thinking = thinkingView(

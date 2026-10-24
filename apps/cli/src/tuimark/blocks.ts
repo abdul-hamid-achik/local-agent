@@ -1715,7 +1715,7 @@ export const IDLE_LIVE: LiveView = Object.freeze({
 }) as LiveView;
 
 /**
- * The "Thinking…" block under the log while the model reasons before it answers.
+ * The reasoning box under the assistant message head while the model reasons before it answers.
  * `runs` are plain strings the stream appends to; the markup shows the last
  * rows of them in a small scroll that sticks to the bottom.
  */
