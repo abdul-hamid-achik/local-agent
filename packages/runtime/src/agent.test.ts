@@ -254,10 +254,12 @@ test.each(["allow", "deny", "plan", "truncated", "cancel"] as const)(
   },
 );
 
-test("an approved edit of a TypeScript file appends biome diagnostics to the tool result", async () => {
+test("an approved edit of a TypeScript file appends the diagnostics block when opted in", async () => {
   const root = await mkdtemp(join(tmpdir(), "local-agent-diagnostics-"));
   await writeFile(join(root, "greet.ts"), "const before = 1;\n");
-  delete process.env.LOCAL_AGENT_DIAGNOSTICS;
+  // The fixture workspace has no Biome install: the block says so, and
+  // nothing is fetched or run in its place.
+  process.env.LOCAL_AGENT_DIAGNOSTICS = "1";
   let requests = 0;
   const server = Bun.serve({
     hostname: "127.0.0.1",
@@ -323,17 +325,20 @@ test("an approved edit of a TypeScript file appends biome diagnostics to the too
     const result = JSON.parse(content) as { status: string; output: string };
     expect(result.status).toBe("succeeded");
     expect(result.output).toContain("Updated greet.ts");
-    expect(result.output).toContain("--- diagnostics");
+    expect(result.output).toContain(
+      "--- diagnostics unavailable: no @biomejs/biome install in this workspace ---",
+    );
   } finally {
+    delete process.env.LOCAL_AGENT_DIAGNOSTICS;
     await server.stop(true);
     await rm(root, { recursive: true, force: true });
   }
 }, 60_000);
 
-test("LOCAL_AGENT_DIAGNOSTICS=0 suppresses the diagnostics block", async () => {
+test("without LOCAL_AGENT_DIAGNOSTICS=1 an edit carries no diagnostics block", async () => {
   const root = await mkdtemp(join(tmpdir(), "local-agent-diagnostics-off-"));
   await writeFile(join(root, "greet.ts"), "const before = 1;\n");
-  process.env.LOCAL_AGENT_DIAGNOSTICS = "0";
+  delete process.env.LOCAL_AGENT_DIAGNOSTICS;
   let requests = 0;
   const server = Bun.serve({
     hostname: "127.0.0.1",
