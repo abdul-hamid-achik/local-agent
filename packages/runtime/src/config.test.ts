@@ -311,6 +311,7 @@ describe("openai_local provider configuration", () => {
   // The classification is of the host the URL parser resolves, not its spelling.
   test.each([
     "http://localhost.evil.com/v1",
+    "http://localhost./v1",
     "http://127.0.0.1.nip.io/v1",
     "http://0.0.0.0/v1",
     "HTTP://10.0.0.5/v1",
@@ -334,7 +335,6 @@ describe("openai_local provider configuration", () => {
   });
 
   test.each([
-    "http://localhost./v1",
     "http://127.1/v1",
     "http://2130706433/v1",
     "HTTP://127.0.0.1:8080/v1",

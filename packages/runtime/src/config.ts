@@ -108,16 +108,15 @@ const checkOpenAIBaseURL = (value: string, ctx: z.RefinementCtx) => {
     });
 };
 
-/** 127.0.0.0/8, ::1 and localhost, as the URL parser spells them. */
-const isLoopbackHost = (hostname: string) => {
-  // `localhost.` (a rooted name) is localhost.
-  const host = hostname.replace(/\.$/u, "");
-  return (
-    host === "localhost" ||
-    host === "[::1]" ||
-    (isIP(host) === 4 && host.startsWith("127."))
-  );
-};
+/**
+ * 127.0.0.0/8, ::1 and localhost, as the URL parser spells them. `localhost.`
+ * (a rooted name) is not: no resolver is promised to map it to loopback, so a
+ * key to it is refused over http.
+ */
+const isLoopbackHost = (host: string) =>
+  host === "localhost" ||
+  host === "[::1]" ||
+  (isIP(host) === 4 && host.startsWith("127."));
 
 /**
  * An api_key travels as a Bearer header on every request: over plain http it
