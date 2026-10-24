@@ -569,7 +569,7 @@ test("web_search errors mentioning LOCAL_AGENT_SEARXNG_URL when both providers f
   }
 });
 
-test("chat intent offers the research set and configured MCP tools, without todo_write/task/effects", async () => {
+test("chat intent offers the research set, task and configured MCP tools, without todo_write or effects", async () => {
   const run = await session([], "chat", false, fakeBrowserMcp());
   try {
     expect(run.bodies[0]?.tools.map((tool) => tool.function.name)).toEqual([
@@ -579,6 +579,7 @@ test("chat intent offers the research set and configured MCP tools, without todo
       "search",
       "fetch",
       "web_search",
+      "task",
       "browser__browser_navigate",
     ]);
   } finally {

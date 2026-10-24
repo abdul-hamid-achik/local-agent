@@ -41,6 +41,7 @@ async function harness(options: {
   child: (index: number) => Step;
   onChildRequest?: (index: number) => void;
   signal?: AbortSignal;
+  intent?: "plan" | "build" | "chat";
 }) {
   const root = await mkdtemp(join(tmpdir(), "local-agent-task-"));
   await mkdir(join(root, "src"));
@@ -82,6 +83,7 @@ async function harness(options: {
         {
           workspace,
           signal,
+          intent: options.intent,
           approve: async () => false,
         },
       ))
@@ -97,6 +99,7 @@ async function harness(options: {
   );
   return {
     root,
+    events,
     parentBodies,
     childBodies,
     results,
@@ -264,6 +267,91 @@ test("aborting mid-subagent returns the partial result, labeled", async () => {
     );
     // The aborted parent run itself does not finish normally.
     expect(run.runError).toBeInstanceOf(Error);
+  } finally {
+    await run.cleanup();
+  }
+});
+
+test("chat offers task, and two task calls in one reply run as parallel read-only subagents", async () => {
+  const run = await harness({
+    intent: "chat",
+    parent: [
+      {
+        calls: [
+          { name: "task", arguments: { prompt: "Research topic A" } },
+          { name: "task", arguments: { prompt: "Research topic B" } },
+        ],
+      },
+    ],
+    child: () => ({ text: "Found it." }),
+  });
+  try {
+    // Chat is offered task (and the research set, still no todo_write or effects).
+    expect(run.parentBodies[0]?.tools.map((t) => t.function.name)).toEqual([
+      "read",
+      "read_image",
+      "list",
+      "search",
+      "fetch",
+      "web_search",
+      "task",
+    ]);
+    // The model is told what task is for, and that it must report only calls it made.
+    const system = run.parentBodies[0]?.messages[0]?.content ?? "";
+    expect(system).toContain("several task calls in one reply run in parallel");
+    expect(system).toContain("Say only what your tool calls did");
+    // Each child is a fresh read-only turn: no task, no todo_write, no effects.
+    expect(run.childBodies).toHaveLength(2);
+    for (const body of run.childBodies)
+      expect(body.tools.map((tool) => tool.function.name)).toEqual([
+        "read",
+        "read_image",
+        "list",
+        "search",
+        "fetch",
+        "web_search",
+      ]);
+    expect(run.results.map((r) => [r.name, r.status])).toEqual([
+      ["task", "succeeded"],
+      ["task", "succeeded"],
+    ]);
+    // Parallel: both subagents had started before either one reported.
+    const kinds = run.events
+      .filter((e) => e.type === "tool_start" || e.type === "tool_result")
+      .map((e) => e.type);
+    expect(kinds).toEqual([
+      "tool_start",
+      "tool_start",
+      "tool_result",
+      "tool_result",
+    ]);
+  } finally {
+    await run.cleanup();
+  }
+});
+
+test("chat refuses todo_write: only task joined the research set", async () => {
+  const run = await harness({
+    intent: "chat",
+    parent: [
+      {
+        calls: [
+          {
+            name: "todo_write",
+            arguments: { todos: [{ content: "x", status: "pending" }] },
+          },
+        ],
+      },
+    ],
+    child: () => ({ text: "unused" }),
+  });
+  try {
+    expect(run.childBodies).toHaveLength(0);
+    expect(run.results[0]).toMatchObject({
+      name: "todo_write",
+      status: "failed",
+    });
+    expect(run.results[0]?.output).toContain("not available here");
   } finally {
     await run.cleanup();
   }

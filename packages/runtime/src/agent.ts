@@ -1354,9 +1354,11 @@ const SUBAGENT_TOOLS = new Set([
   "web_search",
 ]);
 /** The chat catalog: read-only research only — no run-state (todo_write), no
- * delegation (task), no effects. The subagents' set, plus ask_user (a
- * subagent has no user to ask). */
-const CHAT_TOOLS = new Set([...SUBAGENT_TOOLS, "ask_user"]);
+ * effects. The subagents' set, plus ask_user (a subagent has no user to ask)
+ * and task: its child is a read-only plan-intent turn, so delegating adds no
+ * authority, and several task calls in one reply are how chat researches in
+ * parallel. */
+const CHAT_TOOLS = new Set([...SUBAGENT_TOOLS, "ask_user", "task"]);
 
 export type ApprovalRequest =
   | WorkspaceEditProposal

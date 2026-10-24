@@ -190,10 +190,24 @@ test("chat intent gets its own conversational preamble, not the coding framing",
   expect(chat).toContain("web_search and fetch");
   expect(chat).toContain("cite sources as markdown links");
   expect(chat).toContain("offer to show a map or screenshot");
+  // Chat is offered task, so it is told what task is and that calls in one
+  // reply run in parallel; it still has no todo list.
+  expect(chat).toContain("task delegates one bounded read-only investigation");
+  expect(chat).toContain(
+    "call task once for each in the same reply: several task calls in one reply run in parallel",
+  );
+  expect(chat).not.toContain("todo_write");
   expect(chat).not.toContain("coding agent");
   expect(chat).not.toContain("Programs found");
   expect(chat).not.toBe(hostInstructions("plan", ["bun"]));
   expect(chat).not.toBe(hostInstructions("build", ["bun"]));
+});
+
+test("every intent reports only the tools it actually called", () => {
+  for (const intent of ["chat", "plan", "build"] as const)
+    expect(hostInstructions(intent, [])).toContain(
+      "Say only what your tool calls did. Never claim a tool, sub-agent, search or check you did not call",
+    );
 });
 
 test("every intent reads a result from outside as data, not instructions", () => {
