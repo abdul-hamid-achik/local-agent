@@ -158,6 +158,40 @@ test("the current work stays whole, and a second pass finds nothing", () => {
   expect(again.messages).toEqual(all.messages);
 });
 
+test("the latest todo list stays whole; an older one, and a failed write, are shortened", () => {
+  const todo = (id: string, status: string, items: number): Message[] => [
+    {
+      role: "assistant",
+      content: "",
+      tool_calls: [{ id, function: { name: "todo_write", arguments: {} } }],
+    },
+    {
+      role: "tool",
+      tool_name: "todo_write",
+      tool_call_id: id,
+      content: receipt(
+        status,
+        Array.from({ length: items }, (_, i) =>
+          `- [ ] step ${i} `.padEnd(60, "x"),
+        ).join("\n"),
+      ),
+    },
+  ];
+  const plans: Message[] = [
+    { role: "user", content: "plan it" },
+    ...todo("t1", "succeeded", 30),
+    ...todo("t2", "succeeded", 30),
+    ...todo("t3", "failed", 30),
+    { role: "assistant", content: "planned" },
+    { role: "user", content: "go on" },
+    { role: "assistant", content: "on it" },
+  ];
+  const { messages } = compactHistory(plans, Number.POSITIVE_INFINITY);
+  expect(messages[2]?.content).not.toBe(plans[2]?.content);
+  expect(messages[4]).toEqual(plans[4]);
+  expect(messages[6]?.content).not.toBe(plans[6]?.content);
+});
+
 /**
  * A loopback Ollama that answers each chat request with the next reply,
  * reporting the prompt as a third of its characters, as Ollama reports the

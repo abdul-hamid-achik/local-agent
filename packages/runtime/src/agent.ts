@@ -15,6 +15,7 @@ import {
   COMPACT_LOW,
   compactHistory,
   compactState,
+  latestTodo,
   promptChars,
   windowStart,
 } from "#runtime/compact";
@@ -1752,6 +1753,9 @@ export const MAX_HISTORY_MESSAGES = 10_000;
 function windowNote(left: number): string {
   return `The oldest ${left} messages of this conversation are not in this request: they no longer fit the context window. If the user refers to something you cannot see, say so rather than guess.`;
 }
+/** Ahead of the todo list a windowed request carries in its system prompt. */
+const TODO_NOTE =
+  "Your todo list, as you last wrote it (that message is no longer in this request):";
 /** Characters reserved in the window budget for that note. */
 const WINDOW_NOTE_CHARS = 300;
 
@@ -2111,6 +2115,20 @@ async function* agentTurn(
       if (from > counted) start = from;
     }
     start ??= windowStart(history, budgetChars, stepChars, room);
+    // A todo list the window leaves out rides in the system prompt, in room
+    // it takes from the window: a long goal keeps its plan.
+    const plan = latestTodo(history);
+    const planOut = plan !== undefined && plan.index < start;
+    if (planOut)
+      start = Math.max(
+        start,
+        windowStart(
+          history,
+          Math.max(0, budgetChars - plan.text.length),
+          stepChars,
+          room,
+        ),
+      );
     if (start > 0 && start !== reported)
       yield {
         type: "windowed",
@@ -2126,7 +2144,9 @@ async function* agentTurn(
       {
         role: "system",
         content:
-          start > 0 ? `${instructions}\n\n${windowNote(start)}` : instructions,
+          start > 0
+            ? `${instructions}\n\n${windowNote(start)}${planOut ? `\n\n${TODO_NOTE}\n${plan.text}` : ""}`
+            : instructions,
       },
       ...sent,
       ...(nudge ? [nudge] : []),

@@ -157,6 +157,66 @@ test("a long conversation sends its newest exchanges, says what it left out, and
   }
 });
 
+test("a todo list the window leaves out rides in the system prompt", async () => {
+  const list =
+    "- [x] read the spec\n- [~] write the parser\n- [ ] run the tests\n3 todos: 1 done, 1 in progress, 1 pending";
+  const plan: Message[] = [
+    { role: "user", content: "plan it" },
+    {
+      role: "assistant",
+      content: "",
+      tool_calls: [
+        { id: "t1", function: { name: "todo_write", arguments: {} } },
+      ],
+    },
+    {
+      role: "tool",
+      tool_name: "todo_write",
+      tool_call_id: "t1",
+      content: JSON.stringify({ status: "succeeded", output: list }),
+    },
+    { role: "assistant", content: "planned" },
+  ];
+  const far = await run([
+    ...plan,
+    ...earlier(118, 1_000),
+    { role: "user", content: "go on" },
+  ]);
+  const system = far.requests[0]?.[0]?.content ?? "";
+  expect(windowed(far.events)).toHaveLength(1);
+  expect(
+    far.requests[0]?.some((m) => m.content.includes("write the parser")),
+  ).toBe(true);
+  expect(system).toContain(
+    `Your todo list, as you last wrote it (that message is no longer in this request):\n${list}`,
+  );
+  // The list takes its room from the window, not past it.
+  const big = Array.from(
+    { length: 50 },
+    (_, i) => `- [ ] ${`step ${i} `.padEnd(200, "x")}`,
+  ).join("\n");
+  const long = await run([
+    ...plan.map((m) =>
+      m.role === "tool"
+        ? {
+            ...m,
+            content: JSON.stringify({ status: "succeeded", output: big }),
+          }
+        : m,
+    ),
+    ...earlier(118, 1_000),
+    { role: "user", content: "go on" },
+  ]);
+  const sent = long.requests[0] ?? [];
+  expect(sent[0]?.content).toContain(big);
+  expect(
+    (sent[0]?.content.length ?? 0) + promptChars(sent.slice(1) as Message[]),
+  ).toBeLessThan(16_384 * 3 * 0.7);
+  // In the window, it is not said twice.
+  const near = await run([...plan, { role: "user", content: "go on" }]);
+  expect(near.requests[0]?.[0]?.content).not.toContain("Your todo list");
+});
+
 test("a short conversation is sent whole, with no note", async () => {
   const short = await run([...earlier(6), { role: "user", content: "hi" }]);
   expect(short.requests[0]).toHaveLength(8);

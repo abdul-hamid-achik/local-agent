@@ -125,6 +125,32 @@ function elidedResult(content: string): string {
   });
 }
 
+/**
+ * The todo list the model last wrote (its latest successful todo_write
+ * result), and where it is: the plan of a long run, which shortening and
+ * the window must not take from the model.
+ */
+export function latestTodo(
+  history: readonly Message[],
+): { index: number; text: string } | undefined {
+  for (let index = history.length - 1; index >= 0; index--) {
+    const message = history[index];
+    if (message?.role !== "tool" || message.tool_name !== "todo_write")
+      continue;
+    try {
+      const { status, output } = JSON.parse(message.content) as {
+        status?: unknown;
+        output?: unknown;
+      };
+      if (status === "succeeded" && typeof output === "string")
+        return { index, text: output };
+    } catch {
+      // Not the runtime's receipt.
+    }
+  }
+  return undefined;
+}
+
 function isElided(content: string): boolean {
   try {
     const parsed = JSON.parse(content) as { output?: unknown };
@@ -139,7 +165,8 @@ function isElided(content: string): boolean {
  * many as can be: first images, then tool results the model has already
  * read, then the reasoning of earlier steps of the current turn. The last
  * user message, the last assistant message and every result after it are
- * the model's current work and stay whole, and so does everything before
+ * the model's current work and stay whole, as does its latest todo list
+ * (at most 50 short items), and so does everything before
  * `from` (the part a windowed request leaves out: shortening it saves the
  * request nothing). With `state`, what is freed is measured as saved state
  * rather than as window: an image counts as its own length (not
@@ -158,8 +185,12 @@ export function compactHistory(
   const lastAssistant = messages.findLastIndex(
     (message) => message.role === "assistant",
   );
+  const plan = latestTodo(messages)?.index;
   const kept = (index: number) =>
-    index < from || index === lastUser || index >= lastAssistant;
+    index < from ||
+    index === lastUser ||
+    index === plan ||
+    index >= lastAssistant;
   const changed = new Set<number>();
   let saved = 0;
   const passes: ((message: Message, index: number) => number)[] = [
