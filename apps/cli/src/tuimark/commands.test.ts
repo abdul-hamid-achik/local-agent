@@ -189,10 +189,23 @@ test("/details asks the controller for the viewer over the latest receipt", () =
     status: "Latest tool output",
     details: true,
   });
+  // A card's pointer names its number: /details N asks for that one.
+  expect(runSlash("/details 3", state)).toEqual({
+    status: "Tool output 3",
+    details: 3,
+  });
+  expect(runSlash("/DETAILS  12 ", state).details).toBe(12);
+  // Cards count from 1; anything else is not a number one names.
+  for (const wanted of ["0", "03", "3x", "-1", "1234567890"])
+    expect(runSlash(`/details ${wanted}`, state)).toEqual({
+      status: `Not a tool output number: ${wanted}. Use /details for the latest, or /details N for the card that names N`,
+      unknown: true,
+    });
+  expect(runSlash("/details 1 2", state).unknown).toBe(true);
   expect(filterPalette("details").map((r) => r.id)).toEqual(["details"]);
   expect(filterPalette("details")[0]?.label).toBe("Details: last tool output");
   expect(paletteCommand("details")).toBe("/details");
-  expect(HELP_STATUS).toContain("/details");
+  expect(HELP_STATUS).toContain("/details [N]");
   expect(slashMatches("/d")?.map((c) => c.name)).toEqual(["/details"]);
 });
 
@@ -259,7 +272,7 @@ test("the slash catalog lists exactly the commands the parser knows", () => {
     "/copy [code]",
     "/permissions [clear|trust]",
     "/sandbox on|off",
-    "/details",
+    "/details [N]",
     "/status",
     "/provider",
     "/sessions [new]",

@@ -9,7 +9,7 @@
 │    for (let attempt = 1; ; att│  /copy [code] copy the last reply, or its last cod…  │                               ┃
 │      try { return await fetch(│  /permissions [clear|trust] show, clear or trust g…  │                               ┃
 │      catch (e) { if (attempt =│  /sandbox on|off run commands confined (macOS), wi…  │                               ┃
-│    }                          │  /details show the last tool output in full          │                               ┃
+│    }                          │  /details [N] show the last tool output, or N's      │                               ┃
 │  }                            │  /status show the effective config (model, workspa…  │                               ┃
 │                               │  /provider ask the model's endpoint: answer time, …  │                               ┃
 │ ╭─ Edit ──────────────────────│  /sessions [new] switch to a saved session, or sta…  │─────────────────────────────╮ ┃

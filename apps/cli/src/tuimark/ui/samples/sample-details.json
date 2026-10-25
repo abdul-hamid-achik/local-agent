@@ -88,7 +88,7 @@
         "out": [
           "output line 1\noutput line 2\noutput line 3\noutput line 4\noutput line 5\noutput line 6\noutput line 7\noutput line 8",
           {
-            "text": "\n… 12 more lines · /details for full output",
+            "text": "\n… 12 more lines · /details 1 for full output",
             "class": "note"
           }
         ]
@@ -552,8 +552,8 @@
       },
       {
         "id": "/details",
-        "cmd": "/details",
-        "desc": "show the last tool output in full"
+        "cmd": "/details [N]",
+        "desc": "show the last tool output, or N's"
       },
       {
         "id": "/status",

@@ -15,7 +15,7 @@
 │ │     "docs__search",                                                                                              │ │
 │ │     "docs__fetch"                                                                                                │ │
 │ │   ]                                                                                                              │ │
-│ │ … 1 more lines · /details for full output                                                                        │ │
+│ │ … 1 more line · /details 1 for full output                                                                       │ │
 │ ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯ │
 │                                                                                                                      │
 │ Assistant                                                                                                            │

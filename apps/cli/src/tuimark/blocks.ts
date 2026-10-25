@@ -1418,6 +1418,7 @@ export function outputRuns(
   output: string,
   head?: { text: string; bad: boolean },
   change: readonly OutRow[] = [],
+  details?: number,
 ): Run[] {
   const lines = cleanText(output).split("\n");
   while (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
@@ -1432,10 +1433,13 @@ export function outputRuns(
     if (n > 0) pushRun(runs, "\n", all[n - 1]?.cls === row.cls ? row.cls : "");
     pushRun(runs, clip(row.text, OUT_COLS), row.cls);
   });
-  if (all.length > OUT_LINES)
+  const more = all.length - OUT_LINES;
+  // The pointer names this card's own output: on an older card, /details
+  // alone would open a newer one.
+  if (more > 0)
     pushRun(
       runs,
-      `\n… ${all.length - OUT_LINES} more lines · /details for full output`,
+      `\n… ${more} more ${more === 1 ? "line" : "lines"}${details === undefined ? "" : ` · /details ${details} for full output`}`,
       "note",
     );
   return runs;
@@ -1591,11 +1595,16 @@ function parseReceipt(content: string): { status: string; output: string } {
  * UI memory only — never a model message, never persisted.
  */
 export interface ToolReceipt {
+  /** The number its card's pointer gives: `/details N` opens it. */
+  n: number;
   name: string;
   status: string;
   args: string;
   output: string;
 }
+
+/** `/details N` reaches the newest this many receipts; older ones are let go. */
+export const MAX_RECEIPTS = 32;
 
 /** The output the viewer keeps; past it the tail below says what was cut. */
 export const DETAILS_MAX_CHARS = 64_000;
@@ -1614,6 +1623,7 @@ function toolCard(
   call: ToolCall | undefined,
   state: ToolState,
   output = "",
+  details?: number,
 ): Card {
   const parts = resultParts(name, output);
   const line = callLine(call);
@@ -1638,6 +1648,7 @@ function toolCard(
           parts.body,
           parts.head,
           changeRows(name, call, state, output),
+          details,
         )
       : [],
   };
@@ -1778,9 +1789,38 @@ export class ViewBuilder {
   private nextId = 0;
   private readonly calls = new Map<string, ToolCall>();
   private pending: ToolCall[] = [];
+  // By the message itself, not its call id: a provider may number its calls
+  // per reply, so two turns can both have a `call_0`.
+  private readonly numbers = new WeakMap<Message, number>();
 
-  /** `tableCols`: the table width when a message is built (see `tableWidth`). */
-  constructor(private readonly tableCols?: () => number) {}
+  /**
+   * `tableCols`: the table width when a message is built (see `tableWidth`).
+   * `upcoming`: the number the next tool output gets. A builder that
+   * replaces another starts where it stopped, so no number a card in the
+   * scrollback shows ever names a different output.
+   */
+  constructor(
+    private readonly tableCols?: () => number,
+    private upcoming = 1,
+  ) {}
+
+  /** The number the next tool output will get. */
+  get nextReceiptNumber(): number {
+    return this.upcoming;
+  }
+
+  /**
+   * A tool message's number, given on first sight: its card's pointer and
+   * its receipt read the same one, whichever is built first.
+   */
+  private numberOf(message: Message): number {
+    let n = this.numbers.get(message);
+    if (n === undefined) {
+      n = this.upcoming++;
+      this.numbers.set(message, n);
+    }
+    return n;
+  }
 
   /** The call a `tool_requested` event belongs to (they arrive in call order). */
   takeCall(): ToolCall | undefined {
@@ -1816,7 +1856,7 @@ export class ViewBuilder {
       this.id(),
       "tool",
       [],
-      toolCard(name, call, asToolState(status), output),
+      toolCard(name, call, asToolState(status), output, this.numberOf(message)),
       [],
       messageImages(message.images),
     );
@@ -1856,6 +1896,7 @@ export class ViewBuilder {
       .map((row) => row.text)
       .join("\n");
     return {
+      n: this.numberOf(message),
       name: clip(terminalLine(name), 80),
       status: STATE_LABEL[state],
       args: callSummary(call),

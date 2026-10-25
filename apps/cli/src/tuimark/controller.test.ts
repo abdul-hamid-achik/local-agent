@@ -28,6 +28,7 @@ import { expect, test } from "vitest";
 import {
   type Block,
   MAX_MESSAGE_BLOCKS,
+  MAX_RECEIPTS,
   type MessageView,
   parseBlocks,
   runsText,
@@ -2776,7 +2777,7 @@ test("the help overlay's store carries the slash commands", () => {
     "/copy [code]",
     "/permissions [clear|trust]",
     "/sandbox on|off",
-    "/details",
+    "/details [N]",
     "/status",
     "/provider",
     "/sessions [new]",
@@ -3200,7 +3201,7 @@ test("/details shows the lines the card truncated, and closing rests at idle", a
   // The committed card never held line 15.
   const card = store(ui).messages.find((m) => m.is_tool)?.card;
   expect(runsText(card?.out ?? [])).toContain(
-    "… 12 more lines · /details for full output",
+    "… 12 more lines · /details 1 for full output",
   );
   expect(runsText(card?.out ?? [])).not.toContain("output line 15");
   await ui.fire("send", "/details");
@@ -3231,6 +3232,99 @@ test("a newer receipt replaces the one /details shows", async () => {
   expect(store(ui).details.title).toBe("search · succeeded");
   expect(detailsText(ui)).toContain("second output");
   expect(detailsText(ui)).not.toContain("first output");
+});
+
+test("/details N opens the output its card names, and a resize keeps it", async () => {
+  let turn = 0;
+  let cols = 100;
+  const { ui, client } = setup(
+    (ctx) =>
+      ++turn === 1
+        ? toolScript(LONG_OUTPUT, "read")(ctx)
+        : toolScript("second output", "search")(ctx),
+    { columns: () => cols },
+  );
+  await ui.fire("send", "one");
+  await client.idle();
+  await ui.fire("send", "two");
+  await client.idle();
+  // Both turns call it c1, as a provider that numbers calls per reply
+  // does: the older card still names its own output.
+  const card = store(ui).messages.find((m) => m.is_tool)?.card;
+  expect(runsText(card?.out ?? [])).toContain(
+    "… 12 more lines · /details 1 for full output",
+  );
+  store(ui).draft = "/details 1";
+  await ui.fire("send", "/details 1");
+  expect(store(ui).details.title).toBe("read · succeeded");
+  expect(store(ui).status).toBe("Tool output 1: read");
+  expect(detailsText(ui)).toContain("output line 15");
+  expect(store(ui).draft).toBe("");
+  // A re-render wraps the receipt on screen again, not the newest one.
+  cols = 40;
+  await client.resize();
+  expect(store(ui).details.title).toBe("read · succeeded");
+  await ui.fire("details_close");
+  await ui.fire("send", "/details 2");
+  expect(store(ui).details.title).toBe("search · succeeded");
+  expect(detailsText(ui)).toContain("second output");
+});
+
+test("/details N that names no kept output says why and keeps the line", async () => {
+  const { ui, client } = setup(toolScript(LONG_OUTPUT));
+  await ui.fire("send", "read it");
+  await client.idle();
+  for (const [line, status] of [
+    // One output so far: 2 is the next number, not yet given.
+    ["/details 2", "No tool output 2 yet. /details opens the latest"],
+    ["/details 9", "No tool output 9 yet. /details opens the latest"],
+    [
+      "/details x",
+      "Not a tool output number: x. Use /details for the latest, or /details N for the card that names N",
+    ],
+  ] as const) {
+    store(ui).draft = line;
+    await ui.fire("send", line);
+    expect(store(ui).status).toBe(status);
+    expect(store(ui).details.open).toBe(false);
+    // As with a refused /model, the number can be fixed in place.
+    expect(store(ui).draft).toBe(line);
+  }
+});
+
+test("only this conversation's newest outputs stay open to /details N", async () => {
+  // A resumed session with one output more than is kept.
+  const messages = Array.from({ length: MAX_RECEIPTS + 1 }, (_, i) => ({
+    role: "tool",
+    tool_name: "read",
+    tool_call_id: "call_0",
+    content: JSON.stringify({ status: "succeeded", output: `output ${i + 1}` }),
+  }));
+  const session = {
+    store: {},
+    state: { messages },
+  } as unknown as SessionContext;
+  const { ui, client } = setup(toolScript(LONG_OUTPUT), { session });
+  const gone = `Tool output 1 is no longer kept (only this conversation's last ${MAX_RECEIPTS} are). /details opens the latest`;
+  await ui.fire("send", "/details 1");
+  expect(store(ui).status).toBe(gone);
+  await ui.fire("send", "/details 2");
+  expect(detailsText(ui)).toBe("output 2");
+  await ui.fire("details_close");
+  // A new conversation goes on counting: a number an older card shows
+  // never opens this conversation's output.
+  await ui.fire("send", "/sessions new");
+  await client.idle();
+  await ui.fire("send", "read it");
+  await client.idle();
+  const card = store(ui).messages.find((m) => m.is_tool)?.card;
+  expect(runsText(card?.out ?? [])).toContain(
+    `/details ${MAX_RECEIPTS + 2} for full output`,
+  );
+  // Even an output that would still be among the newest kept: it was the
+  // other conversation's.
+  await ui.fire("send", "/details 3");
+  expect(store(ui).status).toBe(gone.replace("output 1", "output 3"));
 });
 
 test("failed and denied receipts are kept for /details too", async () => {

@@ -92,7 +92,7 @@
           },
           "\n{\n  \"status\": \"confident\",\n  \"ambiguous\": false,\n  \"alternatives\": [\n    \"docs__search\",\n    \"docs__fetch\"\n  ]",
           {
-            "text": "\n… 1 more lines · /details for full output",
+            "text": "\n… 1 more line · /details 1 for full output",
             "class": "note"
           }
         ]
@@ -415,8 +415,8 @@
       },
       {
         "id": "/details",
-        "cmd": "/details",
-        "desc": "show the last tool output in full"
+        "cmd": "/details [N]",
+        "desc": "show the last tool output, or N's"
       },
       {
         "id": "/status",

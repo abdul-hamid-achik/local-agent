@@ -71,6 +71,7 @@ import {
   IDLE_THINKING,
   type LiveView,
   liveToolView,
+  MAX_RECEIPTS,
   type MessageView,
   NO_CARD,
   onHold,
@@ -539,10 +540,13 @@ export class TuimarkClient {
    */
   private trustOffer?: PermissionRule[];
   /**
-   * The latest completed tool receipt, whole, for `/details`. Memory only:
-   * never a model message, never persisted; a newer receipt replaces it.
+   * The newest completed tool receipts, whole, for `/details` (the last)
+   * and `/details N` (card N); past MAX_RECEIPTS the oldest goes. Memory
+   * only: never a model message, never persisted.
    */
-  private lastReceipt?: ToolReceipt;
+  private readonly receipts: ToolReceipt[] = [];
+  /** The receipt the viewer shows, re-wrapped on a resize. */
+  private shownReceipt?: ToolReceipt;
   /** Whether the details viewer is open (the store's `details.open`). */
   private detailsOpen = false;
   /** Whether the read-only panel is open (the store's `panel.open`). */
@@ -637,7 +641,7 @@ export class TuimarkClient {
       const view = this.builder.fromMessage(message);
       if (view) this.transcript.push(view);
       const receipt = this.builder.receiptOf(message);
-      if (receipt) this.lastReceipt = receipt;
+      if (receipt) this.keepReceipt(receipt);
       if (message.role === "user" && message.content.trim())
         this.sent.push(message.content);
     }
@@ -924,10 +928,10 @@ export class TuimarkClient {
       this.proposalTruncated = approval.truncated;
       writes.push({ path: "approval", value: approval });
     }
-    if (this.detailsOpen && this.lastReceipt)
+    if (this.detailsOpen && this.shownReceipt)
       writes.push({
         path: "details",
-        value: this.detailsFor(this.lastReceipt),
+        value: this.detailsFor(this.shownReceipt),
       });
     if (this.panelOpen && this.panelText)
       writes.push({ path: "panel", value: this.panelFor(this.panelText) });
@@ -938,10 +942,16 @@ export class TuimarkClient {
     return detailsState(receipt, this.options.columns?.() ?? 80, this.inline);
   }
 
+  private keepReceipt(receipt: ToolReceipt): void {
+    this.receipts.push(receipt);
+    if (this.receipts.length > MAX_RECEIPTS) this.receipts.shift();
+  }
+
   /** The writes that close the viewer, or none when it is already closed. */
   private closeDetailsWrite(): Write[] {
     if (!this.detailsOpen) return [];
     this.detailsOpen = false;
+    this.shownReceipt = undefined;
     return [{ path: "details", value: noDetails() }];
   }
 
@@ -954,25 +964,48 @@ export class TuimarkClient {
   }
 
   /**
-   * `/details`: the latest receipt whole, in the viewer. Refused while a
-   * turn runs or an approval is open — an armed dialog is never covered.
+   * `/details`: the latest receipt whole, in the viewer; `/details N`: the
+   * receipt of the card whose pointer names N. Refused while a turn runs or
+   * an approval is open — an armed dialog is never covered. Says whether
+   * the viewer opened.
    */
-  private async openDetails(): Promise<void> {
+  private async openDetails(n?: number): Promise<boolean> {
     if (this.busy || this.proposal) {
       await this.write([{ path: "status", value: BUSY_STATUS }]);
-      return;
+      return false;
     }
-    const receipt = this.lastReceipt;
+    const receipt =
+      n === undefined
+        ? this.receipts.at(-1)
+        : this.receipts.find((kept) => kept.n === n);
     if (!receipt) {
-      await this.write([{ path: "status", value: NO_DETAILS_STATUS }]);
-      return;
+      await this.write([
+        {
+          path: "status",
+          value:
+            n === undefined
+              ? NO_DETAILS_STATUS
+              : n >= this.builder.nextReceiptNumber
+                ? `No tool output ${n} yet. /details opens the latest`
+                : `Tool output ${n} is no longer kept (only this conversation's last ${MAX_RECEIPTS} are). /details opens the latest`,
+        },
+      ]);
+      return false;
     }
     this.detailsOpen = true;
+    this.shownReceipt = receipt;
     await this.write([
       ...this.closePanelWrite(),
       { path: "details", value: this.detailsFor(receipt) },
-      { path: "status", value: `Latest tool output: ${receipt.name}` },
+      {
+        path: "status",
+        value:
+          n === undefined
+            ? `Latest tool output: ${receipt.name}`
+            : `Tool output ${n}: ${receipt.name}`,
+      },
     ]);
+    return true;
   }
 
   // ------------------------------------------------------------------ the panel
@@ -1504,9 +1537,14 @@ export class TuimarkClient {
     this.windowNoticed = 0;
     this.history.length = 0;
     this.history.push(...(context?.state.messages ?? []));
-    this.builder = new ViewBuilder(this.tableCols);
+    // Numbering goes on: a card of the session left behind (inline, it is
+    // in the scrollback) never names a receipt of this one.
+    this.builder = new ViewBuilder(
+      this.tableCols,
+      this.builder.nextReceiptNumber,
+    );
     const views: MessageView[] = [];
-    this.lastReceipt = undefined;
+    this.receipts.length = 0;
     this.sent.length = 0;
     this.recall = undefined;
     this.recalledFrom = "";
@@ -1514,7 +1552,7 @@ export class TuimarkClient {
       const view = this.builder.fromMessage(message);
       if (view) views.push(view);
       const receipt = this.builder.receiptOf(message);
-      if (receipt) this.lastReceipt = receipt;
+      if (receipt) this.keepReceipt(receipt);
       if (message.role === "user" && message.content.trim())
         this.sent.push(message.content);
     }
@@ -2922,15 +2960,24 @@ export class TuimarkClient {
     });
     // `/model` runs on controller state and can still be refused there (a
     // model admission refuses): its line is cleared only once accepted, so
-    // a refused one can be fixed. `/details` takes no argument, so even
-    // "no tool output yet" leaves nothing to fix: its line goes at once.
+    // a refused one can be fixed. `/details N` likewise keeps a number no
+    // receipt answers to. Bare `/details` leaves nothing to fix, even with
+    // no tool output yet: its line goes at once.
+    const numbered =
+      typeof outcome.details === "number" ? outcome.details : undefined;
     const clearDraft = () => this.write([{ path: "draft", value: "" }]);
-    if (sent && !outcome.unknown && outcome.model === undefined)
+    if (
+      sent &&
+      !outcome.unknown &&
+      outcome.model === undefined &&
+      numbered === undefined
+    )
       await clearDraft();
-    // `/details` opens over controller state (the retained receipt), so
+    // `/details` opens over controller state (the retained receipts), so
     // its whole outcome — refusal included — is written there.
-    if (outcome.details) {
-      await this.openDetails();
+    if (outcome.details !== undefined) {
+      const opened = await this.openDetails(numbered);
+      if (sent && opened && numbered !== undefined) await clearDraft();
       return;
     }
     // The panel and export commands likewise run on controller state.
@@ -3770,7 +3817,7 @@ export class TuimarkClient {
             // The fullest output the client receives is this message's
             // receipt, before the card view truncates it: keep it whole.
             const receipt = this.builder.receiptOf(event.message);
-            if (receipt) this.lastReceipt = receipt;
+            if (receipt) this.keepReceipt(receipt);
             if (this.inline) {
               // Only what is still live is printed: the whole re-parsed view
               // would duplicate the blocks already in the scrollback.

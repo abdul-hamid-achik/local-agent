@@ -430,8 +430,17 @@ test("tool output is one run list: eight lines, then the count of the rest", () 
     Array.from({ length: 12 }, (_, i) => `l${i}`).join("\n"),
   );
   expect(runsText(out).split("\n")).toHaveLength(9);
-  expect(out.at(-1)).toEqual({
-    text: "\n… 4 more lines · /details for full output",
+  expect(out.at(-1)).toEqual({ text: "\n… 4 more lines", class: "note" });
+  // A card's number goes in the pointer: /details N opens that output.
+  expect(
+    outputRuns(
+      Array.from({ length: 12 }, (_, i) => `l${i}`).join("\n"),
+      undefined,
+      [],
+      3,
+    ).at(-1),
+  ).toEqual({
+    text: "\n… 4 more lines · /details 3 for full output",
     class: "note",
   });
   expect(outputRuns("")).toEqual([]);
@@ -442,15 +451,19 @@ test("the /details affordance rides the truncation line, and only there", () => 
   const lines = (n: number) =>
     Array.from({ length: n }, (_, i) => `l${i}`).join("\n");
   // Exactly eight lines fill the card: nothing was truncated, no pointer.
-  expect(runsText(outputRuns(lines(8)))).not.toContain("/details");
-  expect(runsText(outputRuns(lines(8)))).not.toContain("more lines");
+  expect(runsText(outputRuns(lines(8), undefined, [], 1))).not.toContain(
+    "/details",
+  );
+  expect(runsText(outputRuns(lines(8)))).not.toContain("more line");
   // Nine lines truncate by one: the count and the pointer share the line.
-  expect(runsText(outputRuns(lines(9)))).toContain(
-    "… 1 more lines · /details for full output",
+  expect(runsText(outputRuns(lines(9), undefined, [], 2))).toContain(
+    "… 1 more line · /details 2 for full output",
   );
   // A head line (a command's exit) counts toward the eight, like the card.
-  const headed = outputRuns(lines(8), { text: "exit 0", bad: false });
-  expect(runsText(headed)).toContain("· /details for full output");
+  const headed = outputRuns(lines(8), { text: "exit 0", bad: false }, [], 4);
+  expect(runsText(headed)).toContain(
+    "… 1 more line · /details 4 for full output",
+  );
 });
 
 test("a failing command's exit line is class err, a clean one's is note", () => {
@@ -680,7 +693,7 @@ test("an MCP card clips pretty-printed JSON like any output", () => {
   const { card, receipt } = cardOf("srv__tool", {}, "unverified", big);
   const shown = runsText(card?.out ?? []).split("\n");
   expect(shown).toHaveLength(9);
-  expect(shown.at(-1)).toContain("more lines · /details for full output");
+  expect(shown.at(-1)).toContain("more lines · /details 1 for full output");
   expect(receipt?.output.split("\n").length).toBeGreaterThan(30);
 });
 
@@ -818,7 +831,7 @@ test("a long change is cut with the card, and /details keeps all of it", () => {
   const shown = runsText(card?.out ?? []);
   expect(shown).toContain("- old 0");
   expect(shown).not.toContain("+ new 29");
-  expect(shown).toContain("… 53 more lines · /details for full output");
+  expect(shown).toContain("… 53 more lines · /details 1 for full output");
   expect(receipt?.output).toContain("+ new 29");
 });
 
@@ -887,6 +900,7 @@ test("receiptOf keeps the whole receipt the card truncates", () => {
     "line 19",
   );
   expect(builder.receiptOf(message)).toEqual({
+    n: 1,
     name: "read",
     status: "failed",
     args: "big.txt",
@@ -907,6 +921,35 @@ test("receiptOf keeps the whole receipt the card truncates", () => {
     builder.receiptOf({ role: "assistant", content: "hi" }),
   ).toBeUndefined();
   expect(builder.receiptOf({ role: "user", content: "hi" })).toBeUndefined();
+});
+
+test("each tool output has its own number, its card's and its receipt's alike", () => {
+  const long = Array.from({ length: 12 }, (_, i) => `l${i}`).join("\n");
+  // Two outputs under one call id, as a provider that numbers per reply sends.
+  const tool = (): Message => ({
+    role: "tool",
+    tool_name: "read",
+    tool_call_id: "call_0",
+    content: JSON.stringify({ status: "succeeded", output: long }),
+  });
+  const [first, second] = [tool(), tool()];
+  const builder = new ViewBuilder();
+  const pointer = (message: Message) =>
+    runsText(builder.fromMessage(message)?.card.out ?? [])
+      .split("\n")
+      .at(-1);
+  expect(pointer(first)).toBe("… 4 more lines · /details 1 for full output");
+  // The receipt first, the card after: still one number.
+  expect(builder.receiptOf(second)?.n).toBe(2);
+  expect(pointer(second)).toBe("… 4 more lines · /details 2 for full output");
+  // Built again, a card keeps its number.
+  expect(pointer(first)).toBe("… 4 more lines · /details 1 for full output");
+  expect(builder.receiptOf(first)?.n).toBe(1);
+  // A builder that takes over goes on from there.
+  expect(builder.nextReceiptNumber).toBe(3);
+  expect(
+    new ViewBuilder(undefined, builder.nextReceiptNumber).receiptOf(tool())?.n,
+  ).toBe(3);
 });
 
 test("capDetailsOutput keeps 64000 characters and says what it cut", () => {

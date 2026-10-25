@@ -73,10 +73,11 @@ export interface CommandOutcome {
    */
   trustRules?: "review" | "confirm";
   /**
-   * Set by `/details`: open the viewer over the latest tool receipt. The
-   * controller owns the receipt, so it writes the real status itself.
+   * Set by `/details` (true: the latest tool receipt) and `/details N` (the
+   * receipt card N's pointer names): open the viewer over it. The controller
+   * owns the receipts, so it writes the real status itself.
    */
-  details?: boolean;
+  details?: true | number;
   /** Set by `/status`: open the panel over the effective config. */
   statusPanel?: boolean;
   /** Set by `/provider`: ask the endpoint (read-only), then open the panel over its answer. */
@@ -114,7 +115,7 @@ export interface CommandOutcome {
 }
 
 export const HELP_STATUS =
-  "/mode plan|build|chat · /model [NAME] · /theme dark|light|auto · /mouse on|off · /copy [code] · /permissions [clear|trust] · /sandbox on|off · /details · /status · /sessions · /recover · /find TEXT · /export [json] · /mcp · /goal OBJECTIVE · /help · Esc cancel · Ctrl+C exit";
+  "/mode plan|build|chat · /model [NAME] · /theme dark|light|auto · /mouse on|off · /copy [code] · /permissions [clear|trust] · /sandbox on|off · /details [N] · /status · /sessions · /recover · /find TEXT · /export [json] · /mcp · /goal OBJECTIVE · /help · Esc cancel · Ctrl+C exit";
 
 /** Inline has no mouse (the engine ignores it there): the controller refuses with this. */
 export const MOUSE_INLINE_STATUS = "Mouse is not available in inline mode";
@@ -251,8 +252,19 @@ export function runSlash(text: string, state: CommandState): CommandOutcome {
       unknown: true,
     };
   }
-  if (name === "/details")
-    return { status: "Latest tool output", details: true };
+  const details = command.match(/^\/details(?:\s+(\S+))?\s*$/i);
+  if (details) {
+    const wanted = details[1];
+    if (wanted === undefined)
+      return { status: "Latest tool output", details: true };
+    // The number a card's pointer gives: a whole number from 1.
+    if (!/^[1-9]\d{0,8}$/.test(wanted))
+      return {
+        status: `Not a tool output number: ${wanted}. Use /details for the latest, or /details N for the card that names N`,
+        unknown: true,
+      };
+    return { status: `Tool output ${wanted}`, details: Number(wanted) };
+  }
   if (name === "/status") return { status: "Status", statusPanel: true };
   if (name === "/provider")
     return { status: "Checking the provider…", providerPanel: true };
@@ -410,8 +422,8 @@ export const SLASH_COMMANDS: readonly SlashCommand[] = [
   },
   {
     name: "/details",
-    usage: "/details",
-    description: "show the last tool output in full",
+    usage: "/details [N]",
+    description: "show the last tool output, or N's",
     insert: "/details",
   },
   {

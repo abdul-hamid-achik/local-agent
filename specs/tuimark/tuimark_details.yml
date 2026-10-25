@@ -2,9 +2,11 @@ version: 1
 name: bun_tuimark_details
 intent: |
     a tool output longer than its card (the fixture reads a 20-line file)
-    shows the /details pointer on the card's truncation line, and /details
-    opens the viewer over that receipt with the lines the card cut;
-    esc closes the viewer and the client exits on ctrl+c.
+    shows the /details pointer, with the card's own number, on its
+    truncation line, and /details opens the viewer over that receipt with
+    the lines the card cut; after a second read, /details 1 still opens
+    the first card's output; esc closes the viewer and the client exits on
+    ctrl+c.
 target:
     cmd: ["bun", "specs/tuimark/fixture.ts", "chat"]
     cwd: "${projectRoot}"
@@ -27,7 +29,7 @@ steps:
     - press: enter
     - wait:
         screen:
-            contains: "/details for full output"
+            contains: "… 12 more lines · /details 1 for full output"
         timeoutMs: 15000
     - snapshot: card_truncated
     - wait:
@@ -59,6 +61,33 @@ steps:
         screen:
             notContains: "esc or q close"
         timeoutMs: 10000
+    # A second read: its card names 2, and the first card's number still
+    # opens the first output.
+    - type: "read the long file"
+    - press: enter
+    - wait:
+        screen:
+            contains: "… 12 more lines · /details 2 for full output"
+        timeoutMs: 15000
+    - wait:
+        screen:
+            contains: "Message the model"
+        timeoutMs: 10000
+    - type: "/details 1"
+    - press: enter
+    - wait:
+        screen:
+            contains: "Tool output 1: read"
+        timeoutMs: 10000
+    - wait:
+        screen:
+            contains: "read · succeeded"
+        timeoutMs: 10000
+    - press: esc
+    - wait:
+        screen:
+            notContains: "esc or q close"
+        timeoutMs: 10000
     # The turn has ended (the idle placeholder is back), so ctrl+c quits
     # instead of cancelling it.
     - wait:
@@ -72,8 +101,8 @@ steps:
         timeoutMs: 10000
 outcomes:
     - id: tuimark_details
-      description: the card truncates a long tool output with a /details pointer, and /details shows the cut lines in the viewer
+      description: the card truncates a long tool output with a numbered /details pointer, /details shows the cut lines in the viewer, and /details 1 reopens the first card's output after a second
       verify:
         process:
             exitCode: 0
-contractHash: sha256:af807302ee9194e9bc56da66e1bef0d6def028dcf52c680fb3132a5609e54edd
+contractHash: sha256:18cf29773e54064bfe816cc1698929980482ea305399407da3248171a7dab368

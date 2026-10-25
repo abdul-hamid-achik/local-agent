@@ -721,6 +721,7 @@ test("a truncated approval offers no session grant", () => {
 
 test("detailsState titles the receipt and wraps its output per presentation", () => {
   const receipt = {
+    n: 1,
     name: "read",
     status: "succeeded",
     args: "src/big.txt",

@@ -291,8 +291,8 @@
       },
       {
         "id": "/details",
-        "cmd": "/details",
-        "desc": "show the last tool output in full"
+        "cmd": "/details [N]",
+        "desc": "show the last tool output, or N's"
       },
       {
         "id": "/status",
