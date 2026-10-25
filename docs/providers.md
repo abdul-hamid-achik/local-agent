@@ -35,6 +35,12 @@ Chalupa side: the client rejects a `--model` that differs from the profile,
 and rejects `--context` outright — Chalupa negotiates the context itself.
 `--think` still applies.
 
+Without `--session-db` the conversation lives only in the process and ends
+with the launch. Arguments after `--` reach the client, so
+`chalupa launch local-agent -- --session-db ~/.local-agent/sessions.db`
+keeps it in a database on your machine that `--resume` continues later (see
+[Sessions](/sessions)).
+
 Once Chalupa is active, prompts and tool receipts go to the remote endpoint.
 That is exactly what the explicit `LOCAL_AGENT_LOCAL_ONLY=false`
 acknowledges. See [Safety and privacy](/safety).
