@@ -182,9 +182,45 @@ test("the diagnostics block is capped at 20k chars keeping the head", async () =
     ON,
     TOOLS,
   );
-  expect(appended.length).toBeLessThanOrEqual(20_100);
+  // The block after its "\n\n" separator, the note included.
+  expect(appended.length - 2).toBeLessThanOrEqual(20_000);
+  expect(appended.length - 2).toBeGreaterThan(19_900);
   expect(appended).toContain("…(diagnostics truncated at 20k chars)");
   expect(appended.endsWith("…(diagnostics truncated at 20k chars)")).toBe(true);
+});
+
+test("two long sections share the 20k block, notes included", async () => {
+  const appended = await postEditDiagnostics(
+    ["src/a.ts"],
+    process.cwd(),
+    signal,
+    fakeRunner([
+      { exitCode: 1, output: "b".repeat(50_000) },
+      { exitCode: 1, output: "t".repeat(50_000) },
+    ]),
+    { ...ON, LOCAL_AGENT_DIAGNOSTICS_TSC: "1" },
+    TOOLS,
+  );
+  expect(appended.length - 2).toBeLessThanOrEqual(20_000);
+  expect(
+    appended.match(/…\(diagnostics truncated at 20k chars\)/g),
+  ).toHaveLength(2);
+});
+
+test("a cut never leaves half of a surrogate pair", async () => {
+  // One of the two lands the cut between the halves of a pair.
+  for (const prefix of ["", "a"]) {
+    const appended = await postEditDiagnostics(
+      ["src/a.ts"],
+      process.cwd(),
+      signal,
+      fakeRunner([{ exitCode: 1, output: `${prefix}${"😀".repeat(30_000)}` }]),
+      ON,
+      TOOLS,
+    );
+    expect(appended).toContain("…(diagnostics truncated at 20k chars)");
+    expect(appended.isWellFormed()).toBe(true);
+  }
 });
 
 test("a biome run that never finished is reported, not shown as an empty finding", async () => {

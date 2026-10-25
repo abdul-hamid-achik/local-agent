@@ -179,10 +179,14 @@ function unavailable(error: unknown): string {
   } ---`;
 }
 
+/** `text` in at most `limit` chars, the note included when it is cut; a cut
+ * never leaves half of a surrogate pair. */
 function cap(text: string, limit = MAX_BLOCK_CHARS): string {
-  return text.length <= limit
-    ? text
-    : `${text.slice(0, limit)}\n${TRUNCATION_NOTE}`;
+  if (text.length <= limit) return text;
+  let end = Math.max(0, limit - TRUNCATION_NOTE.length - 1);
+  const last = text.charCodeAt(end - 1);
+  if (last >= 0xd800 && last <= 0xdbff) end -= 1;
+  return `${text.slice(0, end)}\n${TRUNCATION_NOTE}`;
 }
 
 /**
