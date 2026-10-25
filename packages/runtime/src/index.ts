@@ -98,6 +98,7 @@ export {
   changeLines,
   Workspace,
   type WorkspaceEditProposal,
+  type WorkspaceEntry,
   type WorkspaceWriteProposal,
 } from "#runtime/workspace";
 

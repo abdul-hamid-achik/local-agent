@@ -180,7 +180,7 @@ export type RecoveryView = {
 
 export type WorkspaceEntry = {
   name: string;
-  kind: "file" | "directory";
+  kind: "file" | "directory" | "link" | "other";
   size: number;
 };
 

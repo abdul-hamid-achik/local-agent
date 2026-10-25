@@ -524,6 +524,48 @@ test("path escapes stay forbidden, however they are written", async () => {
   }
 });
 
+test("listEntries gives list's entries as data, links unfollowed, a broken one too", async () => {
+  const { root, workspace } = await fixture();
+  const outside = await temp("local-agent-outside-");
+  await writeFile(join(outside, "big.txt"), "x".repeat(4096));
+  await mkdir(join(root, "src"));
+  await writeFile(join(root, "notes.md"), "hello");
+  await writeFile(join(root, ".env"), "TOKEN=secret");
+  await mkdir(join(root, ".ssh"));
+  await symlink(join(outside, "big.txt"), join(root, "out.txt"));
+  await symlink(join(root, "gone.txt"), join(root, "broken.txt"));
+  const { entries, truncated } = await workspace.listEntries("");
+  const byName = Object.fromEntries(
+    entries.map((entry) => [entry.name, entry]),
+  );
+  expect(byName.src).toEqual({ name: "src", kind: "directory", size: 0 });
+  expect(byName["notes.md"]).toEqual({
+    name: "notes.md",
+    kind: "file",
+    size: 5,
+  });
+  // A link's target is never stat'ed: not its size, not whether it exists.
+  expect(byName["out.txt"]).toEqual({ name: "out.txt", kind: "link", size: 0 });
+  expect(byName["broken.txt"]).toEqual({
+    name: "broken.txt",
+    kind: "link",
+    size: 0,
+  });
+  expect(byName[".env"]).toBeUndefined();
+  expect(byName[".ssh"]).toBeUndefined();
+  expect(entries[0]?.kind).toBe("directory");
+  expect(truncated).toBe(false);
+  // The same names as the model's listing, in the same order.
+  expect(entries.map((entry) => entry.name)).toEqual(
+    (await workspace.list(""))
+      .split("\n")
+      .map((line) => line.replace(/[/@]$/u, "")),
+  );
+  await expect(workspace.listEntries(".ssh")).rejects.toThrow("excluded");
+  await expect(workspace.listEntries("..")).rejects.toThrow();
+  await expect(workspace.listEntries("out.txt")).rejects.toThrow();
+});
+
 test("a symbolic link out of the workspace is not followed by read, list, search, or write", async () => {
   const { root, workspace } = await fixture();
   const outside = await temp("local-agent-outside-");

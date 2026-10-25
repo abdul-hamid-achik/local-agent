@@ -1,4 +1,12 @@
-import { mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  realpath,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { appendRule } from "@local-agent/runtime";
@@ -432,6 +440,57 @@ test("an MCP server that does not start says why, in mcp.status and in a run", a
     side.child.kill();
     await side.child.exited;
     await server.stop(true);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("workspace.list lists a broken link instead of failing, and no secrets", async () => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), "la-sidecar-")));
+  await mkdir(join(root, "src"));
+  await writeFile(join(root, "src", "main.ts"), "export {};\n");
+  await writeFile(join(root, ".env"), "TOKEN=secret\n");
+  await symlink(join(root, "gone"), join(root, "src", "broken"));
+  const side = sidecarChild({ DESKTOP_REPO_ROOT: root });
+  try {
+    side.send({
+      id: 1,
+      method: "workspace.list",
+      params: { workspace: root, dir: "" },
+    });
+    expect(await side.frame((frame) => frame.id === 1)).toMatchObject({
+      ok: true,
+      result: {
+        dir: "",
+        entries: [{ name: "src", kind: "directory", size: 0 }],
+        truncated: false,
+      },
+    });
+    side.send({
+      id: 2,
+      method: "workspace.list",
+      params: { workspace: root, dir: "src" },
+    });
+    expect(await side.frame((frame) => frame.id === 2)).toMatchObject({
+      ok: true,
+      result: {
+        dir: "src",
+        entries: [
+          { name: "broken", kind: "link", size: 0 },
+          { name: "main.ts", kind: "file", size: 11 },
+        ],
+      },
+    });
+    side.send({
+      id: 3,
+      method: "workspace.list",
+      params: { workspace: root, dir: "../" },
+    });
+    expect(await side.frame((frame) => frame.id === 3)).toMatchObject({
+      ok: false,
+    });
+  } finally {
+    side.child.kill();
+    await side.child.exited;
     await rm(root, { recursive: true, force: true });
   }
 });

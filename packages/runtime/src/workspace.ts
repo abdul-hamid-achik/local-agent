@@ -25,6 +25,7 @@ import { createTwoFilesPatch, structuredPatch } from "diff";
 import { userConfigDir } from "#runtime/paths";
 import {
   DIRECTORY_FLAGS,
+  FILE_FLAGS,
   openAt,
   openRoot,
   renameAt,
@@ -177,6 +178,30 @@ const writtenBytes = (text: string, bom: boolean) =>
   Buffer.byteLength(text) + (bom ? Buffer.byteLength(BOM) : 0);
 
 const LIST_LIMIT = 500;
+
+/** One entry of a directory listing (see Workspace.listEntries). */
+export type WorkspaceEntry = {
+  name: string;
+  kind: "directory" | "file" | "link" | "other";
+  size: number;
+};
+
+/** A regular file's size, opened in its directory without following links. */
+function sizeAt(directory: number, name: string): number {
+  let fd: number;
+  try {
+    fd = openAt(directory, name, constants.O_RDONLY | FILE_FLAGS);
+  } catch {
+    return 0;
+  }
+  try {
+    const stat = fstatSync(fd);
+    return stat.isFile() ? stat.size : 0;
+  } finally {
+    closeSync(fd);
+  }
+}
+
 const SEARCH_MATCH_LIMIT = 100;
 const SEARCH_FILE_LIMIT = 5000;
 const SEARCH_FILE_BYTES = 1024 * 1024;
@@ -518,6 +543,39 @@ export class Workspace implements Disposable {
       if (lines.length > LIST_LIMIT)
         shown.push(`… ${lines.length - LIST_LIMIT} more entries not shown`);
       return shown.join("\n");
+    });
+  }
+
+  /**
+   * The entries `list` shows, as data for a client's file browser: secrets
+   * and skipped directories left out, a link listed as a link and never
+   * followed, and a file's size read from the file itself (a name that
+   * cannot be opened that way is listed with size 0). At most 500, dirs
+   * first.
+   */
+  async listEntries(path = ""): Promise<{
+    entries: WorkspaceEntry[];
+    truncated: boolean;
+  }> {
+    if (this.fd < 0) throw new Error("Workspace is closed");
+    const relative = this.normalize(path);
+    if (relative) this.reject(relative);
+    return this.inDirectory(relative, (fd) => {
+      const entries = this.entries(fd, relative);
+      return {
+        entries: entries.slice(0, LIST_LIMIT).map((entry) => ({
+          name: entry.name,
+          kind: entry.isDirectory()
+            ? "directory"
+            : entry.isSymbolicLink()
+              ? "link"
+              : entry.isFile()
+                ? "file"
+                : "other",
+          size: entry.isFile() ? sizeAt(fd, entry.name) : 0,
+        })),
+        truncated: entries.length > LIST_LIMIT,
+      };
     });
   }
 

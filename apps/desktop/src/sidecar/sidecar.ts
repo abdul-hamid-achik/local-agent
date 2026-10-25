@@ -5,7 +5,7 @@
  * Run from the repository root: `bun apps/desktop/src/sidecar/sidecar.ts`.
  */
 import { randomUUID } from "node:crypto";
-import { readdir, stat } from "node:fs/promises";
+import { readdir } from "node:fs/promises";
 import { join, relative, resolve } from "node:path";
 import {
   type ApprovalRequest,
@@ -382,29 +382,11 @@ async function handleWorkspaceList(params: unknown) {
   if (!isRecord(params)) throw new Error("Invalid workspace.list params");
   const root = resolveWorkspaceRoot(requiredString(params, "workspace"));
   const dir = optionalString(params, "dir") ?? "";
-  if (dir.includes("\0") || dir.startsWith("/") || dir.includes(".."))
-    throw new Error("Invalid directory");
-  const absolute = resolve(root, dir);
-  const rel = relative(root, absolute);
-  if (rel.startsWith("..")) throw new Error("Directory escapes workspace");
-  const names = await readdir(absolute);
-  const entries = [];
-  for (const name of names.slice(0, 500)) {
-    const info = await stat(join(absolute, name));
-    entries.push({
-      name,
-      kind: info.isDirectory() ? "directory" : "file",
-      size: info.isFile() ? info.size : 0,
-    });
-  }
-  entries.sort((a, b) =>
-    a.kind === b.kind
-      ? a.name.localeCompare(b.name)
-      : a.kind === "directory"
-        ? -1
-        : 1,
-  );
-  return { dir: rel, entries, truncated: names.length > 500 };
+  // What the model's list shows: no secrets, and a link (a broken one
+  // too) is an entry of its own, never followed.
+  using workspace = await Workspace.create(root);
+  const { entries, truncated } = await workspace.listEntries(dir);
+  return { dir: relative(root, resolve(root, dir)), entries, truncated };
 }
 
 async function handleSessionList(params: unknown) {
