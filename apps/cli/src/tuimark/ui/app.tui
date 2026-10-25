@@ -46,6 +46,10 @@
        the output is reachable by key, and q closes it like esc (the
        modal's on:escape). No labels: the viewer names its own keys. -->
   <keymap when=".la-details">
+    <!-- n and p step through the matches of a search whose message this
+         viewer shows; the parent ignores them for any other output. -->
+    <bind keys="n" action="search_next"/>
+    <bind keys="p" action="search_prev"/>
     <bind keys="q" action="details_close"/>
     <bind keys="pgup" action="move-page-up" to="#details_body"/>
     <bind keys="pgdn" action="move-page-down" to="#details_body"/>
@@ -53,6 +57,14 @@
     <bind keys="down" action="move-next" to="#details_body"/>
     <bind keys="home" action="move-first" to="#details_body"/>
     <bind keys="end" action="move-last" to="#details_body"/>
+  </keymap>
+  <!-- The search box's keys, while it is open: the arrows move the parent's
+       choice while the input keeps focus (ctrl+n and ctrl+p too, as in the
+       palette). Enter is the input's submit; esc is the modal's. No labels:
+       the box names its own keys. -->
+  <keymap when=".la-search">
+    <bind keys="down,ctrl+n" action="search_next"/>
+    <bind keys="up,ctrl+p" action="search_prev"/>
   </keymap>
   <!-- The sessions picker's keys, while the panel modal is picking (the
        modal carries the class): up and down move the parent's choice and
@@ -120,6 +132,10 @@
          this: the composer takes end/ctrl+e for its own caret, and ctrl+end is
          not a key token. ctrl+l reaches the keymap from the composer. -->
     <bind keys="ctrl+l" action="move-last" to="#log" keycap="^L" label="latest"/>
+    <!-- Search this conversation (the same as /search). Unlabeled, so the
+         hints keep their room; the help names it. The textarea does not
+         take ctrl+f (its word keys are alt+b and alt+f). -->
+    <bind keys="ctrl+f" action="search_open"/>
     <!-- Plan <-> build. The composer does not take shift+tab, and a legacy
          terminal sends it as one key (CSI Z), so the row fires with or
          without the kitty keyboard protocol. -->
@@ -422,6 +438,10 @@
           <text class="la-helpcmd-desc">load earlier messages</text>
         </row>
         <row class="la-helpcmd">
+          <text class="la-helpkey">^F</text>
+          <text class="la-helpcmd-desc">search this conversation</text>
+        </row>
+        <row class="la-helpcmd">
           <text class="la-helpkey">^Y</text>
           <text class="la-helpcmd-desc">copy the last reply</text>
         </row>
@@ -468,6 +488,23 @@
         </col>
       </scroll>
       <text class="la-muted">pgup/pgdn scroll · home/end top/bottom · esc or q close</text>
+    </modal>
+    <!-- The search box (ctrl+f, /search): an input like the palette's, the
+         count under it and the matching lines as display-only rows the
+         parent moves a choice over (nothing in an each can take focus; the
+         parent sends the window around the choice). The match is the `hit`
+         span: bold and underlined, so it reads without color. Enter opens
+         the chosen match's message in the details viewer below. -->
+    <modal id="search_dialog" class="la-search" open="search.open" title="Search" focus="#search_q" on:escape="search_close">
+      <input id="search_q" class="k-palette-input" bind="search.query" placeholder="find in this conversation…" on:change="search_query" on:submit="search_run"/>
+      <text class="la-muted" wrap="truncate">{search.count}</text>
+      <col class="la-slash-rows" each="search.rows as r" key="r.id">
+        <row class="la-slash-row" class:sel="r.sel">
+          <text class="la-slash-mark">{r.mark}</text>
+          <text class="la-search-line" runs="r.runs" wrap="truncate"/>
+        </row>
+      </col>
+      <text class="la-muted">up/down choose · enter opens · esc close</text>
     </modal>
     <!-- The read-only panel: /status and /mcp as wrapped lines, /sessions
          as picker rows (panel.rows; the parent moves the choice, nothing

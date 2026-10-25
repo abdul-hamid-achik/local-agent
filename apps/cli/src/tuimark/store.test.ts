@@ -31,6 +31,7 @@ import {
   noDetails,
   noPanel,
   noQuestion,
+  noSearch,
   panelState,
   previewRows,
   previewWidth,
@@ -163,6 +164,7 @@ test("the initial store has every path the document reads", () => {
       "placeholder",
       "question",
       "running",
+      "search",
       "slash",
       "status",
       "thinking",
@@ -171,6 +173,13 @@ test("the initial store has every path the document reads", () => {
   expect(store.approval).toEqual(noApproval());
   expect(store.details).toEqual(noDetails());
   expect(store.panel).toEqual(noPanel());
+  expect(store.search).toEqual(noSearch());
+  expect(store.search).toEqual({
+    open: false,
+    query: "",
+    count: "",
+    rows: [],
+  });
   expect(store.question).toEqual(noQuestion());
   expect(NO_DETAILS_STATUS).toBe(
     "No tool output yet. Run something first, then /details",

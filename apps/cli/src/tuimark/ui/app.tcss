@@ -137,6 +137,9 @@ span.think { color: $muted; italic: true; }
 span.com, span.note { color: $com; italic: true; }
 span.rule { color: $muted; }
 span.err { color: $danger; bold: true; }
+/* A search match (search.ts): attributes only, so it shows without color and
+ * on the chosen row's accent. */
+span.hit { bold: true; underline: true; }
 /* The change an edit made, on its card (blocks.ts changeRows). */
 span.add { color: $ok; }
 span.del { color: $danger; }
@@ -220,6 +223,10 @@ span.del { color: $danger; }
  * read-only panel (/status, /mcp, /sessions) is the same box under its
  * own class, so its keys are its own. */
 .la-details, .la-panel { width: 76; max-width: 100%; height: auto; max-height: 100%; padding: 1 2; border: rounded; background: $panel; border-color: $accent; title-color: $accent; }
+
+/* The search box: the palette's look at the details viewer's width. */
+.la-search { width: 76; max-width: 100%; height: auto; max-height: 100%; padding: 0 1; border: rounded; background: $panel; border-color: $accent; title-color: $accent; }
+.la-search-line { width: 1fr; }
 
 .la-diff { max-height: 14; width: 1fr; height: auto; border: single; border-color: $border; scrollbar: auto; }
 /* A very short terminal keeps the diff's last row instead of the grant

@@ -217,6 +217,7 @@ test("each palette row's hint runs the command its label names", () => {
     provider: { providerPanel: true },
     model: { status: "Current model: unknown. Use /model NAME to switch" },
     find: { status: "Search the saved sessions. Use /find TEXT" },
+    search: { search: "" },
     sessions: { sessions: true },
     "sessions-new": { newSession: true },
     export: { exportTranscript: true, exportFormat: "markdown" },
@@ -339,6 +340,7 @@ test("the slash catalog lists exactly the commands the parser knows", () => {
     "/new",
     "/recover",
     "/find",
+    "/search",
     "/export",
     "/mcp",
     "/goal",
@@ -397,6 +399,7 @@ test("the slash catalog lists exactly the commands the parser knows", () => {
     "/new",
     "/recover [N outcome]",
     "/find TEXT",
+    "/search [TEXT]",
     "/export [json]",
     "/mcp",
     "/goal [OBJECTIVE|stop]",
@@ -446,12 +449,35 @@ test("/status, /sessions and /export ask the controller for their panels and fil
     "/sandbox",
     "/status",
     "/sessions",
+    "/search",
   ]);
   expect(slashMatches("/e")?.map((c) => c.name)).toEqual(["/export"]);
   expect(filterPalette("status").map((r) => r.id)).toEqual(["status"]);
   expect(paletteCommand("status")).toBe("/status");
   expect(paletteCommand("sessions")).toBe("/sessions");
   expect(paletteCommand("export")).toBe("/export");
+});
+
+test("/search asks the controller to search this conversation, with its text or without", () => {
+  // No text: the box opens empty (fullscreen), or inline says what it takes.
+  expect(runSlash("/search", state)).toEqual({
+    status: "Search this conversation",
+    search: "",
+  });
+  // The text is whole and as typed, trimmed at its ends; any case of the name.
+  expect(runSlash("/search  retry   loop ", state)).toEqual({
+    status: "Searching for retry   loop…",
+    search: "retry   loop",
+  });
+  expect(runSlash("/SEARCH Foo", state).search).toBe("Foo");
+  // It is a command of its own, not /find (the saved sessions).
+  expect(runSlash("/search x", state).find).toBeUndefined();
+  expect(runSlash("/find x", state).search).toBeUndefined();
+  expect(runSlash("/searching", state).unknown).toBe(true);
+  expect(HELP_STATUS).toContain("/search TEXT");
+  expect(paletteCommand("search")).toBe("/search");
+  expect(filterPalette("search").map((r) => r.id)).toEqual(["search"]);
+  expect(slashMatches("/sea")?.map((c) => c.name)).toEqual(["/search"]);
 });
 
 test("/export json and /find parse their arguments", () => {

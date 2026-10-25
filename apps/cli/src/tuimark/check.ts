@@ -24,6 +24,7 @@ import {
   INLINE_SAMPLES,
   LONG_DRAFT,
   SAMPLES,
+  searchNotice,
   WRAPPED_LINE,
 } from "#cli/tuimark/fixtures";
 import { resolvePinned } from "#cli/tuimark/launch";
@@ -718,6 +719,42 @@ for (const d of extraDumps) {
       failures.push(`dump palette dark: the kit's ${kits} is painted`);
 }
 
+// A search match is emphasised by attributes alone: the text goldens cannot
+// see it, and with NO_COLOR the engine paints no color, so a match that only
+// changed color would vanish. The span under the match is bold and underlined.
+{
+  const json = parsed(
+    tuimark([
+      "dump",
+      "app.tui",
+      "--data",
+      "samples/sample-search.json",
+      "--cols",
+      "80",
+      "--rows",
+      String(rows),
+      "--styles",
+      "--format",
+      "json",
+    ]).out,
+  ) as {
+    grid: string[];
+    styles: { x: number; w: number; a?: string[] }[][];
+    errors: unknown[];
+  };
+  if (json.errors.length > 0)
+    failures.push(`dump search styles: ${JSON.stringify(json.errors)}`);
+  const row = json.grid.findIndex((line) => line.includes("2 Assistant · "));
+  const at = json.grid[row]?.indexOf("retry") ?? -1;
+  const span = json.styles[row]?.find(
+    (s) => at >= s.x && at < s.x + s.w && s.w === "retry".length,
+  );
+  if (!span?.a?.includes("bold") || !span.a.includes("underline"))
+    failures.push(
+      `dump search styles: the match is not bold and underlined (${JSON.stringify(span)})`,
+    );
+}
+
 // A named theme is a generated copy of the document that loads one more sheet
 // (themes.ts); themes.test.ts reads the sheets, this proves the host loads
 // each one. Pinned to dark as launch.ts pins it, every color either document
@@ -1217,6 +1254,14 @@ const plays: Expect[] = [
       "cancel the turn, and a running goal",
     ],
   },
+  // The help names the search, as a command and as a key.
+  {
+    sample: "sample-help",
+    rows: 31,
+    input: "pgdn",
+    actions: [],
+    screen: ["/search [TEXT]", "^F", "search this conversation"],
+  },
   { sample: "sample-help", input: "q", actions: ["help_close"] },
   { sample: "sample-help", input: "esc", actions: ["help_close"] },
   // A short terminal scrolls the commands and the keys together: the last
@@ -1439,6 +1484,76 @@ const plays: Expect[] = [
   { sample: "sample-sessions", input: "esc", actions: ["panel_close"] },
   { sample: "sample-sessions", input: "q", actions: ["panel_close"] },
   { sample: "sample-sessions", input: "ctrl+c", actions: ["quit_request"] },
+
+  // The search box (ctrl+f): reachable from the composer, and while it is
+  // open the arrows (and ctrl+n/ctrl+p, which are not the palette here)
+  // move the parent's choice with the input keeping focus; typing reaches
+  // the parent; enter opens the match in the viewer; esc closes the box.
+  { sample: "sample", input: "ctrl+f", actions: ["search_open"] },
+  {
+    sample: "sample-search",
+    input: "",
+    actions: [],
+    screen: [
+      "Search",
+      "retry",
+      "3 of 4 matches · 3 messages",
+      "  1 You · Add a retry to the fetch helper",
+      "› 2 Assistant · ",
+      "  3 Edit · ",
+      "up/down choose · enter opens · esc close",
+    ],
+  },
+  { sample: "sample-search", input: "down", actions: ["search_next"] },
+  { sample: "sample-search", input: "ctrl+n", actions: ["search_next"] },
+  { sample: "sample-search", input: "up", actions: ["search_prev"] },
+  { sample: "sample-search", input: "ctrl+p", actions: ["search_prev"] },
+  { sample: "sample-search", input: "enter", actions: ["search_run"] },
+  { sample: "sample-search", input: "esc", actions: ["search_close"] },
+  { sample: "sample-search", input: "ctrl+c", actions: ["quit_request"] },
+  {
+    sample: "sample-search",
+    input: "text:s",
+    actions: ["search_query"],
+    value: "retrys",
+  },
+  // Letters are the input's, not the viewer's: n and p mean nothing here.
+  {
+    sample: "sample-search",
+    input: "text:np",
+    actions: ["search_query"],
+    value: "retrynp",
+  },
+  {
+    sample: "sample-search-none",
+    input: "",
+    actions: [],
+    screen: ["No matches"],
+    notScreen: ["› "],
+  },
+  // The viewer over a match: n and p step through the matches, esc and q
+  // go back (the parent returns to the box), the scroll keys are the
+  // details viewer's.
+  {
+    sample: "sample-search-viewer",
+    input: "",
+    actions: [],
+    screen: [
+      "Message 2 · Assistant",
+      "match 3 of 4 · n next · p previous · esc back",
+      "· Sure. I will wrap the call in a bounded retry with backoff:",
+      "› export async function fetchRetry(url, tries = 3) {",
+    ],
+  },
+  { sample: "sample-search-viewer", input: "n", actions: ["search_next"] },
+  { sample: "sample-search-viewer", input: "p", actions: ["search_prev"] },
+  { sample: "sample-search-viewer", input: "q", actions: ["details_close"] },
+  { sample: "sample-search-viewer", input: "esc", actions: ["details_close"] },
+  {
+    sample: "sample-search-viewer",
+    input: "ctrl+c",
+    actions: ["quit_request"],
+  },
 
   // ---------------------------------------------------------- the inline doc
   {
@@ -2015,6 +2130,29 @@ const plays: Expect[] = [
     ],
     notScrollback: ["waiting for the model", "Type to queue a message"],
     scrollbackGolden: "inline-commit-80.txt",
+  },
+  // /search inline: the matches are one notice printed into the scrollback
+  // (there is no box and no viewport to jump in); the region stays as it was.
+  {
+    sample: "inline-sample",
+    doc: "inline.tui",
+    inline: true,
+    rows: 30,
+    input: "",
+    steps: [
+      { set: { path: "commit_buf", value: searchNotice() } },
+      { commit: { template: "la-turn", with: "commit_buf as msg" } },
+    ],
+    actions: [],
+    screen: ["Message the model"],
+    scrollback: [
+      "Notice",
+      'Search "retry" · 4 matches in 3 messages',
+      "1 You · Add a retry to the fetch helper and show me the result.",
+      "2 Assistant · …the call in a bounded retry with backoff:",
+      "3 Edit · …get = (url) => fetchRetry(url);",
+    ],
+    scrollbackGolden: "inline-search-commit-80.txt",
   },
   // A cleared buffer commits nothing.
   {

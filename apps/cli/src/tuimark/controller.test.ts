@@ -2922,6 +2922,7 @@ test("typing / opens the command popup; it filters, moves and completes", async 
     "/new",
     "/recover",
     "/find",
+    "/search",
     "/export",
     "/mcp",
     "/goal",
@@ -3140,6 +3141,7 @@ test("the help overlay's store carries the slash commands", () => {
     "/new",
     "/recover [N outcome]",
     "/find TEXT",
+    "/search [TEXT]",
     "/export [json]",
     "/mcp",
     "/goal [OBJECTIVE|stop]",
@@ -8299,4 +8301,266 @@ test("/model shows the typed name cleaned: no escape sequence reaches the status
     statuses.filter((s) => s.includes("\x1b") || s.includes("\x07")),
   ).toEqual([]);
   expect(store(ui).status).toBe("Model changed to red");
+});
+
+// ------------------------------------------------------------------ the search
+
+/** Two exchanges with "retry" in three of the four messages (the reply spans two lines). */
+async function talkAboutRetries(ui: FakeHost, client: TuimarkClient) {
+  await ui.fire("send", "Fix the Retry loop");
+  await client.idle();
+  await ui.fire("send", "and explain it");
+  await client.idle();
+}
+const retryReply = reply("The retry loop backs off.\nEach retry waits longer.");
+
+/** Types into the box as the engine's input would: it writes the bound field, then fires. */
+async function typeSearch(ui: FakeHost, query: string) {
+  store(ui).search.query = query;
+  await ui.fire("search_query", query);
+}
+
+const searchRowsText = (ui: FakeHost) =>
+  store(ui).search.rows.map((row) => `${row.mark || " "}${runsText(row.runs)}`);
+
+test("ctrl+f opens the search box over this conversation, empty, and esc closes it", async () => {
+  const { ui, client } = setup(retryReply);
+  await talkAboutRetries(ui, client);
+  await ui.fire("search_open");
+  expect(store(ui).search).toMatchObject({
+    open: true,
+    query: "",
+    count: "Type to search this conversation",
+    rows: [],
+  });
+  expect(store(ui).status).toBe(
+    "Search · up/down choose · enter opens · esc closes",
+  );
+  await ui.fire("search_close");
+  expect(store(ui).search.open).toBe(false);
+  expect(store(ui).status).toBe("build · last <1s");
+  expect(client.writeErrors).toEqual([]);
+});
+
+test("typing in the box lists the matching lines with their message number, case-insensitively", async () => {
+  const { ui, client } = setup(retryReply);
+  await talkAboutRetries(ui, client);
+  await ui.fire("search_open");
+  await typeSearch(ui, "RETRY");
+  // Message 1 is the first ask, 2 its reply (two lines), 3 the second ask
+  // (no match) and 4 the second reply (two lines again).
+  expect(store(ui).search.count).toBe("1 of 5 matches · 3 messages");
+  expect(searchRowsText(ui)).toEqual([
+    "›1 You · Fix the Retry loop",
+    " 2 Assistant · The retry loop backs off.",
+    " 2 Assistant · Each retry waits longer.",
+    " 4 Assistant · The retry loop backs off.",
+    " 4 Assistant · Each retry waits longer.",
+  ]);
+  // The match is emphasised, as written in the message.
+  expect(store(ui).search.rows[0]?.runs).toContainEqual({
+    text: "Retry",
+    class: "hit",
+  });
+  // A query nothing matches says so and lists nothing.
+  await typeSearch(ui, "kubernetes");
+  expect(store(ui).search.count).toBe("No matches");
+  expect(store(ui).search.rows).toEqual([]);
+  expect(client.writeErrors).toEqual([]);
+});
+
+test("next and previous move the choice, wrapping round, and the count follows", async () => {
+  const { ui, client } = setup(retryReply);
+  await talkAboutRetries(ui, client);
+  await ui.fire("search_open");
+  await typeSearch(ui, "retry");
+  await ui.fire("search_next");
+  expect(store(ui).search.count).toMatch(/^2 of 5 matches/);
+  expect(store(ui).search.rows.findIndex((row) => row.sel)).toBe(1);
+  await ui.fire("search_prev");
+  await ui.fire("search_prev");
+  // Before the first is the last.
+  expect(store(ui).search.count).toMatch(/^5 of 5 matches/);
+  expect(store(ui).search.rows.at(-1)).toMatchObject({ sel: true, mark: "›" });
+  await ui.fire("search_next");
+  expect(store(ui).search.count).toMatch(/^1 of 5 matches/);
+  // The query the engine wrote is never overwritten by the client.
+  expect(store(ui).search.query).toBe("retry");
+  expect(ui.batches.flat().some((w) => w.path === "search.query")).toBe(false);
+});
+
+test("enter opens the chosen match's message in the viewer, n and p step through, esc returns to the box", async () => {
+  const { ui, client } = setup(retryReply);
+  await talkAboutRetries(ui, client);
+  await ui.fire("search_open");
+  await typeSearch(ui, "retry");
+  await ui.fire("search_next");
+  await ui.fire("search_run");
+  const s = store(ui);
+  expect(s.search.open).toBe(false);
+  expect(s.details.open).toBe(true);
+  expect(s.details.title).toBe("Message 2 · Assistant");
+  expect(s.details.args).toContain("match 2 of 5");
+  expect(s.status).toBe("Match 2 of 5 · n next · p previous · esc back");
+  // The chosen line is marked, the message's other matching line too.
+  expect(s.details.lines.map((line) => line.t)).toEqual([
+    "› The retry loop backs off.",
+    "· Each retry waits longer.",
+  ]);
+  // n is the next match: the same message's other line, then the next message.
+  await ui.fire("search_next");
+  expect(store(ui).details.title).toBe("Message 2 · Assistant");
+  expect(store(ui).details.lines.map((line) => line.t[0])).toEqual(["·", "›"]);
+  await ui.fire("search_next");
+  expect(store(ui).details.title).toBe("Message 4 · Assistant");
+  // p goes back, and wraps before the first.
+  await ui.fire("search_prev");
+  await ui.fire("search_prev");
+  await ui.fire("search_prev");
+  expect(store(ui).details.title).toBe("Message 1 · You");
+  expect(store(ui).details.args).toContain("match 1 of 5");
+  await ui.fire("search_prev");
+  expect(store(ui).details.title).toBe("Message 4 · Assistant");
+  await ui.fire("search_next");
+  // Esc goes back to the box on the match it was showing, query kept.
+  await ui.fire("details_close");
+  expect(store(ui).details.open).toBe(false);
+  expect(store(ui).search).toMatchObject({ open: true, query: "retry" });
+  expect(store(ui).search.count).toMatch(/^1 of 5 matches/);
+  expect(store(ui).status).toBe(
+    "Search · up/down choose · enter opens · esc closes",
+  );
+  // And esc there closes it for good.
+  await ui.fire("search_close");
+  expect(store(ui).search.open).toBe(false);
+  await ui.fire("details_close");
+  expect(store(ui).details.open).toBe(false);
+  expect(client.writeErrors).toEqual([]);
+});
+
+test("enter on a box with no match opens nothing", async () => {
+  const { ui, client } = setup(retryReply);
+  await talkAboutRetries(ui, client);
+  await ui.fire("search_open");
+  await ui.fire("search_run");
+  await typeSearch(ui, "kubernetes");
+  await ui.fire("search_run");
+  expect(store(ui).details.open).toBe(false);
+  expect(store(ui).search.open).toBe(true);
+});
+
+test("a resize re-wraps the viewer over a match", async () => {
+  let cols = 100;
+  const { ui, client } = setup(reply(`needle ${"word ".repeat(40)}`), {
+    columns: () => cols,
+  });
+  await ui.fire("send", "go");
+  await client.idle();
+  await ui.fire("search_open");
+  await typeSearch(ui, "needle");
+  await ui.fire("search_run");
+  const wide = store(ui).details.lines.length;
+  cols = 40;
+  await client.resize();
+  expect(store(ui).details.lines.length).toBeGreaterThan(wide);
+  expect(store(ui).details.open).toBe(true);
+});
+
+test("/search TEXT opens the box on that text and clears the line, /search alone opens it empty", async () => {
+  const { ui, client } = setup(retryReply);
+  await talkAboutRetries(ui, client);
+  store(ui).draft = "/search retry";
+  await ui.fire("send", "/search retry");
+  expect(store(ui).draft).toBe("");
+  expect(store(ui).search).toMatchObject({ open: true, query: "retry" });
+  expect(store(ui).search.count).toMatch(/^1 of 5 matches/);
+  await ui.fire("search_close");
+  await ui.fire("send", "/search");
+  expect(store(ui).search).toMatchObject({ open: true, query: "" });
+  // A command is never a message: the model heard nothing.
+  expect(store(ui).messages.filter((m) => m.is_user)).toHaveLength(2);
+});
+
+test("searching changes nothing in the conversation: no message, notice or export line", async () => {
+  const { ui, client } = setup(retryReply);
+  await talkAboutRetries(ui, client);
+  const before = JSON.stringify(store(ui).messages);
+  await ui.fire("search_open");
+  await typeSearch(ui, "retry");
+  await ui.fire("search_run");
+  await ui.fire("details_close");
+  await ui.fire("search_close");
+  expect(JSON.stringify(store(ui).messages)).toBe(before);
+});
+
+test("the box is refused while a turn runs", async () => {
+  let release: () => void = () => {};
+  const gate = new Promise<void>((r) => {
+    release = r;
+  });
+  const { ui, client } = setup(
+    quiet(async () => {
+      await gate;
+    }),
+  );
+  await ui.fire("send", "slow");
+  await ui.fire("search_open");
+  expect(store(ui).search.open).toBe(false);
+  expect(store(ui).status).toBe(BUSY_STATUS);
+  await ui.fire("send", "/search x");
+  expect(store(ui).search.open).toBe(false);
+  release();
+  await client.idle();
+});
+
+test("it opens over nothing else: an open viewer or panel gives way", async () => {
+  const { ui, client } = setup(toolScript(LONG_OUTPUT));
+  await ui.fire("send", "read it");
+  await client.idle();
+  await ui.fire("send", "/details");
+  expect(store(ui).details.open).toBe(true);
+  await ui.fire("search_open");
+  expect(store(ui).details.open).toBe(false);
+  expect(store(ui).search.open).toBe(true);
+  await ui.fire("search_close");
+  await ui.fire("send", "/status");
+  expect(store(ui).panel.open).toBe(true);
+  await ui.fire("search_open");
+  expect(store(ui).panel.open).toBe(false);
+  // Tool cards are searched by what they show: the path and the output.
+  await typeSearch(ui, "src/big");
+  expect(searchRowsText(ui)[0]).toContain("Read");
+});
+
+test("inline: /search TEXT prints the matches into the scrollback as a notice, and nothing joins the conversation", async () => {
+  const { ui, client } = setup(retryReply, inline);
+  await talkAboutRetries(ui, client);
+  const before = printed(ui).length;
+  await ui.fire("send", "/search RETRY");
+  const out = printed(ui).slice(before);
+  expect(out).toHaveLength(1);
+  expect(out[0]).toMatch(/^Notice: Search "RETRY" · 5 matches in 3 messages\n/);
+  expect(out[0]).toContain("1 You · Fix the Retry loop");
+  expect(out[0]).toContain("2 Assistant · Each retry waits longer.");
+  expect(store(ui).status).toBe("5 matches printed above");
+  // No box, no viewer: inline has no viewport to jump in.
+  expect(store(ui).search.open).toBe(false);
+  expect(store(ui).details.open).toBe(false);
+  await ui.fire("send", "/search kubernetes");
+  expect(store(ui).status).toBe('No matches for "kubernetes"');
+  // Printing is not a message: a second search does not find the first print.
+  await ui.fire("send", "/search Search");
+  expect(store(ui).status).toBe('No matches for "Search"');
+});
+
+test("inline: /search alone says what it takes, and ctrl+f prints nothing", async () => {
+  const { ui, client } = setup(retryReply, inline);
+  await talkAboutRetries(ui, client);
+  const before = printed(ui).length;
+  await ui.fire("send", "/search");
+  expect(store(ui).status).toBe("/search TEXT prints the matches above");
+  expect(printed(ui)).toHaveLength(before);
+  await ui.fire("search_open");
+  expect(printed(ui)).toHaveLength(before);
+  expect(store(ui).search.open).toBe(false);
 });

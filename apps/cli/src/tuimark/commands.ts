@@ -107,6 +107,12 @@ export interface CommandOutcome {
    */
   find?: string;
   /**
+   * Set by `/search [TEXT]`: the text, "" for none. The controller searches
+   * the current conversation's messages: the box fullscreen (open on the
+   * text), a printed block inline.
+   */
+  search?: string;
+  /**
    * Set by `/copy` ("reply": the last assistant reply's markdown) and
    * `/copy code` ("code": its last fenced code block). The controller owns
    * the history and the clipboard, so it writes the real status itself.
@@ -122,7 +128,7 @@ export interface CommandOutcome {
 }
 
 export const HELP_STATUS =
-  "/mode plan|build|chat · /model [NAME] · /theme dark|light|auto · /mouse on|off · /copy [code] · /compact · /permissions [clear|trust] · /sandbox on|off · /details [N] · /diff · /status · /sessions · /new · /clear · /recover · /find TEXT · /export [json] · /mcp · /goal OBJECTIVE · /help · esc cancel · ctrl+c exit";
+  "/mode plan|build|chat · /model [NAME] · /theme dark|light|auto · /mouse on|off · /copy [code] · /compact · /permissions [clear|trust] · /sandbox on|off · /details [N] · /diff · /status · /sessions · /new · /clear · /recover · /find TEXT · /search TEXT · /export [json] · /mcp · /goal OBJECTIVE · /help · esc cancel · ctrl+c exit";
 
 /** Inline has no mouse (the engine ignores it there): the controller refuses with this. */
 export const MOUSE_INLINE_STATUS = "Mouse is not available in inline mode";
@@ -312,6 +318,14 @@ export function runSlash(text: string, state: CommandState): CommandOutcome {
     if (!query) return { status: "Search the saved sessions. Use /find TEXT" };
     return { status: `Searching sessions for ${query}…`, find: query };
   }
+  const search = command.match(/^\/search(?:\s+(.+?))?\s*$/i);
+  if (search) {
+    const query = search[1]?.trim() ?? "";
+    return {
+      status: query ? `Searching for ${query}…` : "Search this conversation",
+      search: query,
+    };
+  }
   const recover = command.match(
     /^\/recover(?:\s+(\S+)(?:\s+(\S+))?(?:\s+(.+?))?)?\s*$/i,
   );
@@ -499,6 +513,12 @@ export const SLASH_COMMANDS: readonly SlashCommand[] = [
     insert: "/find ",
   },
   {
+    name: "/search",
+    usage: "/search [TEXT]",
+    description: "find text in this conversation",
+    insert: "/search ",
+  },
+  {
     name: "/export",
     usage: "/export [json]",
     description: "write the conversation to a markdown or JSON file",
@@ -629,6 +649,7 @@ export const PALETTE: readonly PaletteItem[] = [
   { id: "provider", label: "Provider: check the endpoint", hint: "/provider" },
   { id: "model", label: "Model: show current", hint: "/model" },
   { id: "find", label: "Find in saved sessions", hint: "/find" },
+  { id: "search", label: "Search this conversation", hint: "/search" },
   { id: "sessions", label: "Sessions: switch session", hint: "/sessions" },
   {
     id: "sessions-new",

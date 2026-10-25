@@ -19,13 +19,13 @@
 │ │   import { sleep }│  /new start a new session; the old one stays saved (--session-db)        │                   │ ┃
 │ │ - export const get│  /recover [N outcome] review calls whose outcome is unknown              │                   │ ┃
 │ │ + export const get│  /find TEXT search saved session messages (needs --session-db)           │                   │ ┃
-│ ╰───────────────────│  /export [json] write the conversation to a markdown or JSON file        │───────────────────╯ ┃
-│                     │  /mcp show connected MCP servers and their tools                         │                     ┃
-│ Assistant           │  /goal [OBJECTIVE|stop] run turns toward an objective until done or a …  │                     ┃
-│ Done. The helper now│  Keys                                                                    │                     ┃
-│                     │  enter       send · shift/alt+enter new line                             │                     ┃
-└─────────────────────│  shift-drag  select text (mouse reporting is on)                         │─────────────────────┘
-╭─────────────────────│  ^P          commands                                                    │─────────────────────╮
-│ Message the model   │  esc         cancel the turn, and a running goal                         │                     │
-╰─────────────────────│  ctrl+c      clear the draft, cancel, then quit                          │─────────────────────╯
+│ ╰───────────────────│  /search [TEXT] find text in this conversation                           │───────────────────╯ ┃
+│                     │  /export [json] write the conversation to a markdown or JSON file        │                     ┃
+│ Assistant           │  /mcp show connected MCP servers and their tools                         │                     ┃
+│ Done. The helper now│  /goal [OBJECTIVE|stop] run turns toward an objective until done or a …  │                     ┃
+│                     │  Keys                                                                    │                     ┃
+└─────────────────────│  enter       send · shift/alt+enter new line                             │─────────────────────┘
+╭─────────────────────│  shift-drag  select text (mouse reporting is on)                         │─────────────────────╮
+│ Message the model   │  ^P          commands                                                    │                     │
+╰─────────────────────│  esc         cancel the turn, and a running goal                         │─────────────────────╯
  build · last 1m 06s ·╰──────────────────────────────────────────────────────────────────────────╯                      

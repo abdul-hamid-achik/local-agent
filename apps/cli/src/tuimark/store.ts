@@ -24,6 +24,7 @@ import {
   type MessageView,
   mcpParts,
   NO_CARD,
+  type Run,
   type ThinkingView,
   type ToolReceipt,
 } from "#cli/tuimark/blocks";
@@ -207,6 +208,31 @@ export interface PanelState {
   picking: boolean;
 }
 
+/** One row of the `/search` list: a matching line and the selection flag. */
+export interface SearchRow {
+  /** The hit's index, also the row key. */
+  id: string;
+  sel: boolean;
+  /** "›" on the chosen row, "" on the rest (selection must read as text). */
+  mark: string;
+  /** "<n> <who> · <the line>", the match in the `hit` class. */
+  runs: Run[];
+}
+
+/**
+ * The `/search` box (ctrl+f): a modal over the current conversation's
+ * messages, the query typed into its input (`query`, written by the engine)
+ * and the matching lines under it. The parent owns every other field.
+ */
+export interface SearchState {
+  open: boolean;
+  query: string;
+  /** "2 of 7 matches · 3 messages", or what to do when there are none. */
+  count: string;
+  /** The window of matching lines around the chosen one. */
+  rows: SearchRow[];
+}
+
 export interface ApprovalState {
   open: boolean;
   title: string;
@@ -372,6 +398,8 @@ export interface Store {
    * picker: a modal fullscreen, an in-flow block inline, like `details`.
    */
   panel: PanelState;
+  /** The `/search` box (see SearchState): a modal fullscreen. */
+  search: SearchState;
   palette: { open: boolean; query: string; cur: string };
   found: { any: boolean; items: PaletteItem[] };
   /**
@@ -552,6 +580,10 @@ export function providerLabel(
 
 export function noDetails(): DetailsState {
   return { open: false, title: "", args: "", lines: [] };
+}
+
+export function noSearch(): SearchState {
+  return { open: false, query: "", count: "", rows: [] };
 }
 
 export function noPanel(): PanelState {
@@ -783,6 +815,7 @@ export function initialStore(init: StoreInit): Store {
     question: noQuestion(),
     details: noDetails(),
     panel: noPanel(),
+    search: noSearch(),
     palette: { open: false, query: "", cur: found[0]?.id ?? "" },
     found: { any: found.length > 0, items: found },
     slash: { open: false, rows: [] },

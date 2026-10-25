@@ -2135,6 +2135,18 @@ export class ViewBuilder {
     return this.quoted("notice", text);
   }
 
+  /**
+   * A UI-local notice of ready-made runs, one paragraph per line (a printed
+   * search: the matches carry their own marks). Like `notice`, a view only.
+   */
+  noticeLines(lines: readonly Run[][]): MessageView {
+    return view(
+      this.id(),
+      "notice",
+      lines.map((runs, i) => block(`p${i}`, { para: true }, runs)),
+    );
+  }
+
   /** A UI-local error: a failed turn's full error, as a notice labelled Error. */
   error(text: string): MessageView {
     return this.quoted("error", text);

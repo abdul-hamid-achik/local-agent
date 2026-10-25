@@ -19,6 +19,7 @@
                       │  /new start a new session; the old one stays saved (--session-db)        │                      
                       │  /recover [N outcome] review calls whose outcome is unknown              │                      
                       │  /find TEXT search saved session messages (needs --session-db)           │                      
+                      │  /search [TEXT] find text in this conversation                           │                      
                       │  /export [json] write the conversation to a markdown or JSON file        │                      
                       │  /mcp show connected MCP servers and their tools                         │                      
                       │  /goal [OBJECTIVE|stop] run turns toward an objective until done or a …  │                      
@@ -27,5 +28,4 @@
                       │  shift-drag  select text (mouse reporting is on)                         │                      
                       │  ^P          commands                                                    │                      
                       │  esc         cancel the turn, and a running goal                         │                      
-                      │  ctrl+c      clear the draft, cancel, then quit                          │                      
                       ╰──────────────────────────────────────────────────────────────────────────╯                      

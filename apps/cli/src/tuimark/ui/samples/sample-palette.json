@@ -352,6 +352,12 @@
     "rows": [],
     "picking": false
   },
+  "search": {
+    "open": false,
+    "query": "",
+    "count": "",
+    "rows": []
+  },
   "palette": {
     "open": true,
     "query": "mode",
@@ -473,6 +479,11 @@
         "id": "/find",
         "cmd": "/find TEXT",
         "desc": "search saved session messages (needs --session-db)"
+      },
+      {
+        "id": "/search",
+        "cmd": "/search [TEXT]",
+        "desc": "find text in this conversation"
       },
       {
         "id": "/export",

@@ -371,6 +371,12 @@
     ],
     "picking": true
   },
+  "search": {
+    "open": false,
+    "query": "",
+    "count": "",
+    "rows": []
+  },
   "palette": {
     "open": false,
     "query": "",
@@ -478,6 +484,11 @@
         "id": "find",
         "label": "Find in saved sessions",
         "hint": "/find"
+      },
+      {
+        "id": "search",
+        "label": "Search this conversation",
+        "hint": "/search"
       },
       {
         "id": "sessions",
@@ -622,6 +633,11 @@
         "id": "/find",
         "cmd": "/find TEXT",
         "desc": "search saved session messages (needs --session-db)"
+      },
+      {
+        "id": "/search",
+        "cmd": "/search [TEXT]",
+        "desc": "find text in this conversation"
       },
       {
         "id": "/export",

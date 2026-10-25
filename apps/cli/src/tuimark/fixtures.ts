@@ -29,6 +29,13 @@ import {
   slashRows,
 } from "#cli/tuimark/commands";
 import {
+  SEARCH_STATUS,
+  searchBlockLines,
+  searchState,
+  searchViewer,
+  searchViews,
+} from "#cli/tuimark/search";
+import {
   APPROVAL_PLACEHOLDER,
   APPROVAL_STATUS,
   APPROVAL_TRUNCATED_STATUS,
@@ -45,6 +52,7 @@ import {
   PLACEHOLDER,
   PLACEHOLDER_BUSY,
   panelState,
+  previewWidth,
   providerLines,
   QUESTION_CARD_STATUS,
   QUESTION_PLACEHOLDER_CHOICE,
@@ -750,6 +758,43 @@ export function inlineDetailsSample(): Store {
   return store;
 }
 
+/** What the search samples look for: in the user's ask, the reply's code and the last reply. */
+export const SEARCH_QUERY = "retry";
+
+/** The `/search` box (ctrl+f) over the idle conversation, the third match chosen. */
+export function searchSample(): Store {
+  const { store } = base();
+  const result = searchViews(store.messages, SEARCH_QUERY);
+  store.search = searchState(result, 2);
+  store.status = SEARCH_STATUS;
+  return store;
+}
+
+/** A query nothing matches: the box says so and lists nothing. */
+export function searchNoneSample(): Store {
+  const { store } = base();
+  const result = searchViews(store.messages, "kubernetes");
+  store.search = searchState(result, 0);
+  store.status = SEARCH_STATUS;
+  return store;
+}
+
+/** The viewer over a match: the reply's code from a few lines before the match. */
+export function searchViewerSample(): Store {
+  const { store } = base();
+  const result = searchViews(store.messages, SEARCH_QUERY);
+  store.details = searchViewer(result, 2, previewWidth(80));
+  store.status = `Match 3 of ${result.hits.length} · n next · p previous · esc back`;
+  return store;
+}
+
+/** The notice `/search` prints inline, its matches carrying their marks. */
+export function searchNotice(): MessageView {
+  const { store } = base();
+  const result = searchViews(store.messages, SEARCH_QUERY);
+  return new ViewBuilder().noticeLines(searchBlockLines(result));
+}
+
 /** A half-typed command: the `/` popup over the composer, first match chosen. */
 export function slashSample(): Store {
   const { store } = base();
@@ -1404,6 +1449,9 @@ export const SAMPLES = {
   "sample-palette": paletteSample,
   "sample-help": helpSample,
   "sample-details": detailsSample,
+  "sample-search": searchSample,
+  "sample-search-none": searchNoneSample,
+  "sample-search-viewer": searchViewerSample,
   "sample-panel": panelSample,
   "sample-mcp": mcpPanelSample,
   "sample-changes": changesPanelSample,

@@ -130,6 +130,17 @@ import {
   newGoalTurn,
 } from "#cli/tuimark/goal";
 import {
+  SEARCH_INLINE_STATUS,
+  SEARCH_STATUS,
+  type SearchResult,
+  searchBlockLines,
+  searchCount,
+  searchRows,
+  searchState,
+  searchViewer,
+  searchViews,
+} from "#cli/tuimark/search";
+import {
   APPROVAL_PLACEHOLDER,
   APPROVAL_SANDBOX_SESSION_STATUS,
   APPROVAL_TRUNCATED_ALWAYS_STATUS,
@@ -166,11 +177,13 @@ import {
   noDetails,
   noPanel,
   noQuestion,
+  noSearch,
   PLACEHOLDER,
   PLACEHOLDER_BUSY,
   PROVIDER_CHECKING_STATUS,
   PROVIDER_NO_ANSWER_STATUS,
   panelState,
+  previewWidth,
   providerLines,
   QUESTION_CARD_STATUS,
   QUESTION_CHOOSE_STATUS,
@@ -623,6 +636,11 @@ export class TuimarkClient {
   private panelSessions: SessionSummary[] = [];
   /** The picker's chosen row, an index into `panelSessions`. */
   private panelSel = 0;
+  /**
+   * The open `/search` box: the matches of its query, the chosen one, and
+   * whether the viewer (the details modal) shows that match's message.
+   */
+  private search?: { result: SearchResult; sel: number; reading: boolean };
   /** MCP servers are still connecting (see ClientOptions.mcpReady). */
   private mcpPending: boolean;
   /** The model is still being checked (see ClientOptions.admission). */
@@ -936,6 +954,12 @@ export class TuimarkClient {
     ui.on("panel_next", () => this.panelMove(1));
     ui.on("panel_prev", () => this.panelMove(-1));
     ui.on("panel_run", () => this.panelRun());
+    ui.on("search_open", () => this.searchConversation(""));
+    ui.on("search_query", (ev) => this.searchQueryChanged(ev));
+    ui.on("search_next", () => this.searchMove(1));
+    ui.on("search_prev", () => this.searchMove(-1));
+    ui.on("search_run", () => this.searchRead());
+    ui.on("search_close", () => this.closeSearch());
     void this.options.mcpReady?.then((failed) => this.mcpSettled(failed));
     void this.options.admission?.then(
       (provider) => this.modelChecked(provider),
@@ -1052,6 +1076,7 @@ export class TuimarkClient {
         path: "details",
         value: this.detailsFor(this.shownReceipt),
       });
+    else if (this.search?.reading) writes.push(this.searchViewerWrite());
     if (this.panelOpen && this.panelText)
       writes.push({ path: "panel", value: this.panelFor(this.panelText) });
     if (writes.length > 0) await this.write(writes);
@@ -1077,14 +1102,28 @@ export class TuimarkClient {
     if (!this.detailsOpen) return [];
     this.detailsOpen = false;
     this.shownReceipt = undefined;
+    // The viewer over a search match goes with the search it belongs to.
+    if (this.search?.reading) this.search = undefined;
     return [{ path: "details", value: noDetails() }];
   }
 
-  /** Esc/q in the viewer: it closes and the status rests at idle again. */
+  /**
+   * Esc/q in the viewer: it closes and the status rests at idle again. Over
+   * a search match it goes back to the box, on the match it was showing.
+   */
   private async closeDetails(): Promise<void> {
+    const back = this.search?.reading ? this.search : undefined;
     const writes = this.closeDetailsWrite();
     if (writes.length === 0) return;
-    writes.push({ path: "status", value: this.idleText() });
+    if (back) {
+      back.reading = false;
+      this.search = back;
+      writes.push(
+        { path: "search.open", value: true },
+        ...this.searchWrites(),
+        { path: "status", value: SEARCH_STATUS },
+      );
+    } else writes.push({ path: "status", value: this.idleText() });
     await this.write(writes);
   }
 
@@ -1995,6 +2034,140 @@ export class TuimarkClient {
       text,
       `${hits.length} session${hits.length === 1 ? "" : "s"} match "${cleanText(query)}"`,
     );
+  }
+
+  // ------------------------------------------------------------------ the search
+
+  /**
+   * `/search [TEXT]` and ctrl+f: the box over this conversation's messages,
+   * open on TEXT. Inline there is no box and no viewport to jump in (the
+   * terminal's scrollback is the history), so TEXT's matches are printed
+   * there instead. Refused while a turn runs or an approval is open, like
+   * the viewer: they never cover each other.
+   */
+  private async searchConversation(query: string): Promise<void> {
+    if (this.busy || this.proposal || this.switching) {
+      await this.write([{ path: "status", value: BUSY_STATUS }]);
+      return;
+    }
+    const result = searchViews(this.transcript.all(), query);
+    if (this.inline) {
+      await this.printSearch(result);
+      return;
+    }
+    this.search = { result, sel: 0, reading: false };
+    await this.write([
+      ...this.closeDetailsWrite(),
+      ...this.closePanelWrite(),
+      { path: "search", value: searchState(result, 0, query) },
+      { path: "status", value: SEARCH_STATUS },
+    ]);
+  }
+
+  /** Inline: the matches as a notice in the scrollback, never a message of the conversation. */
+  private async printSearch(result: SearchResult): Promise<void> {
+    let status = SEARCH_INLINE_STATUS;
+    if (result.query !== "" && result.hits.length === 0)
+      status = `No matches for "${result.query}"`;
+    else if (result.query !== "") {
+      await this.commitView(this.builder.noticeLines(searchBlockLines(result)));
+      status = `${result.total} match${result.total === 1 ? "" : "es"} printed above`;
+    }
+    await this.write([{ path: "status", value: status }]);
+  }
+
+  /** The input changed: the list is searched again from its first match. */
+  private async searchQueryChanged(ev: HostEvent): Promise<void> {
+    if (!this.search) return;
+    const query = typeof ev.value === "string" ? ev.value : "";
+    this.search = {
+      result: searchViews(this.transcript.all(), query),
+      sel: 0,
+      reading: false,
+    };
+    await this.write(this.searchWrites());
+  }
+
+  /** The count and rows for the current choice (the input is the engine's to write). */
+  private searchWrites(): Write[] {
+    const search = this.search;
+    if (!search) return [];
+    return [
+      {
+        path: "search.count",
+        value: searchCount(search.result, search.sel),
+      },
+      { path: "search.rows", value: searchRows(search.result, search.sel) },
+    ];
+  }
+
+  /** The viewer's store value for the chosen match, wrapped for the terminal's width. */
+  private searchViewerWrite(): Write {
+    const search = this.search;
+    return {
+      path: "details",
+      value: search
+        ? searchViewer(
+            search.result,
+            search.sel,
+            previewWidth(this.options.columns?.() ?? 80),
+          )
+        : noDetails(),
+    };
+  }
+
+  /** Next and previous match (down/up in the box, n/p in the viewer), wrapping round. */
+  private async searchMove(by: number): Promise<void> {
+    const search = this.search;
+    const count = search?.result.hits.length ?? 0;
+    if (!search || count === 0) return;
+    search.sel = (search.sel + by + count) % count;
+    await this.write(
+      search.reading
+        ? [this.searchViewerWrite(), this.searchViewerStatus()]
+        : this.searchWrites(),
+    );
+  }
+
+  private searchViewerStatus(): Write {
+    const hits = this.search?.result.hits.length ?? 0;
+    return {
+      path: "status",
+      value: `Match ${(this.search?.sel ?? 0) + 1} of ${hits} · n next · p previous · esc back`,
+    };
+  }
+
+  /**
+   * Enter in the box: the chosen match's message opens in the details
+   * viewer, from a few lines before the match. (A host document cannot scroll
+   * the transcript to a message: tuimark 0.5.1 has no write that moves a
+   * viewport, and the log holds only the newest messages.)
+   */
+  private async searchRead(): Promise<void> {
+    const search = this.search;
+    if (!search || search.reading || search.result.hits.length === 0) return;
+    search.reading = true;
+    this.detailsOpen = true;
+    await this.write([
+      { path: "search.open", value: false },
+      this.searchViewerWrite(),
+      this.searchViewerStatus(),
+    ]);
+  }
+
+  /** The writes that close the box, or none when it is closed. */
+  private closeSearchWrite(): Write[] {
+    if (!this.search) return [];
+    this.search = undefined;
+    return [{ path: "search", value: noSearch() }];
+  }
+
+  /** Esc in the box: it closes and the status rests at idle again. */
+  private async closeSearch(): Promise<void> {
+    const writes = this.closeSearchWrite();
+    if (writes.length === 0) return;
+    writes.push({ path: "status", value: this.idleText() });
+    await this.write(writes);
   }
 
   private approvalFor(proposal: ApprovalRequest) {
@@ -3337,6 +3510,10 @@ export class TuimarkClient {
     }
     if (outcome.find !== undefined) {
       await this.findSessions(outcome.find);
+      return;
+    }
+    if (outcome.search !== undefined) {
+      await this.searchConversation(outcome.search);
       return;
     }
     if (outcome.goal) {
