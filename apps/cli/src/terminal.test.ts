@@ -707,3 +707,116 @@ test("mode switch changes the Ollama tool catalog", async () => {
     content: "/tmp/a.log is empty",
   });
 });
+
+test("a finished reply keeps its prose on every frame as it leaves the stream", async () => {
+  const root = await mkdtemp(join(tmpdir(), "local-agent-terminal-reply-"));
+  const workspace = await Workspace.create(root);
+  const pieces = [
+    "Here is a **bounded retry** for the helper:\n\n",
+    "```ts\n",
+    "export async function fetchRetry(url, tries = 3) {\n",
+    "  return fetch(url);\n",
+    "}\n",
+    "```\n\n",
+    "## Notes\n",
+    "- stream complete\n",
+  ];
+  const encoder = new TextEncoder();
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch(request) {
+      const path = new URL(request.url).pathname;
+      if (request.method === "GET" && path === "/api/tags")
+        return Response.json({ models: [{ name: "fixture", size: 1000 }] });
+      if (request.method === "POST" && path === "/api/show")
+        return Response.json({
+          capabilities: ["completion", "tools"],
+          model_info: { "fixture.context_length": 16384 },
+        });
+      const lines = [
+        ...pieces.map((content) => ({
+          message: { role: "assistant", content },
+          done: false,
+        })),
+        { message: { role: "assistant", content: "" }, done: true },
+      ];
+      return new Response(
+        new ReadableStream({
+          async start(controller) {
+            for (const line of lines) {
+              controller.enqueue(encoder.encode(`${JSON.stringify(line)}\n`));
+              await Bun.sleep(5);
+            }
+            controller.close();
+          },
+        }),
+        { headers: { "content-type": "application/x-ndjson" } },
+      );
+    },
+  });
+  const terminal = await createTestRenderer({
+    ...terminalOptions("fullscreen"),
+    width: 100,
+    height: 30,
+    kittyKeyboard: true,
+  });
+  const signal = new AbortController();
+  const app = createRenderer(createNodeOps(terminal.renderer)).createApp(
+    createTerminalRoot(
+      {
+        type: "ollama",
+        base_url: server.url.origin,
+        model: "fixture",
+        context_size: 16384,
+      },
+      "fullscreen",
+      signal.signal,
+      workspace,
+      "build",
+    ),
+  );
+  app.provide(rendererInjectionKey, terminal.renderer);
+  app.provide(exitInjectionKey, () => terminal.renderer.destroy());
+  app.mount(terminal.renderer.root);
+  cleanups.push(async () => {
+    signal.abort();
+    app.unmount();
+    terminal.renderer.destroy();
+    server.stop(true);
+    workspace.close();
+    await rm(root, { recursive: true, force: true });
+  });
+
+  await terminal.flush();
+  await terminal.mockInput.pasteBracketedText("go");
+  terminal.mockInput.pressEnter();
+  // Every frame from the stream to the settled reply: the finished message
+  // used to mount anew, and for a frame only its code block was drawn.
+  const frames: string[] = [];
+  await expect
+    .poll(
+      async () => {
+        await terminal.flush();
+        frames.push(terminal.captureCharFrame());
+        const frame = frames.at(-1) ?? "";
+        return (
+          frame.includes("stream complete") && !frame.includes("Generating")
+        );
+      },
+      { interval: 1 },
+    )
+    .toBe(true);
+  for (let i = 0; i < 3; i++) {
+    await terminal.flush();
+    frames.push(terminal.captureCharFrame());
+  }
+  const first = frames.findIndex((frame) => frame.includes("Here is a"));
+  expect(first).toBeGreaterThanOrEqual(0);
+  // The settled frame, after the message landed in the history, has it too.
+  expect(frames.at(-1)).toContain("Here is a bounded retry");
+  const blank = frames
+    .slice(first)
+    .filter((frame) => !frame.includes("Here is a"));
+  expect(blank).toEqual([]);
+});

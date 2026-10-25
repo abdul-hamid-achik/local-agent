@@ -304,10 +304,20 @@ export function createTerminalRoot(
                           ],
                         ),
                       ),
+                      // The reply being written has the key and the layout of
+                      // the history slot it becomes (live is only set during a
+                      // turn, at index history.length), so the finished message
+                      // patches it in place: mounted anew, its prose was blank
+                      // for a frame.
                       live.value
                         ? h(
                             Box,
-                            { flexDirection: "column", marginBottom: 1 },
+                            {
+                              key: `message-${history.value.length}`,
+                              flexDirection: "column",
+                              marginBottom: 1,
+                              flexShrink: 0,
+                            },
                             () => [
                               h(Text, { bold: true }, () => "Assistant"),
                               h(Markdown, {
