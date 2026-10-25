@@ -109,6 +109,10 @@ export class SubagentBatch {
       if (i > 0) out.push("\n");
       out.push(done ? text : { text, class: "note" });
     });
+    // Messages land in call order, so the ones committed are those before
+    // the first still here. Not total - live.length: a reply that mixes task
+    // with an effect runs serially, and a later task is not requested yet.
+    const committed = first.slot.n - 1;
     const finished = live.filter((m) => m.endedAt !== undefined).length;
     return {
       ...base,
@@ -116,7 +120,7 @@ export class SubagentBatch {
         ...base.card,
         title: "Subagents",
         took,
-        args: `${total} subagents · ${total - live.length + finished} done`,
+        args: `${total} subagents · ${committed + finished} done`,
         args_path: false,
         args_line: true,
         out,

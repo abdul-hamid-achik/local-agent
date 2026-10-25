@@ -284,3 +284,20 @@ test("under reduced motion a running subagent card, alone or a group, is still",
     });
   }
 });
+
+test("a reply that runs its task calls one at a time counts only those done", () => {
+  // [task, edit, task] runs serially: the second task is requested only after
+  // the first one's message is committed.
+  const batch = new SubagentBatch();
+  batch.request("t1", taskCall("t1", "first"), { n: 1, total: 2 });
+  batch.start("t1", 0);
+  expect(batch.view(2_000)?.card.args).toBe("2 subagents · 0 done");
+  batch.finish("t1", 3_000, "succeeded");
+  expect(batch.view(3_000)?.card.args).toBe("2 subagents · 1 done");
+  batch.commit("t1");
+  batch.request("t2", taskCall("t2", "second"), { n: 2, total: 2 });
+  batch.start("t2", 4_000);
+  expect(batch.view(5_000)?.card.args).toBe("2 subagents · 1 done");
+  batch.finish("t2", 6_000, "succeeded");
+  expect(batch.view(6_000)?.card.args).toBe("2 subagents · 2 done");
+});
