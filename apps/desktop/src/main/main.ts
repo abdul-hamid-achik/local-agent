@@ -3,7 +3,11 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
-import { TextFileGrants, userMcpConfigPath } from "#desktop/main/file-access";
+import {
+  grantedMcpParams,
+  TextFileGrants,
+  userMcpConfigPath,
+} from "#desktop/main/file-access";
 import { confine, externalUrl } from "#desktop/main/navigation";
 import { providerEnvProblem } from "#desktop/main/provider-env";
 import {
@@ -129,7 +133,7 @@ function openOutside(url: string): void {
 ipcMain.handle("desktop/rpc", (_event, method: string, params?: unknown) => {
   // The client says why it is down (Bun missing, early exit, ...).
   if (!sidecar) throw new Error("Sidecar is not running");
-  return sidecar.invoke(method, params);
+  return sidecar.invoke(method, grantedMcpParams(method, params, textFiles));
 });
 
 ipcMain.handle("desktop/repo-root", () => repoRoot());

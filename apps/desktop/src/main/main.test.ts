@@ -4,6 +4,7 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
   statSync,
   symlinkSync,
@@ -17,7 +18,11 @@ import {
   isExecutableFile,
   resolveBun,
 } from "#desktop/main/bun-path";
-import { TextFileGrants, userMcpConfigPath } from "#desktop/main/file-access";
+import {
+  grantedMcpParams,
+  TextFileGrants,
+  userMcpConfigPath,
+} from "#desktop/main/file-access";
 import {
   type ConfinedContents,
   confine,
@@ -209,6 +214,40 @@ describe("TextFileGrants", () => {
     symlinkSync(key, config);
     expect(() => grants.read(config)).toThrow("Browse");
     expect(() => grants.read(key)).toThrow("Browse");
+  });
+
+  test("an MCP config reaches the sidecar only once granted, as its real path", () => {
+    const picked = join(dir, "picked.json");
+    const typed = join(dir, "typed.json");
+    writeFileSync(picked, "[]");
+    writeFileSync(typed, "[]");
+    const link = join(dir, "picked-link.json");
+    symlinkSync(picked, link);
+    const grants = new TextFileGrants();
+    grants.grant(picked);
+    expect(
+      grantedMcpParams("mcp.status", { configPath: link }, grants),
+    ).toEqual({ configPath: realpathSync(picked) });
+    expect(() =>
+      grantedMcpParams("mcp.status", { configPath: typed }, grants),
+    ).toThrow("Browse");
+    expect(() => grantedMcpParams("mcp.status", {}, grants)).toThrow("path");
+    const start = { runId: "r", mcpConfig: typed };
+    expect(() => grantedMcpParams("agent.start", start, grants)).toThrow(
+      "Browse",
+    );
+    expect(
+      grantedMcpParams(
+        "agent.start",
+        { runId: "r", mcpConfig: picked },
+        grants,
+      ),
+    ).toEqual({ runId: "r", mcpConfig: realpathSync(picked) });
+    // A run without MCP, and any other method, pass as they are.
+    const plain = { runId: "r" };
+    expect(grantedMcpParams("agent.start", plain, grants)).toBe(plain);
+    const read = { path: typed };
+    expect(grantedMcpParams("workspace.read", read, grants)).toBe(read);
   });
 
   test("enforces the 1 MB limit on read and write", () => {

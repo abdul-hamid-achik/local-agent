@@ -1,5 +1,6 @@
 import { readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { extname, isAbsolute, join } from "node:path";
+import { SidecarMethods } from "#desktop/shared/protocol";
 
 export const MAX_TEXT_FILE_BYTES = 1_000_000;
 
@@ -77,6 +78,11 @@ export class TextFileGrants {
     return false;
   }
 
+  /** The real path of a granted file, for a caller that opens it itself. */
+  real(path: unknown): string {
+    return this.resolve(path);
+  }
+
   read(path: unknown): string {
     const real = this.resolve(path);
     // Checked before reading, so an oversized file is never loaded.
@@ -92,4 +98,27 @@ export class TextFileGrants {
     if (Buffer.byteLength(text) > MAX_TEXT_FILE_BYTES) throw new Error(TOO_BIG);
     writeFileSync(real, text);
   }
+}
+
+/**
+ * An MCP config makes the sidecar start the commands it names, so it takes
+ * the editor's grant: a file the user picked, or their own mcp.json. The
+ * params go on with the config's real path; an ungranted one throws.
+ */
+export function grantedMcpParams(
+  method: string,
+  params: unknown,
+  grants: TextFileGrants,
+): unknown {
+  const key =
+    method === SidecarMethods.mcpStatus
+      ? "configPath"
+      : method === SidecarMethods.agentStart
+        ? "mcpConfig"
+        : undefined;
+  if (!key || !params || typeof params !== "object") return params;
+  const path = (params as Record<string, unknown>)[key];
+  // A run without MCP names no config.
+  if (key === "mcpConfig" && (path === undefined || path === "")) return params;
+  return { ...params, [key]: grants.real(path) };
 }
