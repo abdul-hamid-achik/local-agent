@@ -464,25 +464,25 @@ test("shellWord shows an argument as a shell reads it, hidden characters as esca
   // not one, a tab next to a quote, and a tag character outside the BMP.
   expect(shellWord("a\nb")).toBe("$'a\\nb'");
   expect(shellWord("x\u001b[2Ky")).toBe("$'x\\x1b[2Ky'");
-  expect(shellWord("\u202eevil")).toBe("$'\\u202eevil'");
-  expect(shellWord("zero\u200bwidth")).toBe("$'zero\\u200bwidth'");
-  expect(shellWord("nb\u00a0sp")).toBe("$'nb\\u00a0sp'");
+  expect(shellWord("\u202eevil")).toBe("$'\\xe2\\x80\\xaeevil'");
+  expect(shellWord("zero\u200bwidth")).toBe("$'zero\\xe2\\x80\\x8bwidth'");
+  expect(shellWord("nb\u00a0sp")).toBe("$'nb\\xc2\\xa0sp'");
   expect(shellWord("it's\tok\\")).toBe("$'it\\'s\\tok\\\\'");
-  expect(shellWord("\u{e0001}tag")).toBe("$'\\U000e0001tag'");
+  expect(shellWord("\u{e0001}tag")).toBe("$'\\xf3\\xa0\\x80\\x81tag'");
   // Letters and marks that draw nothing: a Hangul filler looks like a
   // space, a variation selector like nothing at all.
-  expect(shellWord("a\u3164b")).toBe("$'a\\u3164b'");
-  expect(shellWord("a\u2800b")).toBe("$'a\\u2800b'");
-  expect(shellWord("x\ufe0f")).toBe("$'x\\ufe0f'");
-  expect(shellWord("a\u034fb")).toBe("$'a\\u034fb'");
-  expect(shellWord("a\ufffcb")).toBe("$'a\\ufffcb'");
-  expect(shellWord("x\u{e0100}")).toBe("$'x\\U000e0100'");
+  expect(shellWord("a\u3164b")).toBe("$'a\\xe3\\x85\\xa4b'");
+  expect(shellWord("a\u2800b")).toBe("$'a\\xe2\\xa0\\x80b'");
+  expect(shellWord("x\ufe0f")).toBe("$'x\\xef\\xb8\\x8f'");
+  expect(shellWord("a\u034fb")).toBe("$'a\\xcd\\x8fb'");
+  expect(shellWord("a\ufffcb")).toBe("$'a\\xef\\xbf\\xbcb'");
+  expect(shellWord("x\u{e0100}")).toBe("$'x\\xf3\\xa0\\x84\\x80'");
   // An accent that combines with its letter still shows as one.
   expect(shellWord("cafe\u0301")).toBe("'cafe\u0301'");
   expect(commandLine(["rm", "-rf", "a b", ""])).toBe("rm -rf 'a b' ''");
 });
 
-test("what shellWord shows, bash reads back as the very argument", () => {
+test("what shellWord shows, bash and zsh read back as the very argument", () => {
   const values = [
     "a b",
     "it's",
@@ -499,10 +499,27 @@ test("what shellWord shows, bash reads back as the very argument", () => {
     "\u{e0001}tag",
     "a\u3164b x\ufe0f a\u2800b",
   ];
-  for (const value of values) {
-    const read = execFileSync("bash", ["-c", `printf %s ${shellWord(value)}`]);
-    expect(read.equals(Buffer.from(value)), JSON.stringify(value)).toBe(true);
-  }
+  // macOS ships bash 3.2 as /bin/bash and zsh as the login shell; zsh may
+  // not be installed elsewhere.
+  const shells = [
+    ["bash", "-c"],
+    ["/bin/bash", "-c"],
+  ];
+  try {
+    execFileSync("zsh", ["-f", "-c", ":"]);
+    shells.push(["zsh", "-f", "-c"]);
+  } catch {}
+  for (const [shell, ...flags] of shells)
+    for (const value of values) {
+      const read = execFileSync(shell as string, [
+        ...flags,
+        `printf %s ${shellWord(value)}`,
+      ]);
+      expect(
+        read.equals(Buffer.from(value)),
+        `${shell} ${JSON.stringify(value)}`,
+      ).toBe(true);
+    }
 });
 
 function alive(pid: number): boolean {

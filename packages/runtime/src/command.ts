@@ -213,18 +213,18 @@ const ESCAPES: Readonly<Record<string, string>> = {
   "\r": "\\r",
 };
 
+const UTF8 = new TextEncoder();
+
 function escaped(char: string): string {
   const known = ESCAPES[char];
   if (known) return known;
   if (!HIDDEN.test(char)) return char;
-  const code = char.codePointAt(0) ?? 0;
-  const hex = code.toString(16);
-  // \x is a byte: past ASCII, \u names the character, as UTF-8.
-  return code < 0x80
-    ? `\\x${hex.padStart(2, "0")}`
-    : code <= 0xffff
-      ? `\\u${hex.padStart(4, "0")}`
-      : `\\U${hex.padStart(8, "0")}`;
+  // Byte by byte, as UTF-8: every shell that reads $'…' reads \xHH, while
+  // \u and \U are past bash 3.2, the /bin/bash macOS ships.
+  return Array.from(
+    UTF8.encode(char),
+    (byte) => `\\x${byte.toString(16).padStart(2, "0")}`,
+  ).join("");
 }
 
 /**
@@ -232,7 +232,7 @@ function escaped(char: string): string {
  * (nothing is run through a shell): bare when it needs no quoting, in single
  * quotes otherwise, and in ANSI-C quotes (`$'…'`, as bash and zsh read them)
  * when it holds a character that would not show as itself, which is then
- * written as its escape. What an approval shows is what runs.
+ * written as its escape (its UTF-8 bytes, past ASCII). What an approval shows is what runs.
  */
 export function shellWord(argument: string): string {
   if (argument === "") return "''";

@@ -12,7 +12,7 @@ test("a command approval shows each argument as it runs: no line break, escape o
     "/w",
   );
   expect(preview.split("\n")[0]).toBe(
-    "$ rm -rf $'build\\nok' $'x\\x1b[2Kdone' $'\\u202etxt.exe' ''",
+    "$ rm -rf $'build\\nok' $'x\\x1b[2Kdone' $'\\xe2\\x80\\xaetxt.exe' ''",
   );
 });
 
