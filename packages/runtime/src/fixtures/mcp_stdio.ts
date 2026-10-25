@@ -1,3 +1,4 @@
+import { writeFileSync } from "node:fs";
 import { McpServer } from "@modelcontextprotocol/server";
 import { StdioServerTransport } from "@modelcontextprotocol/server/stdio";
 import { z } from "zod";
@@ -20,4 +21,16 @@ server.registerTool(
     structuredContent: { secret: "do-not-project" },
   }),
 );
+// It notes a SIGTERM, so a test can tell a graceful close from a kill.
+const termFile = process.env.MCP_TERM_FILE;
+if (termFile)
+  process.on("SIGTERM", () => {
+    writeFileSync(termFile, "SIGTERM");
+    process.exit(143);
+  });
 await server.connect(new StdioServerTransport());
+// A stubborn server: it says where it runs and outlives the end of its stdin.
+if (process.env.MCP_PID_FILE) {
+  writeFileSync(process.env.MCP_PID_FILE, String(process.pid));
+  setInterval(() => {}, 1000);
+}

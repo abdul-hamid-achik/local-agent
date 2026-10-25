@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { createMcpHandler, McpServer } from "@modelcontextprotocol/server";
@@ -436,24 +436,107 @@ describe("MCP startup", () => {
     }
   }, 15_000);
 
+  const alive = (pid: number) => {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  const pidIn = async (path: string) => {
+    for (let tries = 0; tries < 250; tries += 1) {
+      const pid = Number(await readFile(path, "utf8").catch(() => "0"));
+      if (pid) return pid;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    throw new Error(`no pid in ${path}`);
+  };
+  const gone = async (pid: number) => {
+    for (let tries = 0; tries < 50 && alive(pid); tries += 1)
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    return !alive(pid);
+  };
+
+  // The SDK alone ends the server's stdin and sends SIGTERM two seconds
+  // later; after a quit the server is sent SIGTERM at once.
   test("an abort stops a server that never answers, without waiting for it", async () => {
     const cwd = await mkdtemp(`${tmpdir()}/local-agent-mcp-silent-`);
     try {
+      const pidFile = `${cwd}/server.pid`;
       const silent = {
         name: "silent",
         transport: {
           kind: "stdio" as const,
           command: process.execPath,
-          args: ["-e", "setInterval(() => {}, 1000)"],
+          args: [
+            "-e",
+            `require("node:fs").writeFileSync(${JSON.stringify(pidFile)}, String(process.pid)); setInterval(() => {}, 1000)`,
+          ],
           env: {},
           cwd,
         },
       };
+      const quit = new AbortController();
+      const connecting = connectMcpServers([silent], quit.signal);
+      const pid = await pidIn(pidFile);
       const started = Date.now();
-      await expect(
-        connectMcpServers([silent], AbortSignal.timeout(200)),
-      ).rejects.toThrow();
-      expect(Date.now() - started).toBeLessThan(3_000);
+      quit.abort(new Error("quit"));
+      await expect(connecting).rejects.toThrow("quit");
+      expect(Date.now() - started).toBeLessThan(1_500);
+      expect(await gone(pid)).toBe(true);
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  }, 15_000);
+
+  test("a close without a quit leaves the server to end with its stdin", async () => {
+    const cwd = await mkdtemp(`${tmpdir()}/local-agent-mcp-graceful-`);
+    try {
+      const termFile = `${cwd}/term`;
+      const graceful = {
+        name: "graceful",
+        transport: {
+          kind: "stdio" as const,
+          command: process.execPath,
+          args: [echo],
+          env: { MCP_TERM_FILE: termFile },
+          cwd,
+        },
+      };
+      const connection = await connectMcp(
+        graceful,
+        new AbortController().signal,
+      );
+      await connection.close();
+      expect(await readFile(termFile, "utf8").catch(() => "")).toBe("");
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  }, 15_000);
+
+  test("after a quit, closing a connected server that outlives its stdin stops it at once", async () => {
+    const cwd = await mkdtemp(`${tmpdir()}/local-agent-mcp-stubborn-`);
+    try {
+      const pidFile = `${cwd}/server.pid`;
+      const stubborn = {
+        name: "stubborn",
+        transport: {
+          kind: "stdio" as const,
+          command: process.execPath,
+          args: [echo],
+          env: { MCP_PID_FILE: pidFile },
+          cwd,
+        },
+      };
+      const quit = new AbortController();
+      const connection = await connectMcp(stubborn, quit.signal);
+      const pid = await pidIn(pidFile);
+      quit.abort(new Error("quit"));
+      const started = Date.now();
+      await connection.close();
+      expect(Date.now() - started).toBeLessThan(1_500);
+      expect(await gone(pid)).toBe(true);
     } finally {
       await rm(cwd, { recursive: true, force: true });
     }

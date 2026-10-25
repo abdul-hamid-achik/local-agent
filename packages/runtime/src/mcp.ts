@@ -256,6 +256,19 @@ export async function connectMcp(
       said = (said + chunk.toString()).slice(-STDERR_TAIL);
     });
   const client = new Client({ name: "local-agent", version: "0.0.0" });
+  // The SDK ends a stdio server's stdin and waits two seconds before it
+  // sends SIGTERM. After a quit (externalSignal) the server is sent SIGTERM
+  // at once: one that ignores the end of its stdin would otherwise outlive
+  // a caller that waits less than that, as the desktop sidecar does.
+  const close = async () => {
+    const pid =
+      transport instanceof StdioClientTransport ? transport.pid : null;
+    if (externalSignal?.aborted && pid)
+      try {
+        process.kill(pid, "SIGTERM");
+      } catch {}
+    await client.close();
+  };
   let stopped = false;
   client.onclose = () => {
     stopped = true;
@@ -351,10 +364,10 @@ export async function connectMcp(
           text: boundedText(result),
         };
       },
-      close: () => client.close(),
+      close,
     };
   } catch (error) {
-    await client.close().catch(() => undefined);
+    await close().catch(() => undefined);
     if (config.transport.kind !== "stdio") throw error;
     const reason = notStarted(config.transport, error) ?? error;
     const line = lastStderrLine(said);
