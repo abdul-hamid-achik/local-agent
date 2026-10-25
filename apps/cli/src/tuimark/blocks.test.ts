@@ -1587,7 +1587,7 @@ test("the visible text is the source minus its markers, whatever the input", () 
 /** The least time of a few runs of `run`, in ms (a busy machine only adds). */
 function bestOf(run: () => void): number {
   let best = Number.POSITIVE_INFINITY;
-  for (let i = 0; i < 3; i++) {
+  for (let i = 0; i < 5; i++) {
     const start = performance.now();
     run();
     best = Math.min(best, performance.now() - start);
@@ -1651,12 +1651,19 @@ test("pathological input scales linearly: four times the text, about four times 
     expect(shown.length, name).toBeGreaterThan(0);
     if (literal) expect(shown, name).toBe(large);
     // Linear is about 4x; a quadratic scan is 16x (the limit is 8x). The floor keeps a case
-    // that takes a millisecond from failing on timer noise.
-    const before = Math.max(
-      bestOf(() => parse(small)),
-      3,
-    );
-    const after = bestOf(() => parse(large));
+    // that takes a millisecond from failing on timer noise. A shared runner can still stall
+    // one measurement (a 40k case took 29 ms against a 3 ms floor on macOS CI), so a case
+    // is measured up to three times: a quadratic one is over the limit every time.
+    let before = 0;
+    let after = 0;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      before = Math.max(
+        bestOf(() => parse(small)),
+        3,
+      );
+      after = bestOf(() => parse(large));
+      if (after < before * 8) break;
+    }
     expect(
       after,
       `${name}: ${before.toFixed(1)} ms to ${after.toFixed(1)} ms`,
