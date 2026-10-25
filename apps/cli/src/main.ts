@@ -1,7 +1,5 @@
 import { parseArgs } from "node:util";
 import {
-  admitOllamaModel,
-  admitOpenAILocalModel,
   commandLine,
   connectMcpServers,
   DEFAULT_OLLAMA_MODEL,
@@ -11,7 +9,7 @@ import {
   type McpConnection,
   type McpServerConfig,
   PLANNED_CONTEXT_MAX,
-  planContextAdmitted,
+  type Provider,
   readMcpConfig,
   resolveProvider,
   runAgent,
@@ -23,6 +21,7 @@ import {
   Workspace,
   workspaceRules,
 } from "@local-agent/runtime";
+import { checkModel, settledNow } from "#cli/model-check";
 import { secretNote } from "#cli/preview";
 import { recoverCommand } from "#cli/recover";
 import { terminalText, terminalTextStream } from "#cli/text";
@@ -415,29 +414,23 @@ A resumed session first closes the calls it was interrupted before running.`);
         // Without --context, the size comes from the model and this
         // machine's memory (planContext); a failed look leaves 16384. A
         // size the user set stays, with a warning when it does not fit.
-        const { provider, admission: planned } = await planContextAdmitted(
-          resolved,
-          AbortSignal.timeout(15_000),
-        );
-        if (provider.context_warning)
-          process.stderr.write(
-            `warning: ${terminalText(provider.context_warning)}\n`,
+        // An interactive client must not open its screen for a model that is
+        // missing, or a --context beyond its native one: say so in one line.
+        // (Headless runs report the same line from the agent's own admission.)
+        // The Tuimark client is the exception: it opens first and the same
+        // check runs while it is up (below), so a cold Ollama leaves no
+        // blank terminal.
+        let provider: Provider = resolved;
+        if (!interactiveTuimark) {
+          provider = await checkModel(
+            resolved,
+            AbortSignal.timeout(15_000),
+            !headless,
           );
-        if (!headless) {
-          // An interactive client must not open its screen for a model that is
-          // missing, or a --context beyond its native one: say so in one line.
-          // (Headless runs report the same line from the agent's own admission.)
-          // The plan's admission, when it made one, already answers.
-          const admission =
-            planned ??
-            (provider.type === "openai_local"
-              ? await admitOpenAILocalModel(
-                  provider,
-                  AbortSignal.timeout(15_000),
-                )
-              : await admitOllamaModel(provider, AbortSignal.timeout(15_000)));
-          if (admission.status === "rejected")
-            throw new Error(admission.message);
+          if (provider.context_warning)
+            process.stderr.write(
+              `warning: ${terminalText(provider.context_warning)}\n`,
+            );
         }
         const controller = new AbortController();
         const stopFor = (code: number) => () => {
@@ -456,6 +449,20 @@ A resumed session first closes the calls it was interrupted before running.`);
         process.once("SIGINT", interrupt);
         process.once("SIGTERM", terminate);
         process.once("SIGHUP", hangup);
+        // The Tuimark client's model check, started now so it runs while the
+        // binary is found and the servers connect; a quit stops it. Settled
+        // or not, nothing waits on it here: the client shows it pending.
+        let modelCheck: Promise<Provider> | undefined;
+        if (interactiveTuimark) {
+          modelCheck = checkModel(
+            resolved,
+            AbortSignal.any([controller.signal, AbortSignal.timeout(15_000)]),
+            true,
+          );
+          // Handled here for the paths that never reach the client; the
+          // client sees the rejection itself.
+          modelCheck.catch(() => {});
+        }
         // Filled as servers connect (the Tuimark client opens first and
         // shows them arriving); every one is closed on the way out.
         const mcp: McpConnection[] = [];
@@ -492,6 +499,15 @@ A resumed session first closes the calls it was interrupted before running.`);
             else {
               process.stderr.write(fallbackNotice(found.error));
               client = "vue";
+              // The Vue client waits for its check like any other.
+              if (modelCheck) {
+                provider = await modelCheck;
+                modelCheck = undefined;
+                if (provider.context_warning)
+                  process.stderr.write(
+                    `warning: ${terminalText(provider.context_warning)}\n`,
+                  );
+              }
             }
           }
           // After the fall back, so a theme is refused, not dropped, when the
@@ -536,6 +552,10 @@ A resumed session first closes the calls it was interrupted before running.`);
                 );
             }
           }
+          // A model the Tuimark client's check has already refused is refused
+          // before a session is created, as for every other client.
+          const early = modelCheck && (await settledNow(modelCheck));
+          if (early && "error" in early) throw early.error;
           // Only now, with every refusal of the run's own flags and servers
           // behind: an earlier one would leave an empty session in the database.
           const session: SessionContext | undefined = store
@@ -653,6 +673,7 @@ A resumed session first closes the calls it was interrupted before running.`);
               {
                 mcpNames,
                 ...(mcpReady ? { mcpReady } : {}),
+                ...(modelCheck ? { admission: modelCheck } : {}),
                 ...(bin ? { resolve: async () => bin } : {}),
                 ...(values["sandbox-commands"] ? { sandbox: true } : {}),
                 // One read-only GET /api/ps after the model's first turn.
@@ -679,6 +700,8 @@ A resumed session first closes the calls it was interrupted before running.`);
           // A quit while servers still connect: stop them, then close the
           // ones that made it.
           mcpAbort.abort();
+          // And a model check still running.
+          controller.abort();
           await mcpReady;
           await Promise.allSettled(mcp.map((connection) => connection.close()));
           process.off("SIGINT", interrupt);

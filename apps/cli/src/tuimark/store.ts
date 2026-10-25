@@ -47,6 +47,9 @@ export interface McpStartupState {
   failed?: number;
 }
 
+/** The model is still being checked (see ClientOptions.admission). */
+export const MODEL_CHECKING = "Checking model…";
+
 /** The last finished turn, as the ambient status keeps it. */
 export interface LastTurn {
   seconds: number;
@@ -68,10 +71,12 @@ export function idleStatus(
   intent?: Intent,
   mcp: McpStartupState = {},
   last?: LastTurn,
+  checkingModel = false,
 ): string {
   const failed = mcp.failed ?? 0;
   const parts: string[] = [];
   if (intent) parts.push(intent);
+  if (checkingModel) parts.push(MODEL_CHECKING);
   if (mcp.connecting) parts.push("MCP connecting…");
   else if (mcpServers || failed)
     parts.push(
@@ -236,12 +241,13 @@ export function formatElapsed(totalSeconds: number): string {
 
 /**
  * What the running turn is doing, as the head of the assistant's message
- * says it: waiting for the model (or for the MCP servers it needs), the
- * model reasoning, the reply streaming (the elapsed alone: the text is the
+ * says it: waiting for the model (or for the check of its name, or for the
+ * MCP servers it needs), the model reasoning, the reply streaming (the elapsed alone: the text is the
  * indication), or the turn waiting on the person (an approval, an answer).
  */
 export type HeadPhase =
   | "waiting"
+  | "model"
   | "mcp"
   | "thinking"
   | "streaming"
@@ -250,6 +256,7 @@ export type HeadPhase =
 
 const HEAD_PHASE_TEXT: Record<HeadPhase, string> = {
   waiting: "waiting for the model",
+  model: "checking the model",
   mcp: "connecting MCP servers",
   thinking: "thinking",
   streaming: "",
@@ -696,6 +703,8 @@ export interface StoreInit {
   mcpServers: number;
   /** Servers are still connecting: the status says so until they settle. */
   mcpConnecting?: boolean;
+  /** The model is still being checked: the status says so until it is. */
+  modelChecking?: boolean;
   transcript: TranscriptSnapshot;
   /** Workspace root (or basename); only its basename is shown. */
   workspace?: string;
@@ -765,9 +774,13 @@ export function initialStore(init: StoreInit): Store {
     draft: "",
     placeholder: PLACEHOLDER,
     running: false,
-    status: idleStatus(init.mcpServers, init.intent, {
-      connecting: init.mcpConnecting,
-    }),
+    status: idleStatus(
+      init.mcpServers,
+      init.intent,
+      { connecting: init.mcpConnecting },
+      undefined,
+      init.modelChecking,
+    ),
     commit_buf: emptyCommitView(),
     commit_blocks: [],
   };

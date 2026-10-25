@@ -24,9 +24,11 @@ import {
 import {
   type Host,
   type Ready,
+  type ResolveOptions,
   resolveBinary,
   spawnHost,
 } from "@thelacanians/tuimark";
+import { settledNow } from "#cli/model-check";
 import { terminalText } from "#cli/text";
 import { copyToClipboard } from "#cli/tuimark/clipboard";
 import type { Intent } from "#cli/tuimark/commands";
@@ -56,9 +58,27 @@ export const MIN_TUIMARK = "0.5.1";
  */
 export const PINNED_TUIMARK = "0.5.1";
 
-/** The SDK's resolution (TUIMARK_BINARY, the cache, a checked download) for PINNED_TUIMARK. */
-export function resolvePinned(): Promise<string> {
-  return resolveBinary({ version: PINNED_TUIMARK });
+/**
+ * The SDK's resolution (TUIMARK_BINARY, the cache, a checked download) for
+ * PINNED_TUIMARK. A download is slow and the screen is not open yet, so it
+ * says so once on stderr (the SDK's `log` runs only before a download, and
+ * again before a re-fetch of a cached copy that failed its check); a binary
+ * that is there costs no output.
+ */
+export function resolvePinned(
+  options: ResolveOptions = {},
+  write: (text: string) => unknown = (text) => process.stderr.write(text),
+): Promise<string> {
+  let said = false;
+  return resolveBinary({
+    version: PINNED_TUIMARK,
+    log: () => {
+      if (said) return;
+      said = true;
+      write(`Downloading Tuimark ${PINNED_TUIMARK}…\n`);
+    },
+    ...options,
+  });
 }
 
 /**
@@ -297,6 +317,13 @@ export interface LaunchDeps {
   mcpNames?: readonly string[];
   /** Servers still connecting (see ClientOptions.mcpReady). */
   mcpReady?: ClientOptions["mcpReady"];
+  /**
+   * The model check still running (see ClientOptions.admission). One that
+   * refused the model before the screen opens stops the run with its error
+   * and no screen; a refusal while the screen is up closes it and stops the
+   * run with the same error.
+   */
+  admission?: ClientOptions["admission"];
   /** `--sandbox-commands`: commands start in the sandbox (ClientOptions.sandbox). */
   sandbox?: boolean;
   /** Reads how the model was loaded after its first turn (ClientOptions.placement). */
@@ -357,8 +384,18 @@ export async function runTuimark(
       );
   };
   let readyColumns = 80;
+  const bin = await (deps.resolve ?? resolvePinned)();
+  // A download can take a while: ctrl+c during it stops here, not after a
+  // screen has opened.
+  signal.throwIfAborted();
+  // The model check has often answered by now (finding the binary took
+  // time): a refusal is then reported before any screen opens, and an answer
+  // opens the screen on the provider it planned.
+  const answered = deps.admission && (await settledNow(deps.admission));
+  if (answered && "error" in answered) throw answered.error;
+  const checked = answered && "value" in answered ? answered.value : undefined;
   const client = new TuimarkClient({
-    provider,
+    provider: checked ?? provider,
     workspace,
     intent,
     presentation,
@@ -372,6 +409,7 @@ export async function runTuimark(
     mcp,
     mcpNames: deps.mcpNames,
     ...(deps.mcpReady ? { mcpReady: deps.mcpReady } : {}),
+    ...(deps.admission && !checked ? { admission: deps.admission } : {}),
     ...(deps.sandbox ? { sandbox: true } : {}),
     ...(deps.placement ? { placement: deps.placement } : {}),
     ...(deps.environment ? { environment: deps.environment } : {}),
@@ -385,10 +423,6 @@ export async function runTuimark(
     run: deps.run,
     columns: () => stdout.columns ?? readyColumns,
   });
-  const bin = await (deps.resolve ?? resolvePinned)();
-  // A download can take a while: ctrl+c during it stops here, not after a
-  // screen has opened.
-  signal.throwIfAborted();
   // A named palette is a generated copy of the document with the palette's
   // .tcss loaded after the last sheet the document itself lists; a builtin
   // theme is the host's own --theme flag.
@@ -447,6 +481,15 @@ export async function runTuimark(
     void host.close();
   };
   signal.addEventListener("abort", stop, { once: true });
+  // The model check, still running with the screen up, refused the model:
+  // the screen closes and the run fails with that error, as it did when the
+  // check came before the screen.
+  let refusal: Error | undefined;
+  if (deps.admission && !checked)
+    deps.admission.catch((error: unknown) => {
+      refusal = error instanceof Error ? error : new Error(String(error));
+      stop();
+    });
   try {
     if (signal.aborted) stop();
     let failure: Error | undefined;
@@ -459,6 +502,7 @@ export async function runTuimark(
     } catch (error) {
       failure = error instanceof Error ? error : new Error(String(error));
     }
+    failure = refusal ?? failure;
     // Wait for the turn first: runAgent releases the session lease, and main.ts
     // closes the session store right after this returns.
     client.abort();

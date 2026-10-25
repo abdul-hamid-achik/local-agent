@@ -353,6 +353,9 @@ export function runSlash(text: string, state: CommandState): CommandOutcome {
 }
 
 export const BUSY_STATUS = "Busy · wait for the current turn to finish";
+/** `/model` while the launch model is still being checked. */
+export const MODEL_CHECKING_STATUS =
+  "Checking the launch model · try /model again in a moment";
 /** A queued send that will not run, given back to the composer instead. */
 export const QUEUE_RETURNED = "queued message back in the composer";
 

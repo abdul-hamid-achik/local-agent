@@ -8,8 +8,10 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
+import { cachedBinaryPath } from "@thelacanians/tuimark";
 import { expect, test } from "vitest";
 import { uiDirectory } from "#cli/tuimark/launch";
+import type { Store } from "#cli/tuimark/store";
 
 test("the UI files are found next to the launcher", () => {
   expect(uiDirectory()).toMatch(/tuimark\/ui$/);
@@ -46,6 +48,7 @@ import {
   MIN_TUIMARK,
   PINNED_TUIMARK,
   readyProblem,
+  resolvePinned,
   runTuimark,
   TERMINAL_RESET,
   versionAtLeast,
@@ -954,6 +957,122 @@ test("a handler that throws goes to onError: a status line, and the session goes
     path: "status",
     value: "Action dialog_always failed: EACCES",
   });
+  control.exit?.({ reason: "quit", code: 0 });
+  await done;
+});
+
+// -------------------------------------------------- the binary and the model check
+
+test("a binary that is cached costs no output; a download says so once, before it starts", async () => {
+  const home = await mkdtemp(join(tmpdir(), "local-agent-cache-"));
+  try {
+    const offline = { home, platform: "darwin", arch: "arm64", env: {} };
+    const options = { ...offline, embedded: null };
+    const cached = cachedBinaryPath(PINNED_TUIMARK, offline);
+    await mkdir(dirname(cached), { recursive: true });
+    await writeFile(cached, "#!/bin/sh\n");
+    const quiet: string[] = [];
+    expect(await resolvePinned(options, (text) => quiet.push(text))).toBe(
+      cached,
+    );
+    expect(quiet).toEqual([]);
+
+    await rm(cached);
+    const said: string[] = [];
+    const asked: number[] = [];
+    await expect(
+      resolvePinned(
+        {
+          ...options,
+          fetch: async () => {
+            asked.push(said.length);
+            throw new Error("offline");
+          },
+        },
+        (text) => said.push(text),
+      ),
+    ).rejects.toThrow(/cannot download/);
+    // One line, already written when the first request went out.
+    expect(said).toEqual([`Downloading Tuimark ${PINNED_TUIMARK}…\n`]);
+    expect(asked).toEqual([1]);
+  } finally {
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
+test("the model check does not hold the screen back: the first frame says it is checking, and the planned provider takes over", async () => {
+  const check = Promise.withResolvers<Provider>();
+  const control: { exit?: (reason: HostExit | Error) => void } = {};
+  const host = fakeSpawn({}, control);
+  const done = launch({
+    spawn: host.spawn,
+    resolve: async () => "/b",
+    stdout: fakeStdout(true),
+    admission: check.promise,
+  });
+  // The screen is up and its composer takes input while the check is pending.
+  await host.attached;
+  const data = (host.calls.spawned[0]?.options as { data: Store } | undefined)
+    ?.data;
+  expect(data?.status).toBe("build · Checking model…");
+  expect(data?.header.ctx_label).toBe("0/4.0k");
+  check.resolve({ ...provider, context_size: 8192 });
+  await until(() =>
+    (host.calls.batches.flat() as { path: string; value: unknown }[]).some(
+      (w) => w.path === "header.ctx_label" && w.value === "0/8.0k",
+    ),
+  );
+  control.exit?.({ reason: "quit", code: 0 });
+  await done;
+});
+
+test("a model the check refuses while the screen is up closes it and fails the run with that error", async () => {
+  const check = Promise.withResolvers<Provider>();
+  const host = fakeSpawn();
+  const stdout = fakeStdout(true);
+  const done = launch({
+    spawn: host.spawn,
+    resolve: async () => "/b",
+    stdout,
+    admission: check.promise,
+  });
+  const failed = expect(done).rejects.toThrow(
+    "Model m is not installed. Run: ollama pull m",
+  );
+  await host.attached;
+  check.reject(new Error("Model m is not installed. Run: ollama pull m"));
+  await failed;
+  expect(host.calls.closed).toBe(1);
+  expect(stdout.written).toEqual([TERMINAL_RESET]);
+});
+
+test("a refusal that is already in opens no screen, and an answer that is already in opens it on the planned provider", async () => {
+  const refused = Promise.reject(new Error("Model m is not installed."));
+  refused.catch(() => {});
+  const none = fakeSpawn();
+  await expect(
+    launch({
+      spawn: none.spawn,
+      resolve: async () => "/b",
+      stdout: fakeStdout(true),
+      admission: refused,
+    }),
+  ).rejects.toThrow("Model m is not installed.");
+  expect(none.calls.spawned).toHaveLength(0);
+
+  const control: { exit?: (reason: HostExit | Error) => void } = {};
+  const host = fakeSpawn({}, control);
+  const done = launch({
+    spawn: host.spawn,
+    resolve: async () => "/b",
+    stdout: fakeStdout(true),
+    admission: Promise.resolve({ ...provider, context_size: 8192 }),
+  });
+  await host.attached;
+  const data = (host.calls.spawned[0]?.options as { data: Store } | undefined)
+    ?.data;
+  expect(data?.status).toBe("build");
+  expect(data?.header.ctx_label).toBe("0/8.0k");
   control.exit?.({ reason: "quit", code: 0 });
   await done;
 });

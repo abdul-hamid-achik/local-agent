@@ -2011,6 +2011,100 @@ test("servers still connecting show in the head, not in a busy status", async ()
   expect(store(ui).head.on).toBe(false);
 });
 
+/** A model check that the test settles: the `admission` of the client. */
+function modelCheck() {
+  const check = Promise.withResolvers<Provider>();
+  check.promise.catch(() => {});
+  return check;
+}
+
+test("a model still being checked shows in the status; a send waits for it and runs on the planned provider", async () => {
+  const check = modelCheck();
+  const ran: Provider[] = [];
+  const { ui, client } = setup(reply("x"), {
+    admission: check.promise,
+    run: (given, _messages, options) => {
+      ran.push(given);
+      return reply("x")({ options, messages: [] });
+    },
+  });
+  expect(store(ui).status).toBe("build · Checking model…");
+  // The composer takes the send at once: the turn shows and waits.
+  await ui.fire("send", "go");
+  await until(() => store(ui).head.text.startsWith("checking the model"));
+  expect(store(ui).head.text).toBe("checking the model · 0s");
+  expect(store(ui).header.ctx_label).toBe("0/8.0k");
+  await Bun.sleep(20);
+  expect(ran).toEqual([]);
+  check.resolve({ ...provider, context_size: 16384 });
+  await client.idle();
+  expect(ran.map((given) => given.context_size)).toEqual([16384]);
+  expect(store(ui).header.ctx_label).toBe("120/16k");
+  expect(store(ui).status).toBe("build · last <1s");
+});
+
+test("a model that is checked while idle repaints the status, with the plan's warning, unless something newer is on it", async () => {
+  const check = modelCheck();
+  const { ui } = setup(reply("x"), { admission: check.promise });
+  check.resolve({ ...provider, context_size: 4096 });
+  await Bun.sleep(10);
+  expect(store(ui).status).toBe("build");
+  expect(store(ui).header.ctx_label).toBe("0/4.0k");
+
+  const warned = modelCheck();
+  const second = setup(reply("x"), { admission: warned.promise });
+  warned.resolve({ ...provider, context_warning: "May not fit in memory." });
+  await Bun.sleep(10);
+  expect(store(second.ui).status).toBe(
+    "Warning: May not fit in memory. · /status shows it again",
+  );
+
+  const late = modelCheck();
+  const third = setup(reply("x"), { admission: late.promise });
+  await third.ui.fire("send", "/help");
+  const help = store(third.ui).status;
+  late.resolve({ ...provider, context_warning: "May not fit in memory." });
+  await Bun.sleep(10);
+  expect(store(third.ui).status).toBe(help);
+});
+
+test("a refused model ends the turn that waited for it without asking the model, and /model waits for the check", async () => {
+  const check = modelCheck();
+  const ran: string[] = [];
+  const { ui, client } = setup(reply("x"), {
+    admission: check.promise,
+    run: (_given, messages, options) => {
+      ran.push(messages.at(-1)?.content ?? "");
+      return reply("x")({ options, messages });
+    },
+  });
+  await ui.fire("send", "/model other");
+  expect(store(ui).status).toBe(
+    "Checking the launch model · try /model again in a moment",
+  );
+  await ui.fire("send", "go");
+  await until(() => store(ui).head.text.startsWith("checking the model"));
+  check.reject(
+    new Error("Model fixture is not installed. Run: ollama pull fixture"),
+  );
+  await client.idle();
+  expect(ran).toEqual([]);
+  expect(store(ui).head.on).toBe(false);
+});
+
+test("esc cancels a turn that waits for the model check, and the check goes on", async () => {
+  const check = modelCheck();
+  const { ui, client } = setup(reply("x"), { admission: check.promise });
+  await ui.fire("send", "go");
+  await until(() => store(ui).head.text.startsWith("checking the model"));
+  await ui.fire("cancel");
+  await client.idle();
+  expect(store(ui).head.on).toBe(false);
+  check.resolve({ ...provider, context_size: 2048 });
+  await Bun.sleep(10);
+  expect(store(ui).header.ctx_label).toBe("0/2.0k");
+});
+
 test("an open approval owns the status line over the elapsed ticker", async () => {
   let nowMs = 1_000_000;
   const { ui, client } = setup(withApproval, { now: () => nowMs });

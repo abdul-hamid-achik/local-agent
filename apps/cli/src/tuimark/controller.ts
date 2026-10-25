@@ -100,6 +100,7 @@ import {
   type Conclusion,
   filterPalette,
   type Intent,
+  MODEL_CHECKING_STATUS,
   MOUSE_INLINE_STATUS,
   paletteCommand,
   QUEUE_RETURNED,
@@ -280,6 +281,15 @@ export interface ClientOptions {
    * their tools are part of what the model is offered. Never rejects.
    */
   mcpReady?: Promise<readonly { name: string; error: string }[]>;
+  /**
+   * The check of the model (it exists at the endpoint; the context planned
+   * for it) still running when the screen opens: resolves with the provider
+   * to run on, which replaces `provider`, or rejects with the refusal. Until
+   * then the status says the model is being checked and a turn waits for it,
+   * as for `mcpReady`; `/model` is refused. A rejection is the launcher's to
+   * report and end the run with: a waiting turn only ends.
+   */
+  admission?: Promise<Provider>;
   /**
    * Creates the export file exclusively (`wx`): rejects with EEXIST when
    * the path is taken, so an export never overwrites. Default node fs.
@@ -606,6 +616,8 @@ export class TuimarkClient {
   private panelSel = 0;
   /** MCP servers are still connecting (see ClientOptions.mcpReady). */
   private mcpPending: boolean;
+  /** The model is still being checked (see ClientOptions.admission). */
+  private modelPending: boolean;
   /** The servers that failed to connect, for the status and `/mcp`. */
   private mcpFailed: readonly { name: string; error: string }[] = [];
   /** The header ctx meter (see CtxMeter for the exact accumulation rule). */
@@ -683,6 +695,7 @@ export class TuimarkClient {
     this.theme = options.initialTheme ?? "auto";
     this.history = options.session?.state.messages.slice() ?? [];
     this.mcpPending = options.mcpReady !== undefined;
+    this.modelPending = options.admission !== undefined;
     // A resumed session shows its saved messages, through the same mapping as a live turn.
     for (const message of this.history) {
       const view = this.builder.fromMessage(message);
@@ -710,6 +723,7 @@ export class TuimarkClient {
       sessionId: session?.state.publicId,
       mcpServers: mcp.length,
       mcpConnecting: this.mcpPending,
+      modelChecking: this.modelPending,
       workspace: this.options.workspace.root,
       inline: this.inline,
       // The inline snapshot below always starts empty; a resumed session is not.
@@ -914,6 +928,10 @@ export class TuimarkClient {
     ui.on("panel_prev", () => this.panelMove(-1));
     ui.on("panel_run", () => this.panelRun());
     void this.options.mcpReady?.then((failed) => this.mcpSettled(failed));
+    void this.options.admission?.then(
+      (provider) => this.modelChecked(provider),
+      () => {},
+    );
     if (this.inline) {
       // A resumed session's history is the scrollback: print it once, in order.
       const views = this.transcript.all();
@@ -941,6 +959,7 @@ export class TuimarkClient {
         failed: this.mcpFailed.length,
       },
       this.lastTurn,
+      this.modelPending,
     );
     // A send queued while the turn runs stays a fact of the bar after the
     // "Queued: …" message has given way to a verdict or a rule's note.
@@ -969,6 +988,37 @@ export class TuimarkClient {
       .catch(() => undefined);
     if (shown === connecting)
       await this.write([{ path: "status", value: this.idleText() }]);
+  }
+
+  /**
+   * The model was admitted, with the context planned for it: the provider
+   * the next turn runs on, and the header's meter for its size. The status
+   * moves on only if it still says the model is being checked, and a plan's
+   * warning shows there as at launch.
+   */
+  private async modelChecked(provider: Provider): Promise<void> {
+    const checking = this.idleText();
+    this.modelPending = false;
+    this.provider = provider;
+    const shown = await this.ui
+      ?.get("status")
+      .then((result) => result.value)
+      .catch(() => undefined);
+    await this.write([
+      ...this.ctxWrites(this.ctx.current),
+      ...(shown === checking
+        ? [
+            {
+              path: "status",
+              value: provider.context_warning
+                ? oneLine(
+                    `Warning: ${provider.context_warning} · /status shows it again`,
+                  )
+                : this.idleText(),
+            },
+          ]
+        : []),
+    ]);
   }
 
   /** The terminal changed size: open previews are wrapped again. */
@@ -1706,6 +1756,11 @@ export class TuimarkClient {
   private async switchModel(name: string): Promise<boolean> {
     if (this.busy || this.proposal || this.queued !== undefined) {
       await this.write([{ path: "status", value: BUSY_STATUS }]);
+      return false;
+    }
+    // The check of the launch model replaces the provider when it ends.
+    if (this.modelPending) {
+      await this.write([{ path: "status", value: MODEL_CHECKING_STATUS }]);
       return false;
     }
     // The name is what the user typed (`\S+`, so it may carry escape
@@ -3885,6 +3940,24 @@ export class TuimarkClient {
     return true;
   }
 
+  /** Waits for `promise` (a rejection ends the wait, with its error), or for `signal`. */
+  private until(promise: Promise<unknown>, signal: AbortSignal): Promise<void> {
+    return new Promise<void>((resolve, reject) => {
+      const abort = () => reject(signal.reason);
+      signal.addEventListener("abort", abort, { once: true });
+      promise.then(
+        () => {
+          signal.removeEventListener("abort", abort);
+          resolve();
+        },
+        (error: unknown) => {
+          signal.removeEventListener("abort", abort);
+          reject(error);
+        },
+      );
+    });
+  }
+
   private async loop(
     prompt: string,
     hostWritten: boolean,
@@ -3921,19 +3994,22 @@ export class TuimarkClient {
       // A turn aborted before it started (a signal while its first write was
       // in flight) never calls the runtime, so it never takes the session lease.
       turnSignal.throwIfAborted();
+      // The model not yet checked (a name that may not exist, a context
+      // not yet planned): the turn waits for the check, which ends it with
+      // its refusal (Esc still cancels). modelChecked runs before this
+      // continuation: its then was first.
+      const checking = this.options.admission;
+      if (this.modelPending && checking) {
+        this.setPhase("model");
+        await this.until(checking, turnSignal);
+        this.setPhase("waiting");
+      }
       // Servers still connecting: their tools are part of what the model
       // is offered, so the turn waits for them (Esc still cancels).
       const ready = this.options.mcpReady;
       if (this.mcpPending && ready) {
         this.setPhase("mcp");
-        await new Promise<void>((resolve, reject) => {
-          const abort = () => reject(turnSignal.reason);
-          turnSignal.addEventListener("abort", abort, { once: true });
-          void ready.then(() => {
-            turnSignal.removeEventListener("abort", abort);
-            resolve();
-          });
-        });
+        await this.until(ready, turnSignal);
         // mcpSettled runs before this continuation: its then was first.
         this.setPhase("waiting");
       }
