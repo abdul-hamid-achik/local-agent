@@ -80,11 +80,25 @@ steps:
             contains: "Cancelled"
         timeoutMs: 10000
     - snapshot: cancelled
+    # The cancelled reply is gone and its prompt is back in the composer, so
+    # after enter this text can only come from the resent one.
+    - wait:
+        screen:
+            notContains: "this takes a while"
+        timeoutMs: 10000
+    - wait:
+        screen:
+            contains: "║ slow please"
+        timeoutMs: 10000
     - press: enter
     - wait:
         screen:
             contains: "this takes a while"
         timeoutMs: 15000
+    - wait:
+        screen:
+            notContains: "Cancelled"
+        timeoutMs: 10000
     - press: ctrl+c
     # The first press cancels the reply as esc does: the prompt is back in
     # the composer, so the next press clears it and only the third quits.
