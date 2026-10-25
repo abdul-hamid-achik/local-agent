@@ -612,8 +612,9 @@ describe("SidecarClient lifecycle", () => {
       "stubborn.mjs",
       [
         'import { writeFileSync } from "node:fs";',
-        `writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));`,
+        // The handler first: the pid file says the child is ready.
         'process.on("SIGTERM", () => undefined);',
+        `writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));`,
         "setInterval(() => undefined, 1000);",
       ],
       200,

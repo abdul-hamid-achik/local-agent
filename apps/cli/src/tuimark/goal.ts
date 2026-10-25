@@ -5,7 +5,7 @@
 // persisted; a goal ends with the process. This module is the pure part
 // (parsing, the stop rules, the messages); the controller runs the turns.
 
-import type { GoalReport } from "@local-agent/runtime";
+import { commandLine, type GoalReport } from "@local-agent/runtime";
 
 /** Turns a goal runs at most unless `--turns` says otherwise... */
 export const GOAL_TURNS = 8;
@@ -124,8 +124,11 @@ export function effectful(
   return EFFECT_TOOLS.has(name) || mcpTools.has(name);
 }
 
-/** A command as one line: argv joined by spaces, whitespace collapsed. */
-export function commandLine(argv: unknown): string | undefined {
+/**
+ * A command as a key to match it by: argv joined by spaces, whitespace
+ * collapsed. Not for display (see the runtime's commandLine).
+ */
+export function commandKey(argv: unknown): string | undefined {
   const line = Array.isArray(argv)
     ? argv.every((part) => typeof part === "string")
       ? argv.join(" ")
@@ -268,11 +271,16 @@ export class GoalRun {
     const seen = report.evidence.find(
       (item) =>
         item.kind === "command" &&
-        this.commands.has(commandLine(item.ref) ?? ""),
+        this.commands.has(commandKey(item.ref) ?? ""),
     );
-    return seen
-      ? `reported done — evidence: \`${commandLine(seen.ref)}\` exited 0`
-      : "reported done without evidence";
+    if (!seen) return "reported done without evidence";
+    // As an approval shows it: an argv as shell words, a line as written.
+    const shown =
+      Array.isArray(seen.ref) &&
+      seen.ref.every((part) => typeof part === "string")
+        ? commandLine(seen.ref)
+        : commandKey(seen.ref);
+    return `reported done — evidence: \`${shown}\` exited 0`;
   }
 
   /** What `/goal` shows while it runs. */

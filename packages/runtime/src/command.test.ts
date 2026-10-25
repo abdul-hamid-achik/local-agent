@@ -469,6 +469,16 @@ test("shellWord shows an argument as a shell reads it, hidden characters as esca
   expect(shellWord("nb\u00a0sp")).toBe("$'nb\\u00a0sp'");
   expect(shellWord("it's\tok\\")).toBe("$'it\\'s\\tok\\\\'");
   expect(shellWord("\u{e0001}tag")).toBe("$'\\U000e0001tag'");
+  // Letters and marks that draw nothing: a Hangul filler looks like a
+  // space, a variation selector like nothing at all.
+  expect(shellWord("a\u3164b")).toBe("$'a\\u3164b'");
+  expect(shellWord("a\u2800b")).toBe("$'a\\u2800b'");
+  expect(shellWord("x\ufe0f")).toBe("$'x\\ufe0f'");
+  expect(shellWord("a\u034fb")).toBe("$'a\\u034fb'");
+  expect(shellWord("a\ufffcb")).toBe("$'a\\ufffcb'");
+  expect(shellWord("x\u{e0100}")).toBe("$'x\\U000e0100'");
+  // An accent that combines with its letter still shows as one.
+  expect(shellWord("cafe\u0301")).toBe("'cafe\u0301'");
   expect(commandLine(["rm", "-rf", "a b", ""])).toBe("rm -rf 'a b' ''");
 });
 
@@ -487,6 +497,7 @@ test("what shellWord shows, bash reads back as the very argument", () => {
     "tab\there 'q' \\ $HOME `x`",
     "é 🙂",
     "\u{e0001}tag",
+    "a\u3164b x\ufe0f a\u2800b",
   ];
   for (const value of values) {
     const read = execFileSync("bash", ["-c", `printf %s ${shellWord(value)}`]);

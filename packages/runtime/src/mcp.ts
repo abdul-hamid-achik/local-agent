@@ -439,12 +439,12 @@ export function defaultMcpConfigPath(
   return join(userConfigDir(env), "mcp.json");
 }
 
+const MAX_CONFIG_BYTES = 1_000_000;
+
 /**
  * An MCP config file: a JSON array of at most 16 servers with distinct
  * names, at most 1 MB. Throws on anything else.
  */
-const MAX_CONFIG_BYTES = 1_000_000;
-
 export async function readMcpConfig(path: string): Promise<McpServerConfig[]> {
   // Opened without blocking and checked to be a regular file before the
   // read: a FIFO or a device named mcp.json would wait forever.
@@ -462,7 +462,9 @@ export async function readMcpConfig(path: string): Promise<McpServerConfig[]> {
   // A file that grew after the check is held to the same bound.
   if (Buffer.byteLength(text) > MAX_CONFIG_BYTES)
     throw new Error("MCP config exceeds 1 MB");
-  const configs = McpServerConfigSchema.array().max(16).parse(JSON.parse(text));
+  // A BOM is not part of the JSON (Bun.file().json() skipped it too).
+  const json = text.startsWith("\ufeff") ? text.slice(1) : text;
+  const configs = McpServerConfigSchema.array().max(16).parse(JSON.parse(json));
   if (new Set(configs.map((config) => config.name)).size !== configs.length)
     throw new Error("Duplicate MCP server names");
   return configs;

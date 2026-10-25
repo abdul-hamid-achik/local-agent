@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
 import {
-  commandLine,
+  commandKey,
   effectful,
   GOAL_OUTPUT_TOKENS,
   GOAL_TIME_MS,
@@ -272,11 +272,11 @@ test("done is 'with evidence' only for a command that succeeded during the goal,
 });
 
 test("argv becomes one command line; progress is an effect or an MCP call", () => {
-  expect(commandLine(["bun", "test", "a b"])).toBe("bun test a b");
-  expect(commandLine(" bun   test ")).toBe("bun test");
-  expect(commandLine([1, 2])).toBeUndefined();
-  expect(commandLine(undefined)).toBeUndefined();
-  expect(commandLine("   ")).toBeUndefined();
+  expect(commandKey(["bun", "test", "a b"])).toBe("bun test a b");
+  expect(commandKey(" bun   test ")).toBe("bun test");
+  expect(commandKey([1, 2])).toBeUndefined();
+  expect(commandKey(undefined)).toBeUndefined();
+  expect(commandKey("   ")).toBeUndefined();
   const mcp = new Set(["cortex__remember"]);
   for (const name of ["edit", "write", "run_command", "cortex__remember"])
     expect(effectful(name, mcp)).toBe(true);

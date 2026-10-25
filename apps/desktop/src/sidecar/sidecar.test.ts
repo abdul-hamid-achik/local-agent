@@ -336,10 +336,15 @@ test("past 64 waiting requests one is refused at once, and a cancel is still ans
   const held = new Promise<void>((resolve) => {
     release = resolve;
   });
+  let reached = () => {};
+  const arrived = new Promise<void>((resolve) => {
+    reached = resolve;
+  });
   const server = Bun.serve({
     hostname: "127.0.0.1",
     port: 0,
     async fetch() {
+      reached();
       await held;
       return Response.json({ models: [] });
     },
@@ -350,8 +355,9 @@ test("past 64 waiting requests one is refused at once, and a cancel is still ans
   });
   try {
     side.send({ id: 1, method: "ollama.models", params: {} });
-    await Bun.sleep(100);
-    // id 1 is in its turn; 2..65 wait behind it.
+    // Its request reached the server: id 1 is in its turn, so 2..65 are
+    // the ones waiting.
+    await arrived;
     for (let id = 2; id <= 65; id++) side.send({ id, method: "hello" });
     side.send({ id: 66, method: "hello" });
     side.send({ id: 67, method: "agent.cancel", params: { runId: "r1" } });
@@ -615,16 +621,64 @@ for (const [how, end] of [
     }
   });
 
+test("a shutdown cancels an MCP status check and its servers go too", async () => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), "la-sidecar-")));
+  const config = join(root, "mcp.json");
+  const pidFile = join(root, "server.pid");
+  // A stdio server that starts and never answers.
+  await writeFile(
+    config,
+    JSON.stringify([
+      {
+        name: "mute",
+        transport: {
+          kind: "stdio",
+          command: process.execPath,
+          args: [
+            "-e",
+            `require("node:fs").writeFileSync(${JSON.stringify(pidFile)}, String(process.pid)); setInterval(() => {}, 1000);`,
+          ],
+        },
+      },
+    ]),
+  );
+  const side = sidecarChild({ DESKTOP_REPO_ROOT: root });
+  try {
+    side.send({ id: 1, method: "mcp.status", params: { configPath: config } });
+    let pid = 0;
+    for (let tries = 0; tries < 250 && !pid; tries += 1) {
+      pid = Number(await readFile(pidFile, "utf8").catch(() => "0"));
+      if (!pid) await Bun.sleep(20);
+    }
+    expect(pid).toBeGreaterThan(0);
+    const started = Date.now();
+    side.child.kill("SIGTERM");
+    expect(await side.child.exited).toBe(0);
+    // Well before the server's 15 s connect timeout.
+    expect(Date.now() - started).toBeLessThan(2_500);
+    expect(await gone(pid)).toBe(true);
+  } finally {
+    side.child.kill();
+    await side.child.exited;
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("a request served after the shutdown began starts nothing", async () => {
   const root = await sleeperRepo();
   let release = () => {};
   const held = new Promise<void>((resolve) => {
     release = resolve;
   });
+  let reached = () => {};
+  const arrived = new Promise<void>((resolve) => {
+    reached = resolve;
+  });
   const server = Bun.serve({
     hostname: "127.0.0.1",
     port: 0,
     async fetch() {
+      reached();
       await held;
       return Response.json({ models: [] });
     },
@@ -648,9 +702,15 @@ test("a request served after the shutdown began starts nothing", async () => {
       method: "project.run",
       params: { name: "test", runId: "p2" },
     });
-    await Bun.sleep(50);
+    await arrived;
     side.child.kill("SIGTERM");
+    // A control is still answered while the shutdown waits for p1.
     await Bun.sleep(50);
+    side.send({ id: 4, method: "project.cancel", params: { runId: "none" } });
+    expect(await side.frame((frame) => frame.id === 4)).toMatchObject({
+      ok: true,
+      result: { cancelled: false },
+    });
     release();
     expect(await side.child.exited).toBe(0);
     expect(await gone(first)).toBe(true);

@@ -480,10 +480,20 @@ async function handleRecoveryInfo(params: unknown) {
   }
 }
 
+/** Status checks in flight: a shutdown cancels them and waits for them. */
+let statusChecks = 0;
+
 async function handleMcpStatus(params: unknown) {
   if (!isRecord(params)) throw new Error("Invalid mcp.status params");
   const configs = await readMcpConfig(requiredString(params, "configPath"));
-  const startup = await connectMcpServers(configs);
+  statusChecks++;
+  let startup: Awaited<ReturnType<typeof connectMcpServers>>;
+  try {
+    // Cancelled by a shutdown, which then closes what had connected.
+    startup = await connectMcpServers(configs, stopping.signal);
+  } finally {
+    statusChecks--;
+  }
   await Promise.allSettled(
     startup.connected.map(({ connection }) => connection.close()),
   );
@@ -676,8 +686,10 @@ async function handleDocsList() {
 async function dispatch(request: RpcRequest): Promise<void> {
   const { id, method, params } = request;
   // A request read before the shutdown but served after it starts nothing
-  // the shutdown would not stop.
-  if (shuttingDown) throw new Error("The sidecar is shutting down");
+  // the shutdown would not stop. A run's controls still answer: the runs
+  // are being cancelled anyway.
+  if (shuttingDown && !CONTROLS.has(method))
+    throw new Error("The sidecar is shutting down");
   // Streaming methods own their response frame.
   if (method === SidecarMethods.agentStart) {
     await handleAgentStart(id, params);
@@ -760,6 +772,7 @@ const MAX_QUEUED = 64;
 /** How long a shutdown waits for cancelled runs to close what they opened. */
 const SHUTDOWN_GRACE_MS = 2_000;
 let shuttingDown = false;
+const stopping = new AbortController();
 
 /**
  * Ends the sidecar: on SIGTERM, SIGINT or SIGHUP (the desktop's stop),
@@ -773,12 +786,14 @@ let shuttingDown = false;
 function shutdown(): void {
   if (shuttingDown) return;
   shuttingDown = true;
+  stopping.abort(new Error("The sidecar is shutting down"));
   for (const run of activeRuns.values()) cancelRun(run);
   const groups = [...projectRuns.values()];
   for (const run of groups) stopProjectRun(run);
   const deadline = Date.now() + SHUTDOWN_GRACE_MS;
   const poll = setInterval(() => {
-    const running = activeRuns.size > 0 || projectRuns.size > 0;
+    const running =
+      activeRuns.size > 0 || projectRuns.size > 0 || statusChecks > 0;
     if (running && Date.now() < deadline) return;
     clearInterval(poll);
     for (const run of groups)

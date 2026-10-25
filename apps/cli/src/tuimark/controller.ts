@@ -24,6 +24,7 @@ import {
   appendRule,
   ConversationFullError,
   clearRules,
+  commandLine,
   type Disposition,
   evaluate,
   explicitContextNote,
@@ -51,7 +52,6 @@ import {
   type SessionContext,
   StepLimitError,
   sandboxUnavailable,
-  commandLine as shellLine,
   tooLongToSend,
   trustRules,
   trustStorePath,
@@ -107,7 +107,7 @@ import {
   transcriptMarkdown,
 } from "#cli/tuimark/export";
 import {
-  commandLine,
+  commandKey,
   effectful,
   type GoalCommand,
   GoalRun,
@@ -3234,7 +3234,7 @@ export class TuimarkClient {
     ) {
       const why = this.sandboxProblem();
       if (why === undefined) {
-        this.flash(oneLine(`sandboxed: ${shellLine(proposal.argv)}`));
+        this.flash(oneLine(`sandboxed: ${commandLine(proposal.argv)}`));
         return "sandbox";
       }
       // It stopped being available: off, and this command asks, whatever
@@ -3992,7 +3992,7 @@ export class TuimarkClient {
       if (finished) await this.showPlacement();
       if (this.goalTurn)
         this.goalTurn.commands = commandsOk.flatMap(
-          (id) => commandLine(commandArgs.get(id)) ?? [],
+          (id) => commandKey(commandArgs.get(id)) ?? [],
         );
       // Before busy clears: a goal that stops says why after its turn,
       // and one that goes on starts its next turn with no gap a send

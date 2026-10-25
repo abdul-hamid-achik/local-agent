@@ -197,9 +197,14 @@ export async function createCommandProposal(
 // A character that would not show as itself: controls (an escape sequence
 // starts with one), format characters (zero-width, direction overrides),
 // separators that look like a space or a line break, private-use,
-// unassigned and lone surrogate code points.
+// unassigned and lone surrogate code points, and the letters and marks
+// that draw nothing: the combining grapheme joiner, Hangul and Khmer
+// fillers, variation selectors, the braille blank and the object
+// replacement character. Accents and other combining marks stay as they
+// are: they show on the letter they join.
 const HIDDEN =
-  /[\p{Cc}\p{Cf}\p{Cs}\p{Co}\p{Cn}\p{Zl}\p{Zp}\u00a0\u1680\u2000-\u200a\u202f\u205f\u3000]/u;
+  // biome-ignore lint/suspicious/noMisleadingCharacterClass: with the u flag each code point is matched on its own, and a mark listed here is a character to escape, not part of the one before it
+  /[\p{Cc}\p{Cf}\p{Cs}\p{Co}\p{Cn}\p{Zl}\p{Zp}\u00a0\u1680\u2000-\u200a\u202f\u205f\u3000\u034f\u115f\u1160\u17b4\u17b5\u180b-\u180f\u2800\u3164\ufe00-\ufe0f\uffa0\ufffc\u{e0100}-\u{e01ef}]/u;
 const ESCAPES: Readonly<Record<string, string>> = {
   "\\": "\\\\",
   "'": "\\'",

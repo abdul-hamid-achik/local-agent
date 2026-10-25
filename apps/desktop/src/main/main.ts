@@ -157,6 +157,8 @@ ipcMain.handle("desktop/restart-sidecar", () => {
 ipcMain.handle(
   "desktop/set-provider-env",
   (_event, env: Record<string, string>) => {
+    // Refused before it is saved: during a quit no sidecar starts with it.
+    if (quitGuard.quitting) throw new Error("The app is quitting");
     const problem = providerEnvProblem(env);
     if (problem) throw new Error(problem);
     settings = { ...settings, providerEnv: env };
