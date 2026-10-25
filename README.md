@@ -23,8 +23,8 @@ continues to describe historical released functionality and labels that scope.
 
 ## Development and usage
 
-Use Bun **1.4.2**. The workspace pins TypeScript **7.0.2**, Vue **3.5.42**,
-Zod **4.5.4**, Vue TermUI **0.3.0**, OpenTUI **0.5.11**, Vitest **5.0.0**,
+Use Bun **1.4.2**. The workspace pins TypeScript **7.0.2**, Vue **3.5.44**,
+Zod **4.6.6**, Vue TermUI **0.3.0**, OpenTUI **0.5.11**, Vitest **5.0.5**,
 and Biome **2.5.12**.
 
 | Workspace | Responsibility |

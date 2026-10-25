@@ -8,9 +8,9 @@ outline: deep
 
 Local Agent is the conversation, model, and permission host. The surrounding projects remain focused tools with explicit interfaces. They are not all bundled integrations.
 
-The shared transcript vocabulary keeps those ownership boundaries legible:
+Each tool owns what its results mean:
 
-| Tool | Product role | Evidence meaning |
+| Tool | Product role | What its results can mean |
 | --- | --- | --- |
 | MCPHub | MCP gateway | Routing only |
 | Vecgrep | Semantic discovery | Candidate |
@@ -24,7 +24,7 @@ The shared transcript vocabulary keeps those ownership boundaries legible:
 | Bob | Repository contract and convergence | No evidence upgrade; clean, drift, conflict, blocked, or failed domain state |
 | Tuimark | Terminal interface engine | Presentation only |
 
-Local Agent shows these as semantic tool receipts in one chronological transcript. A green transport receipt is never substituted for a domain result or verification outcome.
+Local Agent does not read these meanings yet. A tool it reaches through a configured MCP server is a generic MCP call. In the Tuimark client's transcript, a result the server returns without an error is marked unverified (`!`) on its card, never verified, and an error result is marked failed (`✗`). A successful transport is never taken for a domain result or a verification outcome. See [MCP](/mcp#transport-is-not-domain-success).
 
 ## Terminal interface
 

@@ -27,7 +27,8 @@
   --la-panel-muted: #ebe6da;
   --la-ink: #191b18;
   --la-muted: #5f625b;
-  --la-faint: #777a71;
+  /* At least 4.5:1 on --la-bg, --la-panel and --la-panel-muted. */
+  --la-faint: #656860;
   --la-line: rgba(25, 27, 24, 0.14);
   --la-line-strong: rgba(25, 27, 24, 0.25);
   --la-copper: #91432e;

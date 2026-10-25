@@ -15,7 +15,7 @@
     },
     "apps/cli": {
       "name": "@local-agent/cli",
-      "version": "0.0.0",
+      "version": "0.49.0",
       "bin": {
         "local-agent": "./launcher.ts",
       },
@@ -59,7 +59,7 @@
     "docs": {
       "name": "@local-agent/site",
       "dependencies": {
-        "@vercel/analytics": "^2.0.1",
+        "@vercel/analytics": "2.0.1",
       },
       "devDependencies": {
         "vite": "6.4.5",

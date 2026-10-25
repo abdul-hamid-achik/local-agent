@@ -8,7 +8,10 @@ outline: deep
 
 There is no model picker in the current client: no inventory screen, no
 Ollama Cloud, no automatic routing, no pins. The model is chosen before launch
-and holds for the run; no slash command switches it mid-session.
+(`--model` or `LOCAL_AGENT_MODEL`). In the Tuimark client, `/model NAME`
+switches to another installed model between turns, after the same admission
+check as at launch, and `/model` alone names the current one. See
+[Command reference](/reference).
 
 ## The default
 
@@ -112,6 +115,6 @@ Ollama guidance about model sizes, not a tested claim about this client:
 | 32 GB+ RAM | Larger reasoning models | `qwen3.5:9b` |
 
 Pull a model first (`ollama pull NAME`); a model that is not installed fails
-the admission check at startup rather than mid-session. Larger models and
+the admission check, at startup or on `/model NAME`. Larger models and
 larger contexts need more memory — budget beyond the model weights before
 raising `--context`.

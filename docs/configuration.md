@@ -17,9 +17,9 @@ in the [Command reference](/reference) or a variable in the table below.
 | `LOCAL_AGENT_MODEL` | Default model; `--model` overrides it |
 | `LOCAL_AGENT_THINK` | `1` or `0`; same as `--think on\|off`. Unset means the model default |
 | `LOCAL_AGENT_CONTEXT` | Default context tokens; same as `--context`. `32768` and `32k` both work |
-| `LOCAL_AGENT_PROVIDER` | Provider selection: `ollama` or `chalupa` only |
-| `LOCAL_AGENT_LOCAL_ONLY` | Local-endpoint enforcement; must be `false` for `chalupa` |
-| `LOCAL_AGENT_PROVIDER_CONFIG` | Chalupa profile JSON |
+| `LOCAL_AGENT_PROVIDER` | Provider selection: `ollama` (the default), `chalupa`, or `openai_local`; see [Providers](/providers) |
+| `LOCAL_AGENT_LOCAL_ONLY` | Local-endpoint enforcement; must be `false` for `chalupa`, and for an `openai_local` server that is not on loopback |
+| `LOCAL_AGENT_PROVIDER_CONFIG` | The `chalupa` or `openai_local` profile JSON |
 | `TUIMARK_BINARY` | Path to the tuimark binary; otherwise a pinned release (0.5.1) is downloaded checksum-verified |
 | `LOCAL_AGENT_DIAGNOSTICS` | `1` appends a Biome check of each approved edit, using the workspace's own `@biomejs/biome` install and its root `biome.json` (default off) |
 | `LOCAL_AGENT_DIAGNOSTICS_TSC` | `1` also appends a `tsc --noEmit` section after `.ts` edits, using the workspace's own `typescript` and its root `tsconfig.json` (slow: full project) |
