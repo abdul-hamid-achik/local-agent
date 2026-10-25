@@ -20,6 +20,8 @@ export type OllamaAdmission =
       nativeContext: number | undefined;
       /** f16 KV cache bytes per token of context, when model_info says. */
       kvBytesPerToken?: number;
+      /** f16 bytes of its sliding-window caches, which do not grow with the context. */
+      kvWindowBytes?: number;
       /**
        * Ollama serves it on its MLX runner, which ignores `num_ctx` and grows
        * the KV cache with the conversation (see `ollamaMLX`).
@@ -107,16 +109,31 @@ const count = (value: unknown) =>
     : undefined;
 
 /**
- * The f16 KV cache bytes one token of context costs, from `/api/show`
- * `model_info`: 2 (K and V) × KV heads × head size, over the layers that
- * keep a cache. A per-layer head count (an array) says which layers do; a
- * hybrid model's `full_attention_interval` says one in that many does.
- * Sliding-window layers are counted as full ones, which errs high.
- * Undefined when the fields are missing.
+ * llama.cpp sizes a sliding-window layer's cache to the window plus one
+ * micro-batch, padded to 256 cells, whatever the context. Ollama's logs
+ * show chat models loaded with a 512 or a 1024-token micro-batch, even the
+ * same model on different loads, so the larger is assumed (local-agent
+ * sends no num_batch; a larger one would need more).
  */
-export function kvBytesPerToken(
+const WINDOW_BATCH = 1024;
+const windowCells = (window: number) =>
+  Math.ceil((window + WINDOW_BATCH) / 256) * 256;
+
+/**
+ * The f16 KV cache a model keeps, from `/api/show` `model_info`. A layer's
+ * cache costs 2 (K and V) × KV heads × head size × 2 bytes per token. A
+ * per-layer head count (an array) says which layers keep one; a hybrid
+ * model's `full_attention_interval` says one in that many does; the last
+ * `attention.shared_kv_layers` reuse earlier layers' caches and keep none.
+ * A layer that `attention.sliding_window_pattern` marks (true) holds only
+ * `attention.sliding_window` tokens plus a micro-batch, a fixed cost: with no
+ * window size it counts as a full layer, which errs high. `perToken` is
+ * what each token of context costs; `windowBytes` is the fixed part.
+ * Undefined when the fields are missing or no layer keeps a cache.
+ */
+function kvCache(
   modelInfo: Record<string, unknown> | undefined,
-): number | undefined {
+): { perToken: number; windowBytes: number } | undefined {
   const arch = modelInfo?.["general.architecture"];
   if (!modelInfo || typeof arch !== "string") return undefined;
   const field = (key: string) => modelInfo[`${arch}.${key}`];
@@ -129,22 +146,61 @@ export function kvBytesPerToken(
   const valueLength = count(field("attention.value_length")) ?? keyLength;
   if (!blocks || !keyLength || !valueLength) return undefined;
   const kvHeads = field("attention.head_count_kv");
-  let cachedHeads: number;
-  if (Array.isArray(kvHeads))
-    cachedHeads = kvHeads.reduce<number>(
-      (total, value) => total + (count(value) ?? 0),
-      0,
-    );
-  else {
-    const perLayer = count(kvHeads) ?? heads;
-    if (!perLayer) return undefined;
-    const interval = count(field("full_attention_interval"));
-    cachedHeads =
-      perLayer *
-      (interval && interval > 1 ? Math.ceil(blocks / interval) : blocks);
+  const perLayer = Array.isArray(kvHeads)
+    ? undefined
+    : (count(kvHeads) ?? heads);
+  if (!Array.isArray(kvHeads) && !perLayer) return undefined;
+  const interval = count(field("full_attention_interval"));
+  if (perLayer && interval && interval > 1) {
+    const perToken =
+      perLayer * Math.ceil(blocks / interval) * (keyLength + valueLength) * 2;
+    return { perToken, windowBytes: 0 };
   }
-  if (cachedHeads === 0) return undefined;
-  return cachedHeads * (keyLength + valueLength) * 2;
+  const layers = Array.isArray(kvHeads) ? kvHeads.length : blocks;
+  const shared = Math.min(
+    count(field("attention.shared_kv_layers")) ?? 0,
+    layers,
+  );
+  const pattern = field("attention.sliding_window_pattern");
+  const window = count(field("attention.sliding_window"));
+  const windowKey = count(field("attention.key_length_swa")) ?? keyLength;
+  const windowValue =
+    count(field("attention.value_length_swa")) ??
+    count(field("attention.key_length_swa")) ??
+    valueLength;
+  let perToken = 0;
+  let windowBytes = 0;
+  for (let layer = 0; layer < layers - shared; layer++) {
+    const cached = Array.isArray(kvHeads)
+      ? (count(kvHeads[layer]) ?? 0)
+      : (perLayer ?? 0);
+    if (window && Array.isArray(pattern) && pattern[layer] === true)
+      windowBytes +=
+        cached * (windowKey + windowValue) * 2 * windowCells(window);
+    else perToken += cached * (keyLength + valueLength) * 2;
+  }
+  if (perToken === 0 && windowBytes === 0) return undefined;
+  return { perToken, windowBytes };
+}
+
+/**
+ * The f16 KV cache bytes one token of context costs (see `kvCache`): 0 when
+ * every layer that keeps a cache holds only a window.
+ */
+export function kvBytesPerToken(
+  modelInfo: Record<string, unknown> | undefined,
+): number | undefined {
+  return kvCache(modelInfo)?.perToken;
+}
+
+/**
+ * The f16 bytes of a model's sliding-window caches, which do not grow with
+ * the context (see `kvCache`); 0 when it has none.
+ */
+export function kvWindowBytes(
+  modelInfo: Record<string, unknown> | undefined,
+): number {
+  return kvCache(modelInfo)?.windowBytes ?? 0;
 }
 
 const maxMetadataBytes = 1 << 20;
@@ -354,12 +410,14 @@ export async function admitOllamaModel(
       kind: "policy",
       message: `Ollama model ${config.model} cannot satisfy context_size ${config.context_size}${config.type === "ollama" ? `; its native context is ${nativeContext}, so use --context ${nativeContext} or less` : ""}`,
     };
+  const windowBytes = kvWindowBytes(show.model_info);
   return {
     status: "validated",
     model: config.model,
     sizeBytes,
     nativeContext,
     kvBytesPerToken: kvBytesPerToken(show.model_info),
+    ...(windowBytes > 0 ? { kvWindowBytes: windowBytes } : {}),
     ...(ollamaMLX(show.details) ? { mlx: true as const } : {}),
     capabilities,
   };

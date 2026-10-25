@@ -28,6 +28,7 @@ import {
   clearRules,
   commandLine,
   compactNow,
+  contextFacts,
   type Disposition,
   evaluate,
   explicitContextNote,
@@ -1972,13 +1973,7 @@ export class TuimarkClient {
     const model = admission.status === "validated" ? admission.model : name;
     // Only Ollama's inventory says how big a model is.
     const facts = sized(admission)
-      ? {
-          nativeContext: admission.nativeContext,
-          weightsBytes: admission.sizeBytes,
-          kvBytesPerToken: admission.kvBytesPerToken,
-          totalMemory: this.options.totalMemory?.() ?? totalmem(),
-          mlx: admission.mlx,
-        }
+      ? contextFacts(admission, this.options.totalMemory?.() ?? totalmem())
       : undefined;
     // A size the user set stays: its note (and warning) is for this model.
     const plan = planned && facts ? planContextSize(facts) : undefined;
@@ -2097,13 +2092,10 @@ export class TuimarkClient {
       );
       return false;
     }
-    const facts = {
-      nativeContext: admission.nativeContext,
-      weightsBytes: admission.sizeBytes,
-      kvBytesPerToken: admission.kvBytesPerToken,
-      totalMemory: this.options.totalMemory?.() ?? totalmem(),
-      mlx: admission.mlx,
-    };
+    const facts = contextFacts(
+      admission,
+      this.options.totalMemory?.() ?? totalmem(),
+    );
     const native = facts.nativeContext;
     if (!auto && native !== undefined && size > native) {
       await status(

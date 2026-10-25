@@ -42,8 +42,13 @@ per token, and picks the largest of 32768, 24576, 16384, 12288 and 8192
 tokens that fits in about 11/16 of the machine's memory once the weights and
 2.5 GiB of headroom are set aside, never above the model's native context.
 `qwen3.5:4b`, whose cache lives in one layer of four, gets 32768 on a 16 GB
-machine. A model that does not report the figures keeps 16384, as does a run
-that cannot reach Ollama. In the Tuimark client, `/status` shows how the size
+machine. In a model whose metadata marks sliding-window layers (Gemma 4, for
+one), those layers hold only their window, a fixed cost, and layers that share
+another layer's cache cost nothing. Of the 42 layers of
+`nemotron-3.5-bolt:e4b-q4_K_M`, 18 share a cache and 20 hold a window, so only
+4 grow with the context: it also gets 32768, next to its 7.9 GB of weights.
+A model that does not report the figures keeps 16384, as does a run that
+cannot reach Ollama. In the Tuimark client, `/status` shows how the size
 was chosen, and `/model` plans again for the new model. The planner stops at
 32768 because refilling a larger window takes long on small models; pass
 `--context` for more.

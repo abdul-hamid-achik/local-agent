@@ -21,6 +21,36 @@ const LOW_REMOTE_CONTEXT = 16_384;
 
 export type ContextPlan = { context: number; reason: string; warning?: string };
 
+/** What the planner and `explicitContextNote` weigh a size against. */
+export type ContextFacts = {
+  nativeContext?: number;
+  weightsBytes: number;
+  /** f16 KV cache bytes per token of context. */
+  kvBytesPerToken?: number;
+  /** f16 bytes of its sliding-window caches, whatever the context. */
+  kvWindowBytes?: number;
+  totalMemory: number;
+  /** Ollama serves it on MLX: the same size, but only as local-agent's own. */
+  mlx?: boolean;
+};
+
+/** The facts a validated local Ollama admission gives the planner. */
+export function contextFacts(
+  admission: Extract<OllamaAdmission, { status: "validated" }>,
+  totalMemory: number,
+): ContextFacts {
+  return {
+    nativeContext: admission.nativeContext,
+    weightsBytes: admission.sizeBytes,
+    kvBytesPerToken: admission.kvBytesPerToken,
+    ...(admission.kvWindowBytes
+      ? { kvWindowBytes: admission.kvWindowBytes }
+      : {}),
+    totalMemory,
+    ...(admission.mlx ? { mlx: true } : {}),
+  };
+}
+
 const gib = (bytes: number) => `${(bytes / GIB).toFixed(1)} GiB`;
 
 /**
@@ -37,21 +67,16 @@ export const MLX_WARNING =
  * The largest of 32k, 24k, 16k, 12k and 8k tokens whose KV cache fits, never
  * above the model's native context. What fits is 11/16 of the machine's
  * memory (about what Metal lets the GPU use), less the weights, less 2.5 GiB
- * for the compute buffer, Ollama's prompt cache and its checkpoints. With
+ * for the compute buffer, Ollama's prompt cache and its checkpoints. The KV
+ * cache is the per-token part times the size plus the sliding-window
+ * caches, which do not grow with it. With
  * no KV facts the size stays at the long-standing 16384; when nothing fits,
  * 16384 or 12288 still stands if its cache fits without the headroom (as
  * it ran before planning), and 8192 otherwise. On Ollama's MLX runner the
  * size is the same, as the most local-agent sends in one request, with a
  * warning: that runner reserves nothing for it.
  */
-export function planContextSize(facts: {
-  nativeContext?: number;
-  weightsBytes: number;
-  kvBytesPerToken?: number;
-  totalMemory: number;
-  /** Ollama serves it on MLX: the same size, but only as local-agent's own. */
-  mlx?: boolean;
-}): ContextPlan {
+export function planContextSize(facts: ContextFacts): ContextPlan {
   const plan = fitContext(facts);
   return facts.mlx
     ? {
@@ -62,12 +87,7 @@ export function planContextSize(facts: {
     : plan;
 }
 
-function fitContext(facts: {
-  nativeContext?: number;
-  weightsBytes: number;
-  kvBytesPerToken?: number;
-  totalMemory: number;
-}): ContextPlan {
+function fitContext(facts: ContextFacts): ContextPlan {
   const native = facts.nativeContext ?? Number.POSITIVE_INFINITY;
   const kv = facts.kvBytesPerToken;
   if (kv === undefined)
@@ -76,19 +96,20 @@ function fitContext(facts: {
       reason: "the default: the model does not report its KV cache size",
     };
   const budget = (facts.totalMemory * 11) / 16 - facts.weightsBytes - HEADROOM;
+  const cache = (size: number) => size * kv + (facts.kvWindowBytes ?? 0);
   for (const step of STEPS) {
     if (step > native) continue;
-    if (step * kv <= budget)
+    if (cache(step) <= budget)
       return {
         context: step,
-        reason: `planned: its KV cache takes ${gib(step * kv)} of the ${gib(Math.max(0, budget))} left after the weights and headroom`,
+        reason: `planned: its KV cache takes ${gib(cache(step))} of the ${gib(Math.max(0, budget))} left after the weights and headroom`,
       };
   }
   // Memory is tight: the long-standing 16384 (or 12288) still stands when
   // its cache fits without the headroom, as it ran before the planner.
   const bare = budget + HEADROOM;
   const fallback =
-    [16_384, 12_288].find((step) => step <= native && step * kv <= bare) ??
+    [16_384, 12_288].find((step) => step <= native && cache(step) <= bare) ??
     Math.min(8_192, native);
   return {
     context: fallback,
@@ -105,12 +126,7 @@ function fitContext(facts: {
  * reserves nothing.
  */
 export function explicitContextNote(
-  facts: {
-    weightsBytes: number;
-    kvBytesPerToken?: number;
-    totalMemory: number;
-    mlx?: boolean;
-  },
+  facts: ContextFacts,
   context: number,
   setBy = "--context or LOCAL_AGENT_CONTEXT",
 ): { reason: string; warning?: string } {
@@ -122,7 +138,7 @@ export function explicitContextNote(
     };
   const kv = facts.kvBytesPerToken;
   if (kv === undefined) return { reason: `set by ${setBy}` };
-  const need = context * kv;
+  const need = context * kv + (facts.kvWindowBytes ?? 0);
   const left = Math.max(
     0,
     (facts.totalMemory * 11) / 16 - facts.weightsBytes - HEADROOM,
@@ -192,12 +208,7 @@ export async function planContextAdmitted(
     return { provider, ...(admission ? { admission } : {}) };
   if (provider.context_explicit) {
     const note = explicitContextNote(
-      {
-        weightsBytes: admission.sizeBytes,
-        kvBytesPerToken: admission.kvBytesPerToken,
-        totalMemory,
-        mlx: admission.mlx,
-      },
+      contextFacts(admission, totalMemory),
       provider.context_size,
     );
     return {
@@ -209,13 +220,7 @@ export async function planContextAdmitted(
       admission,
     };
   }
-  const plan = planContextSize({
-    nativeContext: admission.nativeContext,
-    weightsBytes: admission.sizeBytes,
-    kvBytesPerToken: admission.kvBytesPerToken,
-    totalMemory,
-    mlx: admission.mlx,
-  });
+  const plan = planContextSize(contextFacts(admission, totalMemory));
   return {
     provider: {
       ...provider,

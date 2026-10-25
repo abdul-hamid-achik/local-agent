@@ -1,5 +1,5 @@
 import { expect, test, vi } from "vitest";
-import { kvBytesPerToken } from "#runtime/admission";
+import { kvBytesPerToken, kvWindowBytes } from "#runtime/admission";
 import { resolveProvider } from "#runtime/config";
 import {
   explicitContextNote,
@@ -54,6 +54,74 @@ test("KV bytes per token follow the layers that keep a cache", () => {
   expect(
     kvBytesPerToken({ ...qwen35, "qwen35.attention.head_count_kv": [0, 0] }),
   ).toBeUndefined();
+  expect(kvWindowBytes(qwen35)).toBe(0);
+});
+
+// nemotron-3.5-bolt:e4b-q4_K_M (gemma4) as `/api/show` reports it: five
+// sliding-window layers to each global one, and the last 18 layers reuse
+// earlier layers' caches.
+const gemma4 = {
+  "general.architecture": "gemma4",
+  "gemma4.attention.head_count": 8,
+  "gemma4.attention.head_count_kv": 2,
+  "gemma4.attention.key_length": 512,
+  "gemma4.attention.key_length_swa": 256,
+  "gemma4.attention.shared_kv_layers": 18,
+  "gemma4.attention.sliding_window": 512,
+  "gemma4.attention.sliding_window_pattern": Array.from(
+    { length: 42 },
+    (_, layer) => layer % 6 !== 5,
+  ),
+  "gemma4.attention.value_length": 512,
+  "gemma4.attention.value_length_swa": 256,
+  "gemma4.block_count": 42,
+  "gemma4.context_length": 65536,
+  "gemma4.embedding_length": 2560,
+};
+
+test("sliding-window and shared layers cost what llama.cpp allocates, with a 1024-token micro-batch", () => {
+  // Of the 24 layers that keep a cache, 4 are global: 4 × 2 KV heads ×
+  // (512 + 512) × 2 bytes. Ollama's log at 65536 (q8_0, 34/64 of f16):
+  // "65536 cells, 4 layers … 544.00 MiB" = 65536 × 16384 × 34/64.
+  expect(kvBytesPerToken(gemma4)).toBe(16_384);
+  // The other 20 hold the 512-token window plus a micro-batch. At 512,
+  // "1024 cells, 20 layers … 21.25 MiB" = 20 × 2 × 512 × 2 × 1024 × 34/64;
+  // the plan assumes a 1024 micro-batch, 1536 cells.
+  expect(kvWindowBytes(gemma4)).toBe(20 * 2 * 512 * 2 * 1536);
+  // Without a window size a sliding layer counts as a full one.
+  const { "gemma4.attention.sliding_window": _, ...unbounded } = gemma4;
+  expect(kvBytesPerToken(unbounded)).toBe(24 * 2 * 1024 * 2);
+  expect(kvWindowBytes(unbounded)).toBe(0);
+  // Without a pattern every layer is full; shared layers still keep none.
+  const { "gemma4.attention.sliding_window_pattern": __, ...dense } = gemma4;
+  expect(kvBytesPerToken(dense)).toBe(24 * 2 * 1024 * 2);
+  const { "gemma4.attention.shared_kv_layers": ___, ...unshared } = dense;
+  expect(kvBytesPerToken(unshared)).toBe(42 * 2 * 1024 * 2);
+});
+
+test("a gemma4 model plans what its cache needs, not 10 times that", () => {
+  const facts = {
+    nativeContext: 65_536,
+    weightsBytes: 7_908_813_050,
+    kvBytesPerToken: kvBytesPerToken(gemma4),
+    kvWindowBytes: kvWindowBytes(gemma4),
+    totalMemory: MAC_16GB,
+  };
+  expect(planContextSize(facts)).toEqual({
+    context: 32_768,
+    reason:
+      "planned: its KV cache takes 0.6 GiB of the 1.1 GiB left after the weights and headroom",
+  });
+  // The window caches count: with 0.75 GiB of them, 32k no longer fits.
+  expect(planContextSize({ ...facts, kvWindowBytes: 0.75 * GIB }).context).toBe(
+    24_576,
+  );
+  expect(explicitContextNote(facts, 65_536).warning).toBeUndefined();
+  expect(
+    explicitContextNote({ ...facts, kvWindowBytes: GIB }, 65_536).warning,
+  ).toBe(
+    "context 65536 needs a 2.0 GiB KV cache, more than the 1.1 GiB left after the weights and headroom: Ollama may run part of the model on the CPU, or fail to load it",
+  );
 });
 
 test("the planned size is the largest step that fits", () => {
@@ -167,6 +235,27 @@ test("planContext plans an unset local Ollama size", async () => {
     // Admission is asked only for facts, so a small native context passes.
     const body = JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body));
     expect(body.model).toBe("qwen3.5:4b");
+  } finally {
+    fetchMock.mockRestore();
+  }
+});
+
+test("planContext weighs a gemma4 model's window caches from its admission", async () => {
+  const fetchMock = ollama(gemma4, 7_908_813_050);
+  try {
+    const { provider, admission } = await planContextAdmitted(
+      resolveProvider({}, "qwen3.5:4b"),
+      AbortSignal.timeout(5_000),
+      MAC_16GB,
+    );
+    expect(admission).toMatchObject({
+      kvBytesPerToken: 16_384,
+      kvWindowBytes: 20 * 2 * 512 * 2 * 1536,
+    });
+    expect(provider.context_size).toBe(32_768);
+    expect(provider.context_plan).toBe(
+      "planned: its KV cache takes 0.6 GiB of the 1.1 GiB left after the weights and headroom",
+    );
   } finally {
     fetchMock.mockRestore();
   }

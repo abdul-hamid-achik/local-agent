@@ -35,7 +35,9 @@ export {
   resolveProvider,
 } from "#runtime/config";
 export {
+  type ContextFacts,
   type ContextPlan,
+  contextFacts,
   explicitContextNote,
   MLX_WARNING,
   PLANNED_CONTEXT_MAX,
