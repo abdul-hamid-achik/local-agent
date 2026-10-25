@@ -252,8 +252,9 @@ for (const [name, make] of Object.entries(INLINE_SAMPLES)) {
   }
 }
 
-// A short terminal: the in-flow approval keeps its diff, the composer and
-// the status in view at 15 rows.
+// A short terminal: at 15 rows the in-flow approval keeps the status in
+// view and gives the diff the composer's rows (it would only say to answer
+// first), so the change itself shows, not just the file headers.
 {
   const args = [
     "dump",
@@ -279,11 +280,16 @@ for (const [name, make] of Object.entries(INLINE_SAMPLES)) {
   const screen = json.grid.join("\n");
   for (const text of [
     "--- a/install.sh",
-    "Answer the approval first",
+    "+echo step 2",
     "y allow",
+    "Waiting for approval",
   ])
     if (!screen.includes(text))
       failures.push(`dump inline approval at 15 rows: no ${text}`);
+  if (screen.includes("Answer the approval first"))
+    failures.push(
+      "dump inline approval at 15 rows: the composer kept its rows",
+    );
   const text =
     tuimark([...args, "--format", "text"]).out.split("=== nodes ===")[0] ?? "";
   await matches(
@@ -1469,7 +1475,7 @@ const plays: Expect[] = [
     rows: 15,
     input: "end",
     actions: [],
-    screen: ["+echo step 249", "Answer the approval first"],
+    screen: ["+echo step 249", "Waiting for approval"],
   },
   {
     sample: "inline-sample-palette",

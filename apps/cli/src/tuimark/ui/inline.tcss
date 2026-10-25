@@ -11,8 +11,11 @@
 .la-approve.danger { border-color: $danger; title-color: $danger; }
 .la-approve-body { width: 1fr; }
 .la-approve > .la-diff { max-height: 10; }
+/* A short terminal gives the diff the composer's rows and the margin: the
+ * composer only says to answer first, and the status row names the keys. */
 @media (max-rows: 20) {
-  .la-approve > .la-diff { max-height: 5; }
+  .la-approve { margin: 0; }
+  screen.approving > #app > #composer { display: none; }
 }
 
 /* The details viewer, in flow like the approval: its output scroll is

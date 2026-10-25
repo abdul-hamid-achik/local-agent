@@ -6,10 +6,12 @@
 styling and templates live in `../app.tcss` and `../app.tui`, which load after
 the kit and win ties by order.
 
-Used components: `k-confirm` (the approval dialog), `k-palette` (the command
-palette), `k-help` (the help overlay) and `k-appbar` (the header), plus the
-`k-btn`, `k-dialog` and `k-hints` classes. The kit's own documentation is
-`kit/README.md` in the Tuimark repository.
+Used templates: `k-confirm` (the approval dialog), `k-palette` (the command
+palette), `k-appbar` (the header) and `k-empty` (the welcome screen). The help
+overlay is local-agent's own modal dressed in the kit's `k-help` classes, and
+the status row uses the `k-statusbar` class. The kit's own documentation
+(`kit/README.md`), and the `kit/components/NAME.tui` examples `kit.tui`
+points to, are in the Tuimark repository; they are not vendored here.
 
 To upgrade, copy the three files from the new tag, update the version above and
 run `bun run tuimark:check`.

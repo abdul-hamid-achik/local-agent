@@ -169,9 +169,10 @@
   </template>
 
 
-  <!-- What a message carries besides its body, verbatim from app.tui: its
-       numbered link sources (each one an OSC 8 hyperlink on the 0.5.1 engine's
-       data-bound href) and its images. with="msg as lm". A streamed reply's
+  <!-- What a message carries besides its body, as in app.tui less the
+       ⌘+click hint (inline has no mouse): its numbered link sources (each one
+       an OSC 8 hyperlink on the 0.5.1 engine's data-bound href) and its
+       images. with="msg as lm". A streamed reply's
        sources row is committed on its own when the message closes
        (controller.printLinks). -->
   <template id="la-media">

@@ -127,7 +127,7 @@
 span.b { bold: true; }
 span.i { italic: true; }
 span.code { color: $code; }
-span.link { underline: true; color: $accent; }
+span.link, text.link { underline: true; color: $accent; }
 span.url { color: $muted; }
 span.strike { dim: true; }
 span.kw { color: $kw; }
