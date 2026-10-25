@@ -111,11 +111,11 @@
       "blocks": [],
       "card": {
         "name": "mcphub__call_tool",
-        "title": "MCP · mcphub · call_tool",
+        "title": "MCP · tuimark · validate",
         "status": "unverified",
         "mark": "!",
         "took": "0.4s",
-        "args": "{\"server\":\"tuimark\",\"tool\":\"validate\",\"arguments\":{\"file\":\"ui/app.tui\",\"strict\":true}}",
+        "args": "via mcphub · {\"file\":\"ui/app.tui\",\"strict\":true}",
         "args_path": false,
         "args_line": true,
         "ok": false,

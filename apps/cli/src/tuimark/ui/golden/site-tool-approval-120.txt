@@ -19,13 +19,13 @@
 │                     │  │}                                                                   │  │                     ┃
 │ Assistant ⠿  waiting│  │                                                                    │  │                     ┃
 │                     │  │MCP effects are not verified by transport success.                  │  │                     ┃
-│ ╭─ MCP · mcphub · ca│  └────────────────────────────────────────────────────────────────────┘  │───────────────────╮ ┃
+│ ╭─ MCP · tuimark · v│  └────────────────────────────────────────────────────────────────────┘  │───────────────────╮ ┃
 │ │ ⠋  waiting for app│  a allow `tuimark__validate` this session                                │                   │ ┃
-│ │ {"server":"tuimark│                                                                          │                   │ ┃
+│ │ via mcphub · {"fil│                                                                          │                   │ ┃
 │ ╰───────────────────│                                                     [ Deny ]  [ Allow ]  │───────────────────╯ ┃
 │                     │                                                                          │                     ┃
 └─────────────────────╰──────────────────────────────────────────────────────────────────────────╯─────────────────────┘
 ╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
-│ Type to queue a message                                                                                              │
+│ Answer the approval first                                                                                            │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
- Waiting for approval · y allow · a session · ! always · n deny · Esc deny   a session  ! always  pgup/pgdn scroll      
+ Waiting for approval · y allow · n deny · a session · ! always · Esc deny   a session  ! always  pgup/pgdn scroll      

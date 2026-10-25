@@ -26,6 +26,6 @@
 │                     │                                                                          │                     ┃
 └─────────────────────╰──────────────────────────────────────────────────────────────────────────╯─────────────────────┘
 ╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
-│ Type to queue a message                                                                                              │
+│ Answer the approval first                                                                                            │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
- Waiting for approval · y allow · a session · ! always · n deny · Esc deny   a session  ! always  pgup/pgdn scroll      
+ Waiting for approval · y allow · n deny · a session · ! always · Esc deny   a session  ! always  pgup/pgdn scroll      

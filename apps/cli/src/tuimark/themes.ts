@@ -10,7 +10,9 @@
 // palette so the sheets' `@media (theme: light)` blocks never fire against it.
 
 import { readdirSync } from "node:fs";
-import { basename, join } from "node:path";
+import { mkdtemp } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { basename, isAbsolute, join } from "node:path";
 
 /** The themes the tuimark host renders itself: --theme dark|light|auto. */
 export const BUILTIN_THEMES = ["dark", "light", "auto"] as const;
@@ -65,11 +67,25 @@ export function resolveTheme(
   );
 }
 
+/** The prefix of the private folder a themed document is written to. */
+export const THEME_FOLDER_PREFIX = "local-agent-theme-";
+
+/** `text` as an attribute value: a path may hold any of these. */
+const attribute = (text: string) =>
+  text
+    .replaceAll("&", "&amp;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("<", "&lt;");
+
 /**
- * A copy of `ui/<doc>` with `<style src="themes/<name>.tcss"/>` inserted after
- * the document's last <style>, written next to the original (src paths resolve
- * against the document's own folder, so kit/kit.tui and app.tcss keep working).
- * The caller removes the file once the host has loaded it.
+ * A copy of `ui/<doc>` with the named palette's <style> inserted after the
+ * document's last <style>. It is written to a new private folder under the
+ * system's temporary one, never into the client's own files (an installed
+ * client may be read-only, and must not collect leftovers), so its static
+ * src paths are made absolute against `uiDirectory`: kit/kit.tui and app.tcss
+ * resolve as they do from the original. Data-bound srcs (`{…}`) are left as
+ * they are. The caller removes the file and its folder once the host has
+ * loaded it.
  */
 export async function themedDocument(
   uiDirectory: string,
@@ -77,6 +93,8 @@ export async function themedDocument(
   name: string,
   write: (path: string, text: string) => Promise<unknown> = (path, text) =>
     Bun.write(path, text),
+  folder: () => Promise<string> = () =>
+    mkdtemp(join(tmpdir(), THEME_FOLDER_PREFIX)),
 ): Promise<string> {
   const source = await Bun.file(join(uiDirectory, doc)).text();
   const lines = source.split("\n");
@@ -85,13 +103,16 @@ export async function themedDocument(
     if (/^\s*<style\b/.test(line)) lastStyle = i;
   if (lastStyle < 0)
     throw new Error(`${doc} has no <style> for a theme to follow`);
+  const absolute = (line: string) =>
+    line.replace(/\bsrc="([^"{}]+)"/g, (whole, src: string) =>
+      isAbsolute(src) ? whole : `src="${attribute(join(uiDirectory, src))}"`,
+    );
   const themed = [
-    ...lines.slice(0, lastStyle + 1),
-    `  <style src="themes/${name}.tcss"/>`,
-    ...lines.slice(lastStyle + 1),
+    ...lines.slice(0, lastStyle + 1).map(absolute),
+    `  <style src="${attribute(join(uiDirectory, "themes", `${name}.tcss`))}"/>`,
+    ...lines.slice(lastStyle + 1).map(absolute),
   ].join("\n");
-  // The pid keeps simultaneous launches of the same theme from sharing a file.
-  const path = join(uiDirectory, `.themed-${process.pid}-${name}-${doc}`);
+  const path = join(await folder(), `${name}-${doc}`);
   await write(path, themed);
   return path;
 }

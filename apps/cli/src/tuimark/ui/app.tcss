@@ -201,7 +201,9 @@ span.del { color: $danger; }
 /* The kit's help box pads a row above and below; /copy, the selection row and
  * ^Y copy each took one, so the padding and the merged enter row give them
  * back: the keys down to the history key stay in view at 80x30. */
-.k-help { padding: 0 2; }
+/* As wide as the details viewer and the panels (76): at the kit's 56 the
+   help cut its own descriptions at every width. */
+.k-help { width: 76; padding: 0 2; }
 .la-help-first { margin: 0; }
 .la-helpcmds { height: auto; layout: column; }
 .la-helpcmd { width: 1fr; height: 1; gap: 1; }

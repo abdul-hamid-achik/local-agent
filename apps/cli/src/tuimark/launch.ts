@@ -6,9 +6,9 @@
 // client: `tuimark host` owns the terminal (fds 0, 1 and 2) while the UI runs,
 // and a second renderer would fight it.
 
-import { existsSync } from "node:fs";
-import { rm } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { existsSync, realpathSync } from "node:fs";
+import { rm, rmdir } from "node:fs/promises";
+import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   type McpConnection,
@@ -37,7 +37,11 @@ import {
   type SessionsCapability,
   TuimarkClient,
 } from "#cli/tuimark/controller";
-import { resolveTheme, themedDocument } from "#cli/tuimark/themes";
+import {
+  resolveTheme,
+  THEME_FOLDER_PREFIX,
+  themedDocument,
+} from "#cli/tuimark/themes";
 
 /**
  * The oldest tuimark this client's document runs on: links and images whose
@@ -69,20 +73,32 @@ export const TERMINAL_RESET = "\x1b[?1049l\x1b[?25h\x1b[?2004l\x1b[?7h\x1b[0m";
 export const INLINE_TERMINAL_RESET = "\x1b[?25h\x1b[?2004l\x1b[?7h\x1b[0m";
 
 /**
- * The folder with app.tui, next to this file. The bundle (`bun run build`)
- * leaves `#cli/*` imports unresolved, so this module always runs from source and
- * the module's own folder is this one in both cases.
+ * The folder with app.tui. From source it is next to this file (the bundle,
+ * `bun run build`, leaves `#cli/*` imports unresolved, so this module runs
+ * from source there too). A compiled release carries its modules inside the
+ * executable, where the tuimark host, another process, cannot read them, so
+ * the release puts ui/ next to the executable; that is found through the
+ * symlink Homebrew or the installer puts on PATH.
  */
 export function uiDirectory(
   from = dirname(fileURLToPath(import.meta.url)),
+  executable = process.execPath,
 ): string {
-  const directory = join(from, "ui");
-  if (
-    !existsSync(join(directory, "app.tui")) ||
-    !existsSync(join(directory, "inline.tui"))
-  )
-    throw new Error(`Tuimark UI files not found in ${directory}`);
-  return directory;
+  const real = (path: string) => {
+    try {
+      return realpathSync(path);
+    } catch {
+      return path;
+    }
+  };
+  const candidates = [join(from, "ui"), join(dirname(real(executable)), "ui")];
+  for (const directory of candidates)
+    if (
+      existsSync(join(directory, "app.tui")) &&
+      existsSync(join(directory, "inline.tui"))
+    )
+      return directory;
+  throw new Error(`Tuimark UI files not found in ${candidates.join(" or ")}`);
 }
 
 /** True when `version` ("0.4.6", "0.4.5-dev", "v1.0.0") is at least `minimum`. */
@@ -400,8 +416,14 @@ export async function runTuimark(
     resetTerminal();
     throw error;
   } finally {
-    // The host has loaded the document (or failed) once spawn resolves.
-    if (docPath !== join(ui, doc)) await rm(docPath, { force: true });
+    // The host has loaded the document (or failed) once spawn resolves. Its
+    // private folder goes too, but only that one, and only when empty.
+    if (docPath !== join(ui, doc)) {
+      await rm(docPath, { force: true });
+      const folder = dirname(docPath);
+      if (basename(folder).startsWith(THEME_FOLDER_PREFIX))
+        await rmdir(folder).catch(() => {});
+    }
   }
   readyColumns = host.ready.cols;
   const problem = readyProblem(host.ready, bin, presentation);

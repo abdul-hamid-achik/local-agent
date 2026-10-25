@@ -674,7 +674,7 @@ async function until(ok: () => boolean) {
 
 /** The armed status of a command card with the sandbox on: no `a`. */
 const SANDBOX_ARMED_STATUS =
-  "Waiting for approval · y allow · ! always · n deny · Esc deny";
+  "Waiting for approval · y allow · n deny · ! always · Esc deny";
 /** The armed status of a card that offers no grant (a secret path). */
 const NO_GRANT_ARMED_STATUS =
   "Waiting for approval · y allow · n deny · Esc deny";

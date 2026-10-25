@@ -121,6 +121,7 @@ import {
   newGoalTurn,
 } from "#cli/tuimark/goal";
 import {
+  APPROVAL_PLACEHOLDER,
   APPROVAL_SANDBOX_SESSION_STATUS,
   APPROVAL_TRUNCATED_ALWAYS_STATUS,
   APPROVAL_TRUNCATED_SESSION_STATUS,
@@ -3441,6 +3442,8 @@ export class TuimarkClient {
         await this.write([
           { path: "approval", value: noApproval() },
           { path: "status", value: verdict },
+          // The turn goes on: a send is queued again.
+          { path: "placeholder", value: PLACEHOLDER_BUSY },
           // The card is no longer on hold: it runs (allowed) or is as it was.
           ...this.releaseCard(held, allowed),
           ...this.headWrites(),
@@ -3465,6 +3468,7 @@ export class TuimarkClient {
         ...this.closePanelWrite(),
         { path: "approval", value: approval },
         { path: "status", value: APPROVAL_WAIT_STATUS },
+        { path: "placeholder", value: APPROVAL_PLACEHOLDER },
         // The head waits on the person: a still glyph, the clock stopped.
         ...this.headWrites(),
       ];

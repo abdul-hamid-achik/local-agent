@@ -685,7 +685,7 @@
     "select_desc": "select text (mouse reporting is on)"
   },
   "draft": "",
-  "placeholder": "Type to queue a message",
+  "placeholder": "Answer the approval first",
   "status": "Waiting for approval · n deny · Esc deny",
   "commit_buf": {
     "id": "commit",

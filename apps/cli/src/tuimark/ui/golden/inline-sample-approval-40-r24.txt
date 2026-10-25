@@ -17,6 +17,6 @@
 ╰──────────────────────────────────────╯
                                         
 ╭──────────────────────────────────────╮
-│ Type to queue a message              │
+│ Answer the approval first            │
 ╰──────────────────────────────────────╯
- Waiting for approval · y allow · a se… 
+ Waiting for approval · y allow · n de… 

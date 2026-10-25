@@ -111,16 +111,21 @@ export function selectTips(
 export const PLACEHOLDER = "Message the model";
 /** While a turn runs a send is queued (one message, run when the turn ends). */
 export const PLACEHOLDER_BUSY = "Type to queue a message";
+/** While an approval waits, its keys are the dialog's: nothing is queued. */
+export const APPROVAL_PLACEHOLDER = "Answer the approval first";
 /** While the dialog is not armed yet: only deny works. */
 export const APPROVAL_WAIT_STATUS = "Waiting for approval · n deny · Esc deny";
 /**
  * Once the dialog accepts `y` (and `a`, the session grant, `!` the rule).
- * armedStatus leaves out each grant a card does not offer.
+ * The decision comes first, so a narrow status row that cuts the grants
+ * still says how to deny. armedStatus leaves out each grant a card does not
+ * offer.
  */
 export const APPROVAL_STATUS =
-  "Waiting for approval · y allow · a session · ! always · n deny · Esc deny";
+  "Waiting for approval · y allow · n deny · a session · ! always · Esc deny";
+/** The body says to deny an unread change, so the status leads with deny. */
 export const APPROVAL_TRUNCATED_STATUS =
-  "Preview truncated · y allow · n deny · Esc deny";
+  "Preview truncated · n deny · y allow · Esc deny";
 /** A `y` swallowed by the arm delay says so instead of going silent. */
 export const APPROVAL_UNARMED_STATUS = "Approval not armed yet — press y again";
 /** An `a` swallowed by the arm delay, same rule as `y`. */
@@ -1094,9 +1099,9 @@ export function armedStatus(
   if (approval.truncated) return APPROVAL_TRUNCATED_STATUS;
   const keys = [
     "y allow",
+    "n deny",
     ...(approval.session_ok ? ["a session"] : []),
     ...(approval.always_ok ? ["! always"] : []),
-    "n deny",
     "Esc deny",
   ];
   return `Waiting for approval · ${keys.join(" · ")}`;

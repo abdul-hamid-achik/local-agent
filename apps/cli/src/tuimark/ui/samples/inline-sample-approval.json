@@ -428,8 +428,8 @@
     "select_desc": "select text (mouse reporting is on)"
   },
   "draft": "",
-  "placeholder": "Type to queue a message",
-  "status": "Waiting for approval · y allow · a session · ! always · n deny · Esc deny",
+  "placeholder": "Answer the approval first",
+  "status": "Waiting for approval · y allow · n deny · a session · ! always · Esc deny",
   "commit_buf": {
     "id": "commit",
     "is_user": false,

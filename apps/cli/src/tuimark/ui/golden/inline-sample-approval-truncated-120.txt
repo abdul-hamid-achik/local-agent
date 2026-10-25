@@ -17,6 +17,6 @@
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
                                                                                                                         
 ╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
-│ Type to queue a message                                                                                              │
+│ Answer the approval first                                                                                            │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
- Preview truncated · y allow · n deny · Esc deny   y allow  n deny  ^P commands  ^Y copy  shift+tab mode                
+ Preview truncated · n deny · y allow · Esc deny   y allow  n deny  ^P commands  ^Y copy  shift+tab mode                

@@ -115,11 +115,11 @@
     "blocks": [],
     "card": {
       "name": "mcphub__call_tool",
-      "title": "MCP · mcphub · call_tool",
+      "title": "MCP · tuimark · validate",
       "status": "waiting for approval",
       "mark": "",
       "took": "",
-      "args": "{\"server\":\"tuimark\",\"tool\":\"validate\",\"arguments\":{\"file\":\"ui/app.tui\",\"strict\":true}}",
+      "args": "via mcphub · {\"file\":\"ui/app.tui\",\"strict\":true}",
       "args_path": false,
       "args_line": true,
       "ok": false,
@@ -500,8 +500,8 @@
     "select_desc": "select text (mouse reporting is on)"
   },
   "draft": "",
-  "placeholder": "Type to queue a message",
-  "status": "Waiting for approval · y allow · a session · ! always · n deny · Esc deny",
+  "placeholder": "Answer the approval first",
+  "status": "Waiting for approval · y allow · n deny · a session · ! always · Esc deny",
   "commit_buf": {
     "id": "commit",
     "is_user": false,

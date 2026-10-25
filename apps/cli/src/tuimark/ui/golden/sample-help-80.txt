@@ -1,31 +1,31 @@
 === grid 80x30 ===
- Local Agent╭─ Help ───────────────────────────────────────────────╮██▋░░░░░░░░ 
-┌───────────│  ? close help                                        │───────────┐
-│ Assistant │  Commands                                            │           │
-│ Sure. I wi│  /mode plan|build|chat plan reads only · build can…  │           │
-│  ts       │  /model [NAME] show or switch the Ollama model       │           │
-│  export as│  /theme dark|light|auto set the session theme        │           ┃
-│    // expo│  /mouse on|off toggle mouse reporting (fullscreen)   │           ┃
-│    for (le│  /copy [code] copy the last reply, or its last cod…  │           ┃
-│      try {│  /permissions [clear|trust] show, clear or trust g…  │           ┃
-│      catch│  /sandbox on|off run commands confined (macOS), wi…  │           ┃
-│    }      │  /details [N] show tool output N, or the last        │           ┃
-│  }        │  /status show the effective config (model, workspa…  │           ┃
-│           │  /provider ask the model's endpoint: answer time, …  │           ┃
-│ ╭─ Edit ──│  /sessions [new] switch to a saved session, or sta…  │─────────╮ ┃
-│ │ ✓ succee│  /recover [N outcome] review calls whose outcome i…  │         │ ┃
-│ │ src/fetc│  /find TEXT search saved session messages (needs -…  │         │ ┃
-│ │ Updated │  /export [json] write the conversation to a markdo…  │         │ ┃
-│ │   import│  /mcp show connected MCP servers and their tools     │         │ ┃
-│ │ - export│  /goal [OBJECTIVE|stop] run turns toward an object…  │         │ ┃
-│ │ + export│  Keys                                                │         │ ┃
-│ ╰─────────│  enter       send · shift/alt+enter new line         │─────────╯ ┃
-│           │  shift-drag  select text (mouse reporting is on)     │           ┃
-│ Assistant │  ^P          commands                                │           ┃
-│ Done. The │  esc         cancel the turn, and a running goal     │           ┃
-│           │  ctrl+c      clear the draft, cancel, then quit      │           ┃
-└───────────│  ↑/↓         history                                 │───────────┘
-╭───────────│  ↑           edit a queued message (empty draft)     │───────────╮
-│ Message th│  pgup/pgdn   scroll the transcript                   │           │
-╰───────────│  ^L          back to the latest message              │───────────╯
- build · las╰──────────────────────────────────────────────────────╯            
+ L╭─ Help ───────────────────────────────────────────────────────────────────╮░ 
+┌─│  ? close help                                                            │─┐
+│ │  Commands                                                                │ │
+│ │  /mode plan|build|chat plan reads only · build can edit · chat convers…  │ │
+│ │  /model [NAME] show or switch the Ollama model                           │ │
+│ │  /theme dark|light|auto set the session theme                            │ ┃
+│ │  /mouse on|off toggle mouse reporting (fullscreen)                       │ ┃
+│ │  /copy [code] copy the last reply, or its last code block (ctrl+y)       │ ┃
+│ │  /permissions [clear|trust] show, clear or trust grants and rules        │ ┃
+│ │  /sandbox on|off run commands confined (macOS), without a card           │ ┃
+│ │  /details [N] show tool output N, or the last                            │ ┃
+│ │  /status show the effective config (model, workspace, session)           │ ┃
+│ │  /provider ask the model's endpoint: answer time, what is loaded         │ ┃
+│ │  /sessions [new] switch to a saved session, or start a new one           │ ┃
+│ │  /recover [N outcome] review calls whose outcome is unknown              │ ┃
+│ │  /find TEXT search saved session messages (needs --session-db)           │ ┃
+│ │  /export [json] write the conversation to a markdown or JSON file        │ ┃
+│ │  /mcp show connected MCP servers and their tools                         │ ┃
+│ │  /goal [OBJECTIVE|stop] run turns toward an objective until done or a …  │ ┃
+│ │  Keys                                                                    │ ┃
+│ │  enter       send · shift/alt+enter new line                             │ ┃
+│ │  shift-drag  select text (mouse reporting is on)                         │ ┃
+│ │  ^P          commands                                                    │ ┃
+│ │  esc         cancel the turn, and a running goal                         │ ┃
+│ │  ctrl+c      clear the draft, cancel, then quit                          │ ┃
+└─│  ↑/↓         history                                                     │─┘
+╭─│  ↑           edit a queued message (empty draft)                         │─╮
+│ │  pgup/pgdn   scroll the transcript                                       │ │
+╰─│  ^L          back to the latest message                                  │─╯
+ b╰──────────────────────────────────────────────────────────────────────────╯  

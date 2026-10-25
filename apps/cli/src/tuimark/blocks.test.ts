@@ -565,6 +565,40 @@ test("a card names its tool as a reader says it", () => {
     expect(toolTitle(name)).toBe(name);
 });
 
+test("a gateway's call_tool card is titled by the tool it runs, and names the gateway", () => {
+  const via = (args: Record<string, unknown>) => ({
+    function: { name: "mcphub__call_tool", arguments: args },
+  });
+  const validate = via({
+    server: "tuimark",
+    tool: "validate",
+    arguments: { file: "ui/app.tui", strict: true },
+  });
+  expect(toolTitle("mcphub__call_tool", validate)).toBe(
+    "MCP · tuimark · validate",
+  );
+  expect(callSummary(validate)).toBe(
+    'via mcphub · {"file":"ui/app.tui","strict":true}',
+  );
+  // No server: the tool names it before its first `__`, as the runtime reads it.
+  expect(toolTitle("mcphub__call_tool", via({ tool: "cortex__status" }))).toBe(
+    "MCP · cortex · status",
+  );
+  // Arguments that do not name one tool keep the wire name and the whole JSON.
+  const vague = via({ server: "a__b", tool: "x" });
+  expect(toolTitle("mcphub__call_tool", vague)).toBe(
+    "MCP · mcphub · call_tool",
+  );
+  expect(callSummary(vague)).toBe('{"server":"a__b","tool":"x"}');
+  // Only call_tool reads this way, and only with its call at hand.
+  expect(toolTitle("mcphub__call_tool")).toBe("MCP · mcphub · call_tool");
+  expect(
+    toolTitle("cortex__status", {
+      function: { name: "cortex__status", arguments: { tool: "a__b" } },
+    }),
+  ).toBe("MCP · cortex · status");
+});
+
 test("a call's duration reads as seconds, then minutes", () => {
   expect(formatTook(0)).toBe("<0.1s");
   expect(formatTook(99)).toBe("<0.1s");

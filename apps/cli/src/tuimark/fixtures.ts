@@ -19,6 +19,7 @@ import {
 } from "#cli/tuimark/blocks";
 import { filterPalette, slashMatches, slashRows } from "#cli/tuimark/commands";
 import {
+  APPROVAL_PLACEHOLDER,
   APPROVAL_STATUS,
   APPROVAL_TRUNCATED_STATUS,
   APPROVAL_WAIT_STATUS,
@@ -390,8 +391,8 @@ export function approvalSample(): Store {
   const call = builder.takeCall();
   store.live = liveToolView(call, "edit", "approval");
   store.approval = approvalState(EDIT_PROPOSAL);
-  store.placeholder = PLACEHOLDER_BUSY;
   store.head = headState("approval", 12);
+  store.placeholder = APPROVAL_PLACEHOLDER;
   store.status = APPROVAL_STATUS;
   return store;
 }
@@ -620,8 +621,8 @@ export function commandApprovalSample(sandboxOn = false): Store {
     false,
     sandboxOn,
   );
-  store.placeholder = PLACEHOLDER_BUSY;
   store.head = headState("approval", 12);
+  store.placeholder = APPROVAL_PLACEHOLDER;
   store.status = armedStatus(store.approval);
   return store;
 }
@@ -961,6 +962,7 @@ export function heroApprovalSample(): Store {
   store.live = liveToolView(builder.takeCall(), "run_command", "approval");
   store.approval = approvalState(HERO_COMMAND, 80, "/home/me/project");
   store.head = headState("approval", 11);
+  store.placeholder = APPROVAL_PLACEHOLDER;
   store.status = armedStatus(store.approval);
   return store;
 }
@@ -999,6 +1001,7 @@ export function siteApprovalSample(cols = 80): Store {
   store.live = liveToolView(builder.takeCall(), "edit", "approval");
   store.approval = approvalState(SITE_EDIT, cols);
   store.head = headState("approval", 6);
+  store.placeholder = APPROVAL_PLACEHOLDER;
   store.status = armedStatus(store.approval);
   return store;
 }
@@ -1239,6 +1242,7 @@ export function siteToolApprovalSample(cols = 80): Store {
     cols,
   );
   store.head = headState("approval", 9);
+  store.placeholder = APPROVAL_PLACEHOLDER;
   store.status = armedStatus(store.approval);
   return store;
 }

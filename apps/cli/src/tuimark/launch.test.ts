@@ -1,6 +1,13 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { expect, test } from "vitest";
 import { uiDirectory } from "#cli/tuimark/launch";
 
@@ -602,7 +609,7 @@ test("load closes calls that never ran, loads an unknown outcome for /recover, a
 
 // ----------------------------------------------------------------- --theme
 
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { themedDocument } from "#cli/tuimark/themes";
 
 test("a builtin --theme is passed to the host; the default sends none", async () => {
@@ -699,20 +706,63 @@ test("themedDocument loads the palette after the document's last sheet", async (
         "",
       ].join("\n"),
     );
+    // Its folder is new and private, not the client's own (which an install
+    // may keep read-only), so every static src is absolute.
     const path = await themedDocument(ui, "app.tui", "sepia");
-    expect(path).toMatch(/sepia-app\.tui$/);
+    expect(basename(path)).toBe("sepia-app.tui");
+    expect(basename(dirname(path))).toMatch(/^local-agent-theme-/);
+    expect(dirname(path)).not.toBe(ui);
     expect(await Bun.file(path).text()).toBe(
       [
         '<tui theme="auto">',
-        '  <include src="kit/kit.tui"/>',
-        '  <style src="app.tcss"/>',
-        '  <style src="themes/sepia.tcss"/>',
+        `  <include src="${join(ui, "kit/kit.tui")}"/>`,
+        `  <style src="${join(ui, "app.tcss")}"/>`,
+        `  <style src="${join(ui, "themes/sepia.tcss")}"/>`,
         "</tui>",
         "",
       ].join("\n"),
     );
+    await rm(dirname(path), { recursive: true, force: true });
+    // A data-bound src stays as it is; an absolute one is kept.
+    await writeFile(
+      join(ui, "app.tui"),
+      '<tui>\n  <style src="/abs/a.tcss"/>\n  <img src="{im.src}"/>\n</tui>\n',
+    );
+    const bound = await themedDocument(ui, "app.tui", "nord");
+    expect(await Bun.file(bound).text()).toContain('<img src="{im.src}"/>');
+    expect(await Bun.file(bound).text()).toContain(
+      '<style src="/abs/a.tcss"/>',
+    );
+    await rm(dirname(bound), { recursive: true, force: true });
   } finally {
     await rm(ui, { recursive: true, force: true });
+  }
+});
+
+test("a compiled release finds ui/ next to its real executable", async () => {
+  const root = await mkdtemp(join(tmpdir(), "local-agent-ui-"));
+  try {
+    const release = join(root, "share", "local-agent");
+    await mkdir(join(release, "ui"), { recursive: true });
+    await writeFile(join(release, "ui", "app.tui"), "<tui/>");
+    await writeFile(join(release, "ui", "inline.tui"), "<tui/>");
+    await writeFile(join(release, "local-agent"), "");
+    // On PATH through a symlink, as Homebrew and the installer leave it.
+    await mkdir(join(root, "bin"));
+    await symlink(
+      join(release, "local-agent"),
+      join(root, "bin", "local-agent"),
+    );
+    // A compiled module's own folder is inside the executable: no ui/ there.
+    const bundled = "/$bunfs/root";
+    expect(uiDirectory(bundled, join(root, "bin", "local-agent"))).toBe(
+      join(realpathSync(release), "ui"),
+    );
+    expect(() => uiDirectory(bundled, join(root, "elsewhere"))).toThrow(
+      /Tuimark UI files not found in \/\$bunfs\/root\/ui or /,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
   }
 });
 

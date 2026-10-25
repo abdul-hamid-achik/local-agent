@@ -13,7 +13,7 @@
 
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { basename, dirname, join } from "node:path";
+import { dirname, join } from "node:path";
 import {
   commitFixtures,
   DETAILS_HIDDEN,
@@ -277,7 +277,11 @@ for (const [name, make] of Object.entries(INLINE_SAMPLES)) {
       `dump inline approval at 15 rows: ${JSON.stringify(json.errors)}`,
     );
   const screen = json.grid.join("\n");
-  for (const text of ["--- a/install.sh", "Type to queue a message", "y allow"])
+  for (const text of [
+    "--- a/install.sh",
+    "Answer the approval first",
+    "y allow",
+  ])
     if (!screen.includes(text))
       failures.push(`dump inline approval at 15 rows: no ${text}`);
   const text =
@@ -606,7 +610,7 @@ for (const name of namedThemes(join(ui, "themes"))) {
       const json = parsed(
         tuimark([
           "dump",
-          basename(themed),
+          themed,
           "--data",
           `samples/${sample}.json`,
           "--cols",
@@ -635,7 +639,7 @@ for (const name of namedThemes(join(ui, "themes"))) {
       if (painted.size < 5)
         failures.push(`${label}: paints only ${painted.size} colors`);
     } finally {
-      await rm(themed, { force: true });
+      await rm(dirname(themed), { recursive: true, force: true });
     }
   }
 }
@@ -1420,7 +1424,7 @@ const plays: Expect[] = [
     rows: 15,
     input: "end",
     actions: [],
-    screen: ["+echo step 249", "Type to queue a message"],
+    screen: ["+echo step 249", "Answer the approval first"],
   },
   {
     sample: "inline-sample-palette",

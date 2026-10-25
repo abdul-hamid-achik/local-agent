@@ -11,9 +11,9 @@
 │ │ … 6 more lines · /details 1 for full output                                                                      │ ┃
 │ ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯ ┃
 │                                                                                                                      ┃
-│ ╭─ MCP · mcphub · call_tool ───────────────────────────────────────────────────────────────────────────────────────╮ ┃
+│ ╭─ MCP · tuimark · validate ───────────────────────────────────────────────────────────────────────────────────────╮ ┃
 │ │ ! unverified · 0.4s                                                                                              │ ┃
-│ │ {"server":"tuimark","tool":"validate","arguments":{"file":"ui/app.tui","strict":true}}                           │ ┃
+│ │ via mcphub · {"file":"ui/app.tui","strict":true}                                                                 │ ┃
 │ │ unverified · domain unknown                                                                                      │ ┃
 │ │ {                                                                                                                │ ┃
 │ │   "ok": true,                                                                                                    │ ┃

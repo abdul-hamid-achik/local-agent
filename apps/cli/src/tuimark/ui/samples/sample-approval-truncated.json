@@ -14601,8 +14601,8 @@
     "select_desc": "select text (mouse reporting is on)"
   },
   "draft": "",
-  "placeholder": "Type to queue a message",
-  "status": "Preview truncated · y allow · n deny · Esc deny",
+  "placeholder": "Answer the approval first",
+  "status": "Preview truncated · n deny · y allow · Esc deny",
   "commit_buf": {
     "id": "commit",
     "is_user": false,

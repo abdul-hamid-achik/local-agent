@@ -19,6 +19,7 @@
 import {
   changeLines,
   commandLine,
+  gatewayTarget,
   type Message,
   type ToolCall,
 } from "@local-agent/runtime";
@@ -1258,11 +1259,42 @@ const TOOL_TITLES: Record<string, string> = {
   run_command: "Command",
 };
 
-/** A card's title: the built-in tool's word, `MCP · server · tool`, or the name as it came. */
-export function toolTitle(name: string): string {
+/**
+ * The tool a gateway's `call_tool` runs, read from its arguments the way the
+ * runtime reads them for approvals (gatewayTarget), or undefined for any
+ * other call. Only for display: what the call is allowed to do was settled
+ * by the runtime, against its own record of which server is the gateway.
+ */
+function gatewayCall(
+  name: string,
+  call: ToolCall | undefined,
+): { gateway: string; server: string; tool: string } | undefined {
+  const parts = mcpParts(name);
+  if (!call || parts?.tool !== "call_tool") return undefined;
+  const via = gatewayTarget(
+    parts.server,
+    JSON.stringify(call.function.arguments),
+  );
+  const at = via?.inner.indexOf("__") ?? -1;
+  if (!via || at <= 0) return undefined;
+  return {
+    gateway: parts.server,
+    server: via.inner.slice(0, at),
+    tool: via.inner.slice(at + 2),
+  };
+}
+
+/**
+ * A card's title: the built-in tool's word, `MCP · server · tool`, or the
+ * name as it came. A gateway's call_tool is titled by the tool it runs, as
+ * its approval was; the card's arguments line names the gateway.
+ */
+export function toolTitle(name: string, call?: ToolCall): string {
   const clean = clip(terminalLine(name), 80);
   // Own keys only: a model can name a tool `constructor` or `__proto__`.
   if (Object.hasOwn(TOOL_TITLES, name)) return TOOL_TITLES[name] as string;
+  const via = gatewayCall(clean, call);
+  if (via) return clip(terminalLine(`MCP · ${via.server} · ${via.tool}`), 80);
   const parts = mcpParts(clean);
   return parts ? `MCP · ${parts.server} · ${parts.tool}` : clean;
 }
@@ -1360,6 +1392,10 @@ function callLine(call: ToolCall | undefined): { text: string; path: boolean } {
         );
       break;
   }
+  // Through a gateway: which one, then the downstream tool's own arguments.
+  const via = gatewayCall(call.function.name, call);
+  if (via)
+    return line(`via ${via.gateway} · ${JSON.stringify(args.arguments ?? {})}`);
   if (typeof args.path === "string") return line(args.path, true);
   if (Array.isArray(args.argv)) return line(commandLine(args.argv.map(String)));
   return line(JSON.stringify(args));
@@ -1638,7 +1674,7 @@ function toolCard(
     state === "running" || state === "requested" || state === "approval";
   return {
     name: clip(terminalLine(name), 80),
-    title: toolTitle(name),
+    title: toolTitle(name, call),
     status: STATE_LABEL[state],
     mark: running ? "" : state === "succeeded" ? "✓" : bad ? "✗" : "!",
     took: "",
