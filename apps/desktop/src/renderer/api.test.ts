@@ -1,6 +1,6 @@
-import { afterEach, expect, test } from "vitest";
+import { afterEach, expect, test, vi } from "vitest";
 import { reactive } from "vue";
-import { rpc } from "#desktop/renderer/api";
+import { api, rpc } from "#desktop/renderer/api";
 
 afterEach(() => {
   delete (globalThis as { window?: unknown }).window;
@@ -30,4 +30,76 @@ test("rpc sends reactive state as the plain data the sidecar receives", async ()
   ]);
   await rpc("hello");
   expect(sent.at(-1)).toBeUndefined();
+});
+
+// The stream table is module state wired once to the first bridge, so each
+// test gets a fresh module and a bridge it can push envelopes through.
+async function streamsOnFreshModule() {
+  vi.resetModules();
+  let deliver: (envelope: unknown) => void = () => {};
+  (globalThis as { window?: unknown }).window = {
+    desktop: {
+      onStream: (callback: (envelope: unknown) => void) => {
+        deliver = callback;
+        return () => {};
+      },
+    },
+  };
+  const fresh = await import("#desktop/renderer/api");
+  const emit = (stream: string, event: unknown) => deliver({ stream, event });
+  return { subscribeStream: fresh.subscribeStream, emit };
+}
+
+test("a stream unsubscribe called twice leaves a later subscriber's Set alone", async () => {
+  const { subscribeStream, emit } = await streamsOnFreshModule();
+  const first: unknown[] = [];
+  const second: unknown[] = [];
+  const unsubscribeFirst = subscribeStream("chat", (event) =>
+    first.push(event),
+  );
+  unsubscribeFirst();
+  subscribeStream("chat", (event) => second.push(event));
+  unsubscribeFirst();
+  emit("chat", "after");
+  expect(first).toEqual([]);
+  expect(second).toEqual(["after"]);
+});
+
+test("a stream unsubscribe keeps the other subscribers of its stream", async () => {
+  const { subscribeStream, emit } = await streamsOnFreshModule();
+  const kept: unknown[] = [];
+  const dropped: unknown[] = [];
+  subscribeStream("chat", (event) => kept.push(event));
+  const unsubscribe = subscribeStream("chat", (event) => dropped.push(event));
+  unsubscribe();
+  emit("chat", "x");
+  expect(kept).toEqual(["x"]);
+  expect(dropped).toEqual([]);
+});
+
+// The promise-returning wrappers reject like rpc() does; throwing before a
+// promise exists skipped every .catch and try/await around them.
+test("a missing bridge rejects the promise-returning wrappers", async () => {
+  (globalThis as { window?: unknown }).window = {};
+  const calls: Promise<unknown>[] = [];
+  const reject = (call: () => Promise<unknown>) => {
+    let returned: Promise<unknown> | undefined;
+    expect(() => {
+      returned = call();
+    }).not.toThrow();
+    calls.push(returned as Promise<unknown>);
+  };
+  reject(() => api.repoRoot());
+  reject(() => api.restartSidecar());
+  reject(() => api.setProviderEnv({}));
+  reject(() => api.getProviderEnv());
+  reject(() => api.pick({ kind: "directory" }));
+  reject(() => api.readTextFile("a"));
+  reject(() => api.writeTextFile("a", "b"));
+  reject(() => api.openExternal("https://example.com"));
+  await Promise.all(
+    calls.map((call) =>
+      expect(call).rejects.toThrow("Desktop bridge is unavailable"),
+    ),
+  );
 });

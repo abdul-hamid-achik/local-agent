@@ -44,7 +44,9 @@
             <td>{{ session.messages }}</td>
             <td>
               <div class="row">
-                <button class="small" @click="inspect(session.id)">Inspect</button>
+                <button class="small" :disabled="inspecting !== ''" @click="inspect(session.id)">
+                  Inspect
+                </button>
                 <button class="small ghost" @click="resume(session.id)">Resume in Chat</button>
               </div>
             </td>
@@ -102,8 +104,9 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from "vue";
+import { ref, watch } from "vue";
 import { api, errorMessage } from "#desktop/renderer/api";
+import { latest } from "#desktop/renderer/latest";
 import { renderMarkdown } from "#desktop/renderer/markdown";
 import { navigate } from "#desktop/renderer/router";
 import { store, workspaceRoot } from "#desktop/renderer/store";
@@ -124,6 +127,17 @@ type Detail = {
 const sessions = ref<{ id: string; revision: number; messages: number }[]>([]);
 const detail = ref<Detail | undefined>();
 const error = ref("");
+// The handle being inspected; the buttons wait for it and only the newest
+// answer is shown, so detail never belongs to a different session or database.
+const inspecting = ref("");
+const listing = latest();
+const inspection = latest();
+
+watch([() => store.sessionDb, () => workspaceRoot()], () => {
+  listing.invalidate();
+  inspection.invalidate();
+  inspecting.value = "";
+});
 
 async function pickDb(): Promise<void> {
   const picked = await api.pick({
@@ -139,11 +153,14 @@ async function pickDb(): Promise<void> {
 async function refresh(): Promise<void> {
   error.value = "";
   detail.value = undefined;
+  inspection.invalidate();
+  inspecting.value = "";
+  const current = listing.begin();
   try {
     const result = await api.sessionList(store.sessionDb, workspaceRoot());
-    sessions.value = result.sessions;
+    if (current()) sessions.value = result.sessions;
   } catch (error_) {
-    error.value = errorMessage(error_);
+    if (current()) error.value = errorMessage(error_);
   }
 }
 
@@ -161,10 +178,15 @@ async function create(): Promise<void> {
 
 async function inspect(id: string): Promise<void> {
   error.value = "";
+  const current = inspection.begin();
+  inspecting.value = id;
   try {
-    detail.value = await api.sessionInfo(store.sessionDb, workspaceRoot(), id);
+    const info = await api.sessionInfo(store.sessionDb, workspaceRoot(), id);
+    if (current()) detail.value = info;
   } catch (error_) {
-    error.value = errorMessage(error_);
+    if (current()) error.value = errorMessage(error_);
+  } finally {
+    if (current()) inspecting.value = "";
   }
 }
 

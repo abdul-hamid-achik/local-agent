@@ -61,6 +61,7 @@
           </label>
         </div>
       </header>
+      <div v-if="pickError" class="error-box pick-error">{{ pickError }}</div>
       <main class="content">
         <div v-if="store.connection === 'error'" class="view">
           <div class="error-box">
@@ -96,10 +97,10 @@
 </template>
 
 <script setup lang="ts">
-import { computed, defineAsyncComponent, onMounted } from "vue";
+import { computed, defineAsyncComponent, onMounted, ref } from "vue";
 import { api, errorMessage } from "#desktop/renderer/api";
 import { currentRoute, navigate, routes } from "#desktop/renderer/router";
-import { store } from "#desktop/renderer/store";
+import { changeWorkspace, store } from "#desktop/renderer/store";
 
 const views = {
   chat: defineAsyncComponent(() => import("#desktop/renderer/views/ChatView.vue")),
@@ -142,9 +143,16 @@ function shortPath(path: string): string {
   return path.length > 48 ? `…${path.slice(-47)}` : path;
 }
 
+const pickError = ref("");
+
 async function pickWorkspace(): Promise<void> {
-  const picked = await api.pick({ kind: "directory" });
-  if (picked) store.workspace = picked;
+  pickError.value = "";
+  try {
+    const picked = await api.pick({ kind: "directory" });
+    if (picked) changeWorkspace(store, picked);
+  } catch (error) {
+    pickError.value = errorMessage(error);
+  }
 }
 
 async function connect(): Promise<void> {
@@ -315,6 +323,12 @@ nav {
 
 input.topbar-input {
   width: 170px;
+}
+
+.pick-error {
+  margin: 0;
+  border-radius: 0;
+  border-width: 0 0 1px;
 }
 
 .content {

@@ -31,21 +31,21 @@
     </div>
 
     <div v-if="admission" class="card">
-      <h2>Admission result</h2>
+      <h2>Admission result — <span class="mono">{{ admission.model || "default model" }}</span></h2>
       <div class="row">
-        <span class="badge" :class="admission.status === 'validated' ? 'green' : admission.status === 'rejected' ? 'red' : 'amber'">
-          {{ admission.status }}
+        <span class="badge" :class="admission.result.status === 'validated' ? 'green' : admission.result.status === 'rejected' ? 'red' : 'amber'">
+          {{ admission.result.status }}
         </span>
       </div>
-      <table v-if="admission.status === 'validated'" class="data" style="margin-top: 10px">
+      <table v-if="admission.result.status === 'validated'" class="data" style="margin-top: 10px">
         <tbody>
-          <tr><th>Model</th><td class="mono">{{ admission.model }}</td></tr>
-          <tr><th>Weight</th><td class="mono">{{ formatBytes(admission.sizeBytes) }}</td></tr>
-          <tr><th>Native context</th><td class="mono">{{ admission.nativeContext ?? "unknown" }}</td></tr>
-          <tr><th>Capabilities</th><td class="mono">{{ admission.capabilities.join(", ") || "—" }}</td></tr>
+          <tr><th>Model</th><td class="mono">{{ admission.result.model }}</td></tr>
+          <tr><th>Weight</th><td class="mono">{{ formatBytes(admission.result.sizeBytes) }}</td></tr>
+          <tr><th>Native context</th><td class="mono">{{ admission.result.nativeContext ?? "unknown" }}</td></tr>
+          <tr><th>Capabilities</th><td class="mono">{{ admission.result.capabilities.join(", ") || "—" }}</td></tr>
         </tbody>
       </table>
-      <div v-else class="error-box" style="margin-top: 10px">{{ admission.message }}</div>
+      <div v-else class="error-box" style="margin-top: 10px">{{ admission.result.message }}</div>
       <div class="help">
         Reachability alone returns <code>unverified</code>; remote profiles fail closed
         when tags/show omit identity, weight, capability, or native-context evidence.
@@ -88,16 +88,32 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref } from "vue";
+import { onMounted, ref, watch } from "vue";
 import { api, errorMessage } from "#desktop/renderer/api";
+import { latest } from "#desktop/renderer/latest";
 import { store } from "#desktop/renderer/store";
 import type { AdmissionView } from "#desktop/shared/protocol";
 
-const admission = ref<AdmissionView | undefined>();
+// The admission card belongs to the model it ran for.
+const admission = ref<{ model: string; result: AdmissionView } | undefined>();
 const models = ref<{ endpoint: string; models: { name: string; size: number }[] } | undefined>();
 const envRows = ref<{ key: string; value: string }[]>([]);
 const error = ref("");
 const notice = ref("");
+// Each answer applies only if it is still the newest of its kind, and a model
+// change supersedes the resolve and admission that were asked about the old one.
+const resolving = latest();
+const admitting = latest();
+const listing = latest();
+
+watch(
+  () => store.model.trim(),
+  () => {
+    resolving.invalidate();
+    admitting.invalidate();
+    admission.value = undefined;
+  },
+);
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024 * 1024) return `${Math.max(0, Math.round(bytes / 1024))} KB`;
@@ -108,28 +124,36 @@ function formatBytes(bytes: number): string {
 async function resolve(): Promise<void> {
   error.value = "";
   admission.value = undefined;
+  admitting.invalidate();
+  const current = resolving.begin();
   try {
-    store.provider = await api.providerResolve(store.model.trim() || undefined);
+    const provider = await api.providerResolve(store.model.trim() || undefined);
+    if (current()) store.provider = provider;
   } catch (error_) {
-    error.value = errorMessage(error_);
+    if (current()) error.value = errorMessage(error_);
   }
 }
 
 async function admit(): Promise<void> {
   error.value = "";
+  const model = store.model.trim();
+  const current = admitting.begin();
   try {
-    admission.value = await api.providerAdmit(store.model.trim() || undefined);
+    const result = await api.providerAdmit(model || undefined);
+    if (current()) admission.value = { model, result };
   } catch (error_) {
-    error.value = errorMessage(error_);
+    if (current()) error.value = errorMessage(error_);
   }
 }
 
 async function inventory(): Promise<void> {
   error.value = "";
+  const current = listing.begin();
   try {
-    models.value = await api.ollamaModels(store.model.trim() || undefined);
+    const found = await api.ollamaModels(store.model.trim() || undefined);
+    if (current()) models.value = found;
   } catch (error_) {
-    error.value = errorMessage(error_);
+    if (current()) error.value = errorMessage(error_);
   }
 }
 

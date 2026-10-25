@@ -16,9 +16,13 @@
           <input v-model="store.mcpConfig" type="text" placeholder="/path/to/mcp.json" spellcheck="false" />
           <button class="small" @click="pickConfig">Browse</button>
           <button class="small" @click="loadFile">Load</button>
-          <button class="small primary" :disabled="!store.mcpConfig.trim()" @click="check">
+          <button class="small primary" :disabled="!store.mcpConfig.trim() || checking" @click="check">
             Check status
           </button>
+        </div>
+        <div class="help">
+          A config names commands the app starts, so pick it with Browse. A typed path
+          is used only for your own <code>mcp.json</code> in the local-agent config folder.
         </div>
       </div>
       <div class="field">
@@ -79,8 +83,9 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from "vue";
+import { ref, watch } from "vue";
 import { api, errorMessage } from "#desktop/renderer/api";
+import { latest } from "#desktop/renderer/latest";
 import { store } from "#desktop/renderer/store";
 import type { McpStatusView } from "#desktop/shared/protocol";
 
@@ -90,6 +95,18 @@ const error = ref("");
 const notice = ref("");
 // The file the editor text came from; Save writes here, whatever the input says.
 const loadedPath = ref("");
+// A check starts the configured servers, so one runs at a time, and its answer
+// is dropped when the path it was run for has changed meanwhile.
+const checking = ref(false);
+const checks = latest();
+
+watch(
+  () => store.mcpConfig.trim(),
+  () => {
+    checks.invalidate();
+    checking.value = false;
+  },
+);
 
 function onAttachChange(): void {
   notice.value = store.mcpAttached
@@ -146,14 +163,20 @@ async function check(): Promise<void> {
   error.value = "";
   notice.value = "";
   status.value = undefined;
+  const current = checks.begin();
+  checking.value = true;
   try {
     const configPath = store.mcpConfig.trim();
-    status.value = await api.mcpStatus(configPath);
-    if (status.value.servers.some((server) => server.status === "unavailable")) {
+    const result = await api.mcpStatus(configPath);
+    if (!current()) return;
+    status.value = result;
+    if (result.servers.some((server) => server.status === "unavailable")) {
       notice.value = "At least one server is unavailable; its row says why.";
     }
   } catch (error_) {
-    error.value = errorMessage(error_);
+    if (current()) error.value = errorMessage(error_);
+  } finally {
+    if (current()) checking.value = false;
   }
 }
 </script>

@@ -23,9 +23,11 @@
             <button
               class="entry"
               :class="{ active: entry.kind === 'file' && entryPath(entry.name) === openPath, dir: entry.kind === 'directory' }"
+              :disabled="entry.kind === 'link' || entry.kind === 'other'"
+              :title="unopenable[entry.kind]"
               @click="entry.kind === 'directory' ? openDir(entryPath(entry.name)) : openFile(entryPath(entry.name))"
             >
-              <span class="entry-icon">{{ entry.kind === "directory" ? "▸" : "·" }}</span>
+              <span class="entry-icon">{{ icons[entry.kind] }}</span>
               <span class="mono">{{ entry.name }}</span>
               <span v-if="entry.kind === 'file'" class="dim size">{{ formatSize(entry.size) }}</span>
             </button>
@@ -51,6 +53,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from "vue";
 import { api, errorMessage } from "#desktop/renderer/api";
+import { latest } from "#desktop/renderer/latest";
 import { store, workspaceRoot } from "#desktop/renderer/store";
 import type { WorkspaceEntry } from "#desktop/shared/protocol";
 
@@ -61,6 +64,22 @@ const openPath = ref("");
 const openText = ref("");
 const openBytes = ref(0);
 const error = ref("");
+// A slow answer for an earlier click, or for the previous workspace, must not
+// replace the current listing or file.
+const listing = latest();
+const reading = latest();
+
+// A link is listed but never followed, as the model's tools do not follow it.
+const icons: Record<WorkspaceEntry["kind"], string> = {
+  directory: "▸",
+  file: "·",
+  link: "@",
+  other: "·",
+};
+const unopenable: Partial<Record<WorkspaceEntry["kind"], string>> = {
+  link: "A symbolic link: it is not followed",
+  other: "Not a regular file",
+};
 
 const crumbs = computed(() => (dir.value ? dir.value.split("/") : []));
 const crumbPath = (index: number) => crumbs.value.slice(0, index + 1).join("/");
@@ -74,25 +93,29 @@ function formatSize(bytes: number): string {
 
 async function openDir(next: string): Promise<void> {
   error.value = "";
+  const current = listing.begin();
   try {
     const result = await api.workspaceList(workspaceRoot(), next);
+    if (!current()) return;
     dir.value = result.dir === "." ? "" : result.dir;
     entries.value = result.entries;
     truncated.value = result.truncated;
   } catch (error_) {
-    error.value = errorMessage(error_);
+    if (current()) error.value = errorMessage(error_);
   }
 }
 
 async function openFile(path: string): Promise<void> {
   error.value = "";
+  const current = reading.begin();
   try {
     const result = await api.workspaceRead(workspaceRoot(), path);
+    if (!current()) return;
     openPath.value = path;
     openText.value = result.text;
     openBytes.value = result.bytes;
   } catch (error_) {
-    error.value = errorMessage(error_);
+    if (current()) error.value = errorMessage(error_);
   }
 }
 
@@ -100,6 +123,7 @@ onMounted(() => void openDir(""));
 watch(
   () => workspaceRoot(),
   () => {
+    reading.invalidate();
     openPath.value = "";
     openText.value = "";
     void openDir("");
@@ -155,7 +179,7 @@ watch(
   padding: 5px 8px;
 }
 
-.entry:hover {
+.entry:hover:not(:disabled) {
   background: var(--bg-raised);
 }
 

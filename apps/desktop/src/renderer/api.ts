@@ -61,9 +61,14 @@ export function subscribeStream(
     streamSubs.set(stream, subs);
   }
   subs.add(callback);
+  let subscribed = true;
   return () => {
+    // A second call must not reach a Set that a later subscriber now owns.
+    if (!subscribed) return;
+    subscribed = false;
     subs.delete(callback);
-    if (subs.size === 0) streamSubs.delete(stream);
+    if (subs.size === 0 && streamSubs.get(stream) === subs)
+      streamSubs.delete(stream);
   };
 }
 
@@ -150,18 +155,22 @@ export const api = {
   docsList: () =>
     rpc<{ docs: { file: string; title: string }[] }>(SidecarMethods.docsList),
 
-  repoRoot: () => bridge().repoRoot(),
-  restartSidecar: () => bridge().restartSidecar(),
-  setProviderEnv: (env: Record<string, string>) => bridge().setProviderEnv(env),
-  getProviderEnv: () => bridge().getProviderEnv(),
-  pick: (options: {
+  // Async so a missing bridge rejects, as rpc() does, instead of throwing
+  // before a promise exists.
+  repoRoot: async () => bridge().repoRoot(),
+  restartSidecar: async () => bridge().restartSidecar(),
+  setProviderEnv: async (env: Record<string, string>) =>
+    bridge().setProviderEnv(env),
+  getProviderEnv: async () => bridge().getProviderEnv(),
+  pick: async (options: {
     kind: "directory" | "file";
     filters?: { name: string; extensions: string[] }[];
   }) => bridge().pick(options),
-  readTextFile: (path: string) => bridge().readTextFile(path),
-  writeTextFile: (path: string, text: string) =>
+  readTextFile: async (path: string) => bridge().readTextFile(path),
+  writeTextFile: async (path: string, text: string) =>
     bridge().writeTextFile(path, text),
-  openExternal: (url: string) => bridge().openExternal(url),
+  openExternal: async (url: string) => bridge().openExternal(url),
+  // These two return an unsubscribe, not a promise, so they stay synchronous.
   onSidecarExit: (callback: (code: number | null, message?: string) => void) =>
     bridge().onSidecarExit(callback),
   onSidecarRestart: (callback: () => void) =>

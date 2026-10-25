@@ -21,3 +21,17 @@ export const store = reactive({
 export function workspaceRoot(): string {
   return store.workspace || store.repoRoot;
 }
+
+/**
+ * Switches the workspace the views work on. A session handle belongs to the
+ * workspace it was made in, so a real change drops it; picking the current
+ * workspace again keeps it.
+ */
+export function changeWorkspace(
+  target: { workspace: string; repoRoot: string; resumeSession: string },
+  next: string,
+): void {
+  if (next === (target.workspace || target.repoRoot)) return;
+  target.workspace = next;
+  target.resumeSession = "";
+}
