@@ -22,6 +22,11 @@ import {
   sep,
 } from "node:path";
 import { createTwoFilesPatch, structuredPatch } from "diff";
+import {
+  AGENT_IGNORE,
+  type AgentIgnore,
+  readAgentIgnore,
+} from "#runtime/agentignore";
 import { LIMITS } from "#runtime/limits";
 import { userConfigDir } from "#runtime/paths";
 import {
@@ -257,6 +262,10 @@ export class Workspace implements Disposable {
     openedAs: string,
     /** local-agent's config directory (lowercased, relative) when inside the root. */
     private readonly configDir: string | undefined,
+    /** The user's `.agentignore`, read once when the workspace is opened. */
+    private readonly ignore: AgentIgnore,
+    /** Lines of it that were malformed and dropped: for the client to report once. */
+    readonly warnings: readonly string[],
   ) {
     const trim = (path: string) =>
       path.endsWith("/") ? path.slice(0, -1) : path;
@@ -275,11 +284,16 @@ export class Workspace implements Disposable {
         actual.ino !== expected.ino
       )
         throw new Error("Workspace root changed during initialization");
+      // An unsafe .agentignore (a link, not a plain file) refuses the
+      // workspace: running without it would silently drop the user's policy.
+      const { ignore, warnings } = readAgentIgnore(fd);
       return new Workspace(
         canonical,
         fd,
         resolve(root),
         await configInside(canonical),
+        ignore,
+        warnings,
       );
     } catch (error) {
       closeSync(fd);
@@ -481,10 +495,13 @@ export class Workspace implements Disposable {
     return relative;
   }
 
-  /** Secrets, local-agent's own policy and the user's local-agent config. */
+  /** Secrets, local-agent's own policy, the user's local-agent config and their .agentignore. */
   private reject(relative: string): void {
     rejectExcluded(relative);
-    if (this.isConfig(relative)) throw new Error("Workspace path is excluded");
+    if (this.isConfig(relative) || isIgnoreFile(relative))
+      throw new Error("Workspace path is excluded");
+    if (this.ignore.matches(relative))
+      throw new Error(`Workspace path is ignored by ${AGENT_IGNORE}`);
   }
 
   /** Whether a path is (or is inside) the user's local-agent config. */
@@ -703,6 +720,10 @@ export class Workspace implements Disposable {
       .filter(
         (entry) =>
           !endsScopedSecret([...above, entry.name], above.length) &&
+          !(relative === "" && isIgnoreFile(entry.name)) &&
+          !this.ignore.matches(
+            relative ? `${relative}/${entry.name}` : entry.name,
+          ) &&
           (entry.isDirectory()
             ? !SKIPPED_DIRECTORIES.has(entry.name) &&
               !isExcludedName(entry.name, false) &&
@@ -1288,6 +1309,15 @@ async function configInside(root: string): Promise<string | undefined> {
   return inside === ".." || inside.startsWith(`..${sep}`) || isAbsolute(inside)
     ? undefined
     : inside.normalize("NFC").toLowerCase();
+}
+
+/**
+ * The root `.agentignore` is the user's policy for the tools, as
+ * `.local-agent` is the host's: the model neither reads nor edits it, so it
+ * cannot loosen the next session's rules.
+ */
+function isIgnoreFile(relative: string): boolean {
+  return relative.normalize("NFC").toLowerCase() === AGENT_IGNORE;
 }
 
 function rejectExcluded(relative: string): void {

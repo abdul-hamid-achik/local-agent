@@ -300,6 +300,9 @@ A resumed session first closes the calls it was interrupted before running.`);
         );
     }
     using workspace = await Workspace.create(values.workspace);
+    // A malformed .agentignore line is dropped; it is named once, here.
+    for (const warning of workspace.warnings)
+      process.stderr.write(`warning: ${terminalText(warning)}\n`);
     const store = values["session-db"]
       ? await SessionStore.open(values["session-db"])
       : undefined;
