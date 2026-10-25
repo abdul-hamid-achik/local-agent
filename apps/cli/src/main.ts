@@ -22,9 +22,9 @@ import {
   Workspace,
   workspaceRules,
 } from "@local-agent/runtime";
-import { terminalText } from "@local-agent/vue-tui/text";
 import { secretNote } from "#cli/preview";
 import { recoverCommand } from "#cli/recover";
+import { terminalText } from "#cli/text";
 import { terminalTrustIO, trustRulesCommand } from "#cli/trust-rules";
 import { interactiveClient, parseUi } from "#cli/ui-flag";
 
