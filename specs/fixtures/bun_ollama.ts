@@ -19,17 +19,9 @@ const workspaceRoot = editMode
   ? await mkdtemp(join(tmpdir(), "local-agent-glyph-"))
   : undefined;
 if (workspaceRoot) await writeFile(join(workspaceRoot, "notes.txt"), "before\n");
-const fixturePort =
-  {
-    headless: 19200,
-    inline: 19201,
-    fullscreen: 19202,
-    verify: 19203,
-    "edit-approve": 19204,
-    "edit-deny": 19205,
-  }[mode] ?? 19206;
+// Any free port: the client is given the server's own URL.
 const server = Bun.serve({
-  port: fixturePort,
+  port: 0,
   hostname: "127.0.0.1",
   async fetch(request) {
     if (new URL(request.url).pathname === "/api/tags") return Response.json({ models: [{ name: model, size: 1000 }] });
@@ -57,12 +49,19 @@ const server = Bun.serve({
           return new Response("Verification command did not prove the edit", { status: 500 });
       }
     }
+    // The reply says what the edit's result was, so the spec's wait proves
+    // the decision the client sent, not only the mode.
+    const status = hasToolResult
+      ? JSON.parse(body.messages?.findLast((message) => message.role === "tool")?.content ?? "{}").status
+      : undefined;
     const answer = hasToolResult
       ? verifyMode
         ? "verification complete"
-        : mode === "edit-approve"
+        : status === "succeeded"
           ? "edit applied"
-          : "edit denied"
+          : status === "denied"
+            ? "edit denied"
+            : `unexpected edit result: ${status}`
       : `fixture reply to ${requested}`;
     const verifyCalls = [
       { name: "read", arguments: { path: "notes.txt" } },
@@ -171,14 +170,21 @@ async function shutdown(exitCode: number) {
   if (child.exitCode === null) child.kill("SIGTERM");
   await child.exited;
   server.stop(true);
-  if (workspaceRoot) {
-    const contents = await readFile(join(workspaceRoot, "notes.txt"), "utf8");
-    const expected = mode === "edit-approve" || verifyMode ? "after\n" : "before\n";
-    if (contents !== expected) exitCode = 1;
-    if (verifyMode && !(await Bun.file(join(workspaceRoot, "verified.txt")).text() === "checked")) exitCode = 1;
-    await rm(workspaceRoot, { recursive: true, force: true });
+  // A file the run should have written and did not fails the spec with
+  // exit code 1, and the temporary directories go either way.
+  const holds = async (file: string, expected: string) =>
+    workspaceRoot !== undefined &&
+    (await readFile(join(workspaceRoot, file), "utf8").catch(() => undefined)) === expected;
+  try {
+    if (workspaceRoot) {
+      const expected = mode === "edit-approve" || verifyMode ? "after\n" : "before\n";
+      if (!(await holds("notes.txt", expected))) exitCode = 1;
+      if (verifyMode && !(await holds("verified.txt", "checked"))) exitCode = 1;
+    }
+  } finally {
+    if (workspaceRoot) await rm(workspaceRoot, { recursive: true, force: true });
+    await rm(configHome, { recursive: true, force: true });
   }
-  await rm(configHome, { recursive: true, force: true });
   process.exit(exitCode);
 }
 
