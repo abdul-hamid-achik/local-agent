@@ -207,6 +207,7 @@ import {
   windowedNotice,
 } from "#cli/tuimark/store";
 import { FLUSH_MS, LiveStream } from "#cli/tuimark/stream";
+import { SubagentBatch } from "#cli/tuimark/subagents";
 import { earlier, Transcript } from "#cli/tuimark/transcript";
 
 /** The part of the SDK's Host the client uses (a fake implements it in tests). */
@@ -544,6 +545,8 @@ export class TuimarkClient {
   private quitChain: Promise<unknown> = Promise.resolve();
   private quitPromise?: Promise<"quit" | undefined>;
   private liveTool?: LiveView;
+  /** The `task` calls whose cards are not committed yet (see subagents.ts). */
+  private readonly subagents = new SubagentBatch();
   private dirty = false;
   private liveInFlight = false;
   private timer?: ReturnType<typeof setInterval>;
@@ -2545,10 +2548,12 @@ export class TuimarkClient {
       this.stream.reset();
       this.headCommitted = false;
     }
-    this.liveTool = undefined;
+    // A batch of subagents outlives its first message: the ones still
+    // running keep their card.
+    this.liveTool = this.subagents.view(this.now(), this.options.reduceMotion);
     this.dirty = false;
     await this.publishWindow([
-      { path: "live", value: IDLE_LIVE },
+      { path: "live", value: this.liveTool ?? IDLE_LIVE },
       { path: "thinking", value: IDLE_THINKING },
       // The tool card is gone (or the turn is over): the head follows.
       ...this.headWrites(),
@@ -2724,9 +2729,32 @@ export class TuimarkClient {
     if (writes.length > 0) await this.write(writes);
   }
 
+  /** The live card follows the subagents that are still to be committed. */
+  private showSubagents(): void {
+    const view = this.subagents.view(this.now(), this.options.reduceMotion);
+    if (!view) return;
+    this.liveTool = view;
+    this.dirty = true;
+  }
+
+  /**
+   * A running subagent card shows how long it has run, and a batch's rows
+   * follow their calls: rewritten when that text changes (about once a
+   * second), never while the card waits on the person.
+   */
+  private refreshSubagents(): void {
+    if (!this.liveTool || this.decide || this.asking) return;
+    if (!this.subagents.live) return;
+    const view = this.subagents.view(this.now(), this.options.reduceMotion);
+    if (!view || JSON.stringify(view) === JSON.stringify(this.liveTool)) return;
+    this.liveTool = view;
+    this.dirty = true;
+  }
+
   /** Flushes the live message if it changed and no flush is in flight. */
   private tick(): void {
     void this.maybeElapsed();
+    this.refreshSubagents();
     if (this.liveInFlight) return;
     if (!this.dirty && !this.stream.dirty) return;
     this.liveInFlight = true;
@@ -4347,6 +4375,7 @@ export class TuimarkClient {
             if (callId !== undefined) {
               startedAt.delete(callId);
               tookMs.delete(callId);
+              this.subagents.commit(callId);
             }
             if (view) this.transcript.push(view);
             // The fullest output the client receives is this message's
@@ -4399,16 +4428,32 @@ export class TuimarkClient {
               this.stream.reset();
               this.headCommitted = false;
             }
-            this.liveTool = liveToolView(
-              this.builder.takeCall(),
-              event.name,
-              "requested",
-              this.options.reduceMotion,
-            );
+            {
+              const call = this.builder.takeCall();
+              this.liveTool = liveToolView(
+                call,
+                event.name,
+                "requested",
+                this.options.reduceMotion,
+                this.builder.slotOf(call),
+              );
+              if (event.name === "task") {
+                this.subagents.request(
+                  event.id,
+                  call,
+                  this.builder.slotOf(call),
+                );
+                this.showSubagents();
+              }
+            }
             this.dirty = true;
             break;
           case "tool_start":
             startedAt.set(event.id, this.now());
+            if (event.name === "task") {
+              this.subagents.start(event.id, this.now());
+              this.showSubagents();
+            }
             if (this.liveTool) {
               this.liveTool = {
                 ...this.liveTool,
@@ -4425,6 +4470,8 @@ export class TuimarkClient {
             const started = startedAt.get(event.id);
             if (started !== undefined && !tookMs.has(event.id))
               tookMs.set(event.id, this.now() - started);
+            if (event.name === "task")
+              this.subagents.finish(event.id, this.now(), event.status);
             // The card shows the result; a verdict or a rule's note that was
             // on the status line gives way to the ambient status.
             this.restoreStatus();
@@ -4557,6 +4604,7 @@ export class TuimarkClient {
       if (this.timer) clearInterval(this.timer);
       this.timer = undefined;
       clearTimeout(this.armTimer);
+      this.subagents.clear();
       this.decide = undefined;
       this.armed = false;
       this.proposal = undefined;

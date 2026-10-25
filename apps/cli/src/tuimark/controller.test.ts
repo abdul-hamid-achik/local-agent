@@ -878,6 +878,173 @@ test("a parallel batch times each call from its start to its own result", async 
   ]);
 });
 
+// ------------------------------------------------------------------ subagents
+
+const subagentOutput = (turns: number, answer: string) =>
+  `subagent finished after ${turns} turn${turns === 1 ? "" : "s"}\n\n${answer}`;
+
+test("a running subagent card counts its seconds; the finished card is a summary", async () => {
+  let nowMs = 1_000_000;
+  let release: () => void = () => {};
+  const gate = new Promise<void>((r) => {
+    release = r;
+  });
+  const { ui, client } = setup(
+    async function* () {
+      yield {
+        type: "message",
+        message: {
+          role: "assistant",
+          content: "",
+          tool_calls: [
+            {
+              id: "s1",
+              function: {
+                name: "task",
+                arguments: { prompt: "where is the retry configured?" },
+              },
+            },
+          ],
+        },
+      };
+      yield { type: "tool_requested", id: "s1", name: "task" };
+      yield { type: "tool_start", id: "s1", name: "task" };
+      await gate;
+      const output = subagentOutput(3, "In src/retry.ts\nline two");
+      yield {
+        type: "tool_result",
+        id: "s1",
+        name: "task",
+        status: "succeeded",
+        output,
+      };
+      yield {
+        type: "message",
+        message: {
+          role: "tool",
+          tool_name: "task",
+          tool_call_id: "s1",
+          content: JSON.stringify({ status: "succeeded", output }),
+        },
+      };
+      yield { type: "message", message: { role: "assistant", content: "ok" } };
+    },
+    { now: () => nowMs },
+  );
+  await ui.fire("send", "investigate");
+  await until(() => store(ui).live.is_tool && store(ui).live.card.running);
+  expect(store(ui).live.card).toMatchObject({
+    title: "Subagent",
+    status: "running",
+    args: "where is the retry configured?",
+    took: "",
+  });
+  nowMs += 12_000;
+  await until(() => store(ui).live.card.took === "12s");
+  nowMs += 50_000;
+  await until(() => store(ui).live.card.took === "1m 02s");
+  nowMs += 1_000;
+  release();
+  await client.idle();
+  const card = store(ui).messages.find((m: MessageView) => m.is_tool)?.card;
+  expect(card).toMatchObject({
+    title: "Subagent",
+    mark: "✓",
+    took: "1m 03s",
+  });
+  expect(runsText(card?.out ?? [])).toBe(
+    "3 turns\nIn src/retry.ts\n… 1 more line · /details 1 for the whole answer",
+  );
+});
+
+test("several subagents in one reply are one group while they run, then numbered cards", async () => {
+  let nowMs = 1_000_000;
+  let releaseFirst: () => void = () => {};
+  const first = new Promise<void>((r) => {
+    releaseFirst = r;
+  });
+  let releaseLast: () => void = () => {};
+  const last = new Promise<void>((r) => {
+    releaseLast = r;
+  });
+  const ids = ["s1", "s2", "s3"];
+  const prompts = ["read the router", "read the store", "read the tests"];
+  const calls = ids.map((id, i) => ({
+    id,
+    function: { name: "task", arguments: { prompt: prompts[i] } },
+  }));
+  const output = (i: number) => subagentOutput(i + 1, `answer ${i + 1}`);
+  const result = (i: number) =>
+    ({
+      type: "tool_result",
+      id: ids[i] as string,
+      name: "task",
+      status: "succeeded",
+      output: output(i),
+    }) as const;
+  const tool = (i: number) =>
+    ({
+      type: "message",
+      message: {
+        role: "tool",
+        tool_name: "task",
+        tool_call_id: ids[i] as string,
+        content: JSON.stringify({ status: "succeeded", output: output(i) }),
+      },
+    }) as const;
+  const { ui, client } = setup(
+    async function* () {
+      yield {
+        type: "message",
+        message: { role: "assistant", content: "", tool_calls: calls },
+      };
+      for (const id of ids) {
+        yield { type: "tool_requested", id, name: "task" };
+        yield { type: "tool_start", id, name: "task" };
+      }
+      await first;
+      yield result(1);
+      yield result(0);
+      yield tool(0);
+      yield tool(1);
+      await last;
+      yield result(2);
+      yield tool(2);
+      yield { type: "message", message: { role: "assistant", content: "ok" } };
+    },
+    { now: () => nowMs },
+  );
+  await ui.fire("send", "investigate");
+  const rows = () => runsText(store(ui).live.card.out).split("\n");
+  await until(() => store(ui).live.card.args === "3 subagents · 0 done");
+  // One card for the batch, not the last request alone.
+  expect(store(ui).live.card.title).toBe("Subagents");
+  expect(rows()).toEqual([
+    "1/3 … read the router",
+    "2/3 … read the store",
+    "3/3 … read the tests",
+  ]);
+  nowMs += 5_000;
+  await until(() => rows()[0]?.endsWith("· 5s") === true);
+  releaseFirst();
+  // Two cards are committed in call order; the third is still in the group.
+  await until(() => store(ui).live.card.args === "3 subagents · 2 done");
+  expect(
+    store(ui)
+      .messages.filter((m: MessageView) => m.is_tool)
+      .map((m: MessageView) => m.card.title),
+  ).toEqual(["Subagent 1/3", "Subagent 2/3"]);
+  expect(rows()).toEqual(["3/3 … read the tests · 5s"]);
+  releaseLast();
+  await client.idle();
+  expect(
+    store(ui)
+      .messages.filter((m: MessageView) => m.is_tool)
+      .map((m: MessageView) => m.card.title),
+  ).toEqual(["Subagent 1/3", "Subagent 2/3", "Subagent 3/3"]);
+  expect(store(ui).live.active).toBe(false);
+});
+
 // ------------------------------------------------------------------ ask_user
 
 const STORE_QUESTION: Question = {

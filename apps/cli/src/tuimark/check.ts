@@ -25,6 +25,7 @@ import {
   LONG_DRAFT,
   SAMPLES,
   searchNotice,
+  subagentViews,
   WRAPPED_LINE,
 } from "#cli/tuimark/fixtures";
 import { resolvePinned } from "#cli/tuimark/launch";
@@ -914,6 +915,7 @@ const pages = (n: number) => Array(n).fill("pgdn").join(" ");
 /** The frames of the engine's spinner: none of them may show where the still glyph stands. */
 const SPINNER_FRAMES = [..."⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"];
 const commitData = commitFixtures();
+const subagentData = subagentViews();
 const plays: Expect[] = [
   {
     sample: "sample",
@@ -2197,6 +2199,92 @@ const plays: Expect[] = [
       "3 Edit · …get = (url) => fetchRetry(url);",
     ],
     scrollbackGolden: "inline-search-commit-80.txt",
+  },
+  // Subagents (the `task` tool): a running one is named with its objective,
+  // its budget and the seconds it has run; three in one reply are one group
+  // while they run, then three numbered cards with one summary line each.
+  {
+    sample: "sample-subagent-running",
+    input: "",
+    actions: [],
+    screen: [
+      "Subagent",
+      "running",
+      "12s",
+      "How does the fetch helper retry today?",
+      "read-only · up to 8 turns",
+    ],
+    notScreen: ["Subagents", "Waiting for the model"],
+  },
+  {
+    sample: "sample-subagents-running",
+    input: "",
+    actions: [],
+    screen: [
+      "Subagents",
+      "3 subagents · 1 done",
+      "1/3 … How does the fetch helper retry today?",
+      "2/3 ✓ Where are request timeouts configured",
+      "3/3 … Which tests cover src/fetch.ts?",
+    ],
+  },
+  {
+    sample: "sample-subagents-done",
+    input: "",
+    actions: [],
+    screen: [
+      "Subagent 1/3",
+      "Subagent 2/3",
+      "Subagent 3/3",
+      "4 turns",
+      "The helper does not retry: get() in src/fetch.ts calls fetch once.",
+      "… 1 more line · /details 1 for the whole answer",
+      "Only src/fetch.test.ts, with two cases (ok and 500).",
+    ],
+    notScreen: ["subagent finished after"],
+  },
+  {
+    sample: "inline-sample-subagent-running",
+    doc: "inline.tui",
+    inline: true,
+    rows: 30,
+    input: "",
+    actions: [],
+    screen: [
+      "Subagent",
+      "12s",
+      "How does the fetch helper retry today?",
+      "read-only · up to 8 turns",
+    ],
+  },
+  {
+    sample: "inline-sample-subagents-running",
+    doc: "inline.tui",
+    inline: true,
+    rows: 30,
+    input: "",
+    actions: [],
+    screen: ["Subagents", "3 subagents · 1 done", "2/3 ✓ Where are request"],
+  },
+  {
+    sample: "inline-sample",
+    doc: "inline.tui",
+    inline: true,
+    rows: 30,
+    input: "",
+    steps: subagentData.flatMap((view) => [
+      { set: { path: "commit_buf", value: view } },
+      { commit: { template: "la-turn", with: "commit_buf as msg" } },
+    ]),
+    actions: [],
+    scrollback: [
+      "Subagent 1/3",
+      "Subagent 2/3",
+      "Subagent 3/3",
+      "3 turns",
+      "Timeouts live in src/config.ts (timeoutMs = 5_000).",
+    ],
+    scrollbackGolden: "inline-subagents-commit-80.txt",
   },
   // A cleared buffer commits nothing.
   {

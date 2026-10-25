@@ -7,9 +7,11 @@ import {
   type Message,
   planContextSize,
   type Question,
+  type ToolCall,
 } from "@local-agent/runtime";
 import {
   type Block,
+  type LiveView,
   liveToolView,
   type MessageView,
   onHold,
@@ -64,6 +66,7 @@ import {
   statusLines,
 } from "#cli/tuimark/store";
 import { streamingView } from "#cli/tuimark/stream";
+import { SubagentBatch } from "#cli/tuimark/subagents";
 import { earlier, Transcript } from "#cli/tuimark/transcript";
 
 const provider = {
@@ -550,6 +553,89 @@ export function streamingSample(): Store {
   store.placeholder = PLACEHOLDER_BUSY;
   store.running = true;
   store.head = headState("streaming", 12);
+  return store;
+}
+
+// A reply that hands three questions to read-only subagents (the `task` tool).
+const SUBAGENT_OBJECTIVES = [
+  "How does the fetch helper retry today? Name the files.",
+  "Where are request timeouts configured, and what are the defaults?",
+  "Which tests cover src/fetch.ts?",
+];
+const SUBAGENT_CALLS = SUBAGENT_OBJECTIVES.map((prompt, i) => ({
+  id: `call-sub-${i + 1}`,
+  function: { name: "task", arguments: { prompt } },
+}));
+const SUBAGENT_ANSWERS = [
+  "The helper does not retry: get() in src/fetch.ts calls fetch once.\nsrc/http.ts has an unused sleep() that was meant for it.",
+  "Timeouts live in src/config.ts (timeoutMs = 5_000).\nA per-call override is not supported.",
+  "Only src/fetch.test.ts, with two cases (ok and 500).",
+];
+const SUBAGENT_TURNS = [4, 3, 2];
+const SUBAGENT_USER: Message = {
+  role: "user",
+  content:
+    "Before I change the fetch helper, find out three things in parallel.",
+};
+const SUBAGENT_ASSISTANT: Message = {
+  role: "assistant",
+  content: "",
+  tool_calls: SUBAGENT_CALLS,
+};
+const SUBAGENT_RESULTS: Message[] = SUBAGENT_CALLS.map((call, i) => ({
+  role: "tool",
+  tool_name: "task",
+  tool_call_id: call.id,
+  content: JSON.stringify({
+    status: "succeeded",
+    output: `subagent finished after ${SUBAGENT_TURNS[i]} turns\n\n${SUBAGENT_ANSWERS[i]}`,
+  }),
+}));
+
+/** One subagent running: named, with its objective, its budget and the seconds it has run. */
+export function subagentRunningSample(): Store {
+  const { store, builder } = base([
+    SUBAGENT_USER,
+    { ...SUBAGENT_ASSISTANT, tool_calls: [SUBAGENT_CALLS[0] as ToolCall] },
+  ]);
+  const call = builder.takeCall();
+  const batch = new SubagentBatch();
+  batch.request("call-sub-1", call, builder.slotOf(call));
+  batch.start("call-sub-1", 0);
+  store.live = batch.view(12_000) as LiveView;
+  store.placeholder = PLACEHOLDER_BUSY;
+  store.running = true;
+  return store;
+}
+
+/** Three subagents running together: one group card, the second one already done. */
+export function subagentsRunningSample(): Store {
+  const { store, builder } = base([SUBAGENT_USER, SUBAGENT_ASSISTANT]);
+  const batch = new SubagentBatch();
+  for (const call of SUBAGENT_CALLS) {
+    const taken = builder.takeCall();
+    batch.request(call.id, taken, builder.slotOf(taken));
+    batch.start(call.id, 0);
+  }
+  batch.finish("call-sub-2", 8_000, "succeeded");
+  store.live = batch.view(12_000) as LiveView;
+  store.placeholder = PLACEHOLDER_BUSY;
+  store.running = true;
+  return store;
+}
+
+/** The three subagents finished: numbered cards, one summary line each. */
+export function subagentsDoneSample(): Store {
+  const { store } = base([
+    SUBAGENT_USER,
+    SUBAGENT_ASSISTANT,
+    ...SUBAGENT_RESULTS,
+  ]);
+  const took = ["12s", "8.4s", "31s"];
+  let card = 0;
+  store.messages = store.messages.map((m) =>
+    m.is_tool ? { ...m, card: { ...m.card, took: took[card++] ?? "" } } : m,
+  );
   return store;
 }
 
@@ -1460,6 +1546,9 @@ export const SAMPLES = {
   "sample-question": questionSample,
   "sample-question-text": questionTextSample,
   "sample-thinking": thinkingSample,
+  "sample-subagent-running": subagentRunningSample,
+  "sample-subagents-running": subagentsRunningSample,
+  "sample-subagents-done": subagentsDoneSample,
   "sample-streaming": streamingSample,
   "sample-calm-head": calmHeadSample,
   "sample-calm-tool": calmToolSample,
@@ -1553,6 +1642,8 @@ export const INLINE_SAMPLES = {
   "inline-sample-goal": () => toInline(goalSample()),
   "inline-sample-thinking": () => toInline(thinkingSample()),
   "inline-sample-calm-tool": () => toInline(calmToolSample()),
+  "inline-sample-subagent-running": () => toInline(subagentRunningSample()),
+  "inline-sample-subagents-running": () => toInline(subagentsRunningSample()),
   "inline-sample-approval": inlineApprovalSample,
   "inline-sample-approval-long": inlineLongApprovalSample,
   "inline-sample-approval-truncated": inlineTruncatedApprovalSample,
@@ -1566,6 +1657,11 @@ export const INLINE_SAMPLES = {
   "inline-sample-slash": () => toInline(slashSample()),
   "inline-sample-draft-long": () => toInline(longDraftSample()),
 } as const;
+
+/** The finished subagent cards the inline play commits into the scrollback. */
+export function subagentViews(): MessageView[] {
+  return subagentsDoneSample().messages.filter((m) => m.is_tool);
+}
 
 /** The views (and last message's blocks) the inline play checks commit. */
 export function commitFixtures(): { views: MessageView[]; blocks: Block[] } {

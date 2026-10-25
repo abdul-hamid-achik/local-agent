@@ -1437,14 +1437,31 @@ function gatewayCall(
  * name as it came. A gateway's call_tool is titled by the tool it runs, as
  * its approval was; the card's arguments line names the gateway.
  */
-export function toolTitle(name: string, call?: ToolCall): string {
+export function toolTitle(
+  name: string,
+  call?: ToolCall,
+  slot?: TaskSlot,
+): string {
   const clean = clip(terminalLine(name), 80);
   // Own keys only: a model can name a tool `constructor` or `__proto__`.
-  if (Object.hasOwn(TOOL_TITLES, name)) return TOOL_TITLES[name] as string;
+  if (Object.hasOwn(TOOL_TITLES, name)) {
+    const title = TOOL_TITLES[name] as string;
+    return slot && name === "task" ? `${title} ${slot.n}/${slot.total}` : title;
+  }
   const via = gatewayCall(clean, call);
   if (via) return clip(terminalLine(`MCP · ${via.server} · ${via.tool}`), 80);
   const parts = mcpParts(clean);
   return parts ? `MCP · ${parts.server} · ${parts.tool}` : clean;
+}
+
+/**
+ * One subagent among several `task` calls of one reply: its place (from 1)
+ * and how many there are. Their cards read "Subagent 2/3", so a batch is a
+ * group at a glance. A lone `task` has no slot.
+ */
+export interface TaskSlot {
+  n: number;
+  total: number;
 }
 
 /** A call's duration as a card shows it: <0.1s, 0.4s, 12s, 2m 05s. */
@@ -1723,6 +1740,100 @@ function withoutSpaces(json: string): string {
   return out;
 }
 
+/**
+ * A finished `task` call read at the client boundary. The runtime drains the
+ * subagent's own events and returns one text,
+ * `subagent finished after N turn(s)[ (note)]\n\n<answer>`, so the turn count
+ * (assistant messages, not tool calls), why it stopped and the answer are all
+ * the card can know. Undefined for any other text (a failed call's error, a
+ * refusal): the caller shows that as it is.
+ */
+export function taskResult(
+  output: string,
+): { turns: number; note: string; answer: string } | undefined {
+  const m =
+    /^subagent finished after (\d+) turns?(?: \(([^)\n]*)\))?\n\n/u.exec(
+      output,
+    );
+  if (!m) return undefined;
+  return {
+    turns: Number(m[1]),
+    note: m[2] ?? "",
+    answer: output.slice(m[0].length),
+  };
+}
+
+/** "3 turns", plus why the subagent stopped when it did not just finish. */
+function taskHead(result: { turns: number; note: string }): string {
+  const turns = `${result.turns} turn${result.turns === 1 ? "" : "s"}`;
+  return result.note ? `${turns} · ${result.note}` : turns;
+}
+
+/** The first line of a subagent's answer that says something: a heading loses its hashes, a rule or fence is skipped. */
+function answerSummary(answer: string): { line: string; more: number } {
+  const lines = cleanText(answer)
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line !== "" && !/^[-=*_`~\s]+$/u.test(line));
+  const first = (lines[0] ?? "").replace(/^#{1,6}\s+/u, "");
+  return { line: first, more: Math.max(0, lines.length - 1) };
+}
+
+/** What a running subagent's card says under its objective: the budget it was given. */
+function taskBudget(call: ToolCall | undefined): string {
+  const turns = call?.function.arguments.max_turns;
+  const n = typeof turns === "number" && turns >= 1 ? Math.floor(turns) : 8;
+  return `read-only · up to ${n} turn${n === 1 ? "" : "s"}`;
+}
+
+/**
+ * A finished subagent's card body: how many turns it took, the first line of
+ * its answer, and a pointer to the rest. The card keeps one line, so several
+ * subagents in a reply stay short; `/details N` has the whole answer.
+ */
+function taskRuns(
+  result: { turns: number; note: string; answer: string },
+  details?: number,
+): Run[] {
+  const runs: Run[] = [];
+  pushRun(runs, taskHead(result), "note");
+  const { line, more } = answerSummary(result.answer);
+  if (line) pushRun(runs, `\n${clip(line, OUT_CHARS)}`);
+  const cut = Array.from(line).length > OUT_CHARS;
+  if (more > 0 || cut)
+    pushRun(
+      runs,
+      `\n… ${more > 0 ? `${more} more ${more === 1 ? "line" : "lines"}` : "line cut"}${details === undefined ? "" : ` · /details ${details} for the whole answer`}`,
+      "note",
+    );
+  return runs;
+}
+
+/**
+ * What `/details` shows for a finished subagent: how it ended, the whole
+ * objective it was given, and its whole answer. The runtime does not report
+ * the subagent's own tool calls, so there is no list of them to show.
+ * Undefined for any other call, or for a task whose output is not a result.
+ */
+function taskDetails(
+  name: string,
+  call: ToolCall | undefined,
+  output: string,
+): string | undefined {
+  const task = name === "task" ? taskResult(output) : undefined;
+  if (!task) return undefined;
+  const prompt = call?.function.arguments.prompt;
+  return [
+    taskHead(task),
+    ...(typeof prompt === "string" && prompt.trim()
+      ? ["", "Objective", cleanText(prompt).trim()]
+      : []),
+    "",
+    "Answer",
+    task.answer,
+  ].join("\n");
+}
+
 /** What to show under a finished tool card: an optional head line, then the output. */
 function resultParts(
   name: string,
@@ -1732,6 +1843,11 @@ function resultParts(
   if (mcpParts(name)) {
     const mcp = mcpEnvelope(output, state);
     if (mcp) return mcp;
+  }
+  if (name === "task") {
+    const task = taskResult(output);
+    if (task)
+      return { head: { text: taskHead(task), bad: false }, body: task.answer };
   }
   if (name === "run_command") {
     try {
@@ -1834,6 +1950,7 @@ function toolCard(
   state: ToolState,
   output = "",
   details?: number,
+  slot?: TaskSlot,
 ): Card {
   const parts = resultParts(name, output, state);
   const line = callLine(call);
@@ -1842,7 +1959,7 @@ function toolCard(
     state === "running" || state === "requested" || state === "approval";
   return {
     name: clip(terminalLine(name), 80),
-    title: toolTitle(name, call),
+    title: toolTitle(name, call, slot),
     status: stateLabel(name, state),
     mark: running ? "" : state === "succeeded" ? "✓" : bad ? "✗" : "!",
     took: "",
@@ -1855,15 +1972,32 @@ function toolCard(
     running,
     spin: running,
     still: false,
-    out: output
-      ? outputRuns(
-          parts.body,
-          parts.head,
-          changeRows(name, call, state, output),
-          details,
-        )
-      : [],
+    out: toolOut(name, call, state, output, parts, running, details),
   };
+}
+
+/** A card's output rows: a subagent's one-line summary, its budget while it runs, or the first lines of the output. */
+function toolOut(
+  name: string,
+  call: ToolCall | undefined,
+  state: ToolState,
+  output: string,
+  parts: { head?: { text: string; bad: boolean }; body: string },
+  running: boolean,
+  details?: number,
+): Run[] {
+  if (name === "task") {
+    const task = taskResult(output);
+    if (task) return taskRuns(task, details);
+    if (running) return [{ text: taskBudget(call), class: "note" }];
+  }
+  if (!output) return [];
+  return outputRuns(
+    parts.body,
+    parts.head,
+    changeRows(name, call, state, output),
+    details,
+  );
 }
 
 /**
@@ -2018,8 +2152,9 @@ export function liveToolView(
   name: string,
   state: "requested" | "approval" | "running",
   still = false,
+  slot?: TaskSlot,
 ): LiveView {
-  const card = toolCard(name, call, state);
+  const card = toolCard(name, call, state, "", undefined, slot);
   return {
     ...view("live", "tool", [], still ? stillCard(card) : card),
     active: true,
@@ -2041,6 +2176,9 @@ export class ViewBuilder {
   // By the message itself, not its call id: a provider may number its calls
   // per reply, so two turns can both have a `call_0`.
   private readonly numbers = new WeakMap<Message, number>();
+  // By the call object: ids repeat across turns. Only a reply with several
+  // task calls gives them slots ("Subagent 2/3"); a lone one has none.
+  private readonly slots = new WeakMap<ToolCall, TaskSlot>();
 
   /**
    * `tableCols`: the table width when a message is built (see `tableWidth`).
@@ -2071,6 +2209,11 @@ export class ViewBuilder {
     return n;
   }
 
+  /** Which of a reply's several `task` calls this is, or undefined (not a task, or a lone one). */
+  slotOf(call: ToolCall | undefined): TaskSlot | undefined {
+    return call && this.slots.get(call);
+  }
+
   /** The call a `tool_requested` event belongs to (they arrive in call order). */
   takeCall(): ToolCall | undefined {
     return this.pending.shift();
@@ -2088,6 +2231,13 @@ export class ViewBuilder {
       this.pending = (message.tool_calls ?? []).slice();
       for (const call of this.pending)
         if (call.id) this.calls.set(call.id, call);
+      const tasks = this.pending.filter(
+        (call) => call.function.name === "task",
+      );
+      if (tasks.length > 1)
+        tasks.forEach((call, i) => {
+          this.slots.set(call, { n: i + 1, total: tasks.length });
+        });
       if (!message.content.trim()) return undefined;
       return this.text("asst", message.content);
     }
@@ -2105,7 +2255,14 @@ export class ViewBuilder {
       this.id(),
       "tool",
       [],
-      toolCard(name, call, asToolState(status), output, this.numberOf(message)),
+      toolCard(
+        name,
+        call,
+        asToolState(status),
+        output,
+        this.numberOf(message),
+        this.slotOf(call),
+      ),
       [],
       messageImages(message.images),
     );
@@ -2144,15 +2301,17 @@ export class ViewBuilder {
     const change = changeRows(name, call, state, output)
       .map((row) => row.text)
       .join("\n");
+    const whole = taskDetails(name, call, output);
     return {
       n: this.numberOf(message),
       name: clip(terminalLine(name), 80),
       status: stateLabel(name, state),
       args: callSummary(call),
       output: capDetailsOutput(
-        change
-          ? `${resultSummary(name, output, state)}\n${change}`
-          : resultSummary(name, output, state),
+        whole ??
+          (change
+            ? `${resultSummary(name, output, state)}\n${change}`
+            : resultSummary(name, output, state)),
       ),
     };
   }
