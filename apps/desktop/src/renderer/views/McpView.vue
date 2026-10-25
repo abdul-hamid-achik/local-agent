@@ -95,8 +95,8 @@ const error = ref("");
 const notice = ref("");
 // The file the editor text came from; Save writes here, whatever the input says.
 const loadedPath = ref("");
-// A check starts the configured servers, so one runs at a time, and its answer
-// is dropped when the path it was run for has changed meanwhile.
+// A check starts the configured servers, so one runs at a time: the button
+// waits for it even when the path changes, and then its answer is dropped.
 const checking = ref(false);
 const checks = latest();
 
@@ -104,7 +104,7 @@ watch(
   () => store.mcpConfig.trim(),
   () => {
     checks.invalidate();
-    checking.value = false;
+    status.value = undefined;
   },
 );
 
@@ -176,7 +176,8 @@ async function check(): Promise<void> {
   } catch (error_) {
     if (current()) error.value = errorMessage(error_);
   } finally {
-    if (current()) checking.value = false;
+    // The only check running: the button waits for it, current or not.
+    checking.value = false;
   }
 }
 </script>

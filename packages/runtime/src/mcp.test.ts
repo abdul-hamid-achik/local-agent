@@ -472,6 +472,12 @@ describe("MCP startup", () => {
       );
       await writeFile(path, JSON.stringify(server));
       await expect(readMcpConfig(path)).rejects.toThrow();
+      await writeFile(path, " ".repeat(1_000_001));
+      await expect(readMcpConfig(path)).rejects.toThrow("exceeds 1 MB");
+      // A FIFO named mcp.json is refused, not waited on forever.
+      const fifo = `${cwd}/fifo.json`;
+      Bun.spawnSync(["mkfifo", fifo]);
+      await expect(readMcpConfig(fifo)).rejects.toThrow("not a regular file");
     } finally {
       await rm(cwd, { recursive: true, force: true });
     }

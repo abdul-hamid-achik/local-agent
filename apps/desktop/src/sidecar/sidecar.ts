@@ -669,6 +669,9 @@ async function handleDocsList() {
 
 async function dispatch(request: RpcRequest): Promise<void> {
   const { id, method, params } = request;
+  // A request read before the shutdown but served after it starts nothing
+  // the shutdown would not stop.
+  if (shuttingDown) throw new Error("The sidecar is shutting down");
   // Streaming methods own their response frame.
   if (method === SidecarMethods.agentStart) {
     await handleAgentStart(id, params);
@@ -745,7 +748,7 @@ const CONTROLS = new Set<string>([
   SidecarMethods.projectCancel,
 ]);
 
-/** Requests waiting their turn before the reader stops taking more. */
+/** Requests waiting their turn; past it a request is refused at once. */
 const MAX_QUEUED = 64;
 
 /** How long a shutdown waits for cancelled runs to close what they opened. */
@@ -775,7 +778,7 @@ function shutdown(): void {
     for (const run of groups)
       if (signalGroup(run.process.pid, 0))
         signalGroup(run.process.pid, "SIGKILL");
-    process.exit(0);
+    process.exit();
   }, 25);
 }
 
@@ -828,6 +831,12 @@ async function main(): Promise<void> {
         void answer();
         continue;
       }
+      // Bounded without pausing the reader, so a control behind a full
+      // queue is still read and answered.
+      if (queued >= MAX_QUEUED) {
+        fail(request.id, new Error("Too many requests waiting"));
+        continue;
+      }
       const streaming =
         request.method === SidecarMethods.agentStart ||
         request.method === SidecarMethods.projectRun;
@@ -837,11 +846,15 @@ async function main(): Promise<void> {
         if (!streaming) return answer();
         void answer();
       });
-      if (queued >= MAX_QUEUED) await ordered;
     }
   }
 }
 
-await main();
-// stdin ended: no one is left to read an answer.
+try {
+  await main();
+} catch (error) {
+  console.error(error);
+  process.exitCode = 1;
+}
+// stdin ended (or could not be read): no one is left to read an answer.
 shutdown();

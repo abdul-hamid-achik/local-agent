@@ -1,4 +1,5 @@
-import { closeSync, existsSync, openSync, readSync } from "node:fs";
+import { closeSync, constants, existsSync, openSync, readSync } from "node:fs";
+import { open } from "node:fs/promises";
 import { join } from "node:path";
 import {
   type CallToolResult,
@@ -442,12 +443,26 @@ export function defaultMcpConfigPath(
  * An MCP config file: a JSON array of at most 16 servers with distinct
  * names, at most 1 MB. Throws on anything else.
  */
+const MAX_CONFIG_BYTES = 1_000_000;
+
 export async function readMcpConfig(path: string): Promise<McpServerConfig[]> {
-  const file = Bun.file(path);
-  if (file.size > 1_000_000) throw new Error("MCP config exceeds 1 MB");
-  const configs = McpServerConfigSchema.array()
-    .max(16)
-    .parse(await file.json());
+  // Opened without blocking and checked to be a regular file before the
+  // read: a FIFO or a device named mcp.json would wait forever.
+  const handle = await open(path, constants.O_RDONLY | constants.O_NONBLOCK);
+  let text: string;
+  try {
+    const stat = await handle.stat();
+    if (!stat.isFile()) throw new Error("MCP config is not a regular file");
+    if (stat.size > MAX_CONFIG_BYTES)
+      throw new Error("MCP config exceeds 1 MB");
+    text = await handle.readFile("utf8");
+  } finally {
+    await handle.close();
+  }
+  // A file that grew after the check is held to the same bound.
+  if (Buffer.byteLength(text) > MAX_CONFIG_BYTES)
+    throw new Error("MCP config exceeds 1 MB");
+  const configs = McpServerConfigSchema.array().max(16).parse(JSON.parse(text));
   if (new Set(configs.map((config) => config.name)).size !== configs.length)
     throw new Error("Duplicate MCP server names");
   return configs;

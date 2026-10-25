@@ -133,10 +133,15 @@ const inspecting = ref("");
 const listing = latest();
 const inspection = latest();
 
+// What was listed and inspected belongs to the old database or workspace:
+// it goes, so no row can resume a session of another workspace. (The path
+// is typed, so List lists again instead of each keystroke.)
 watch([() => store.sessionDb, () => workspaceRoot()], () => {
   listing.invalidate();
   inspection.invalidate();
   inspecting.value = "";
+  sessions.value = [];
+  detail.value = undefined;
 });
 
 async function pickDb(): Promise<void> {

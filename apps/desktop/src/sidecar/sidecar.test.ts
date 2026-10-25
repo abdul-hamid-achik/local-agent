@@ -330,7 +330,7 @@ test("a running turn does not hold the requests after its start", async () => {
   }
 });
 
-test("past 64 waiting requests the sidecar stops reading until they are answered", async () => {
+test("past 64 waiting requests one is refused at once, and a cancel is still answered", async () => {
   const root = await realpath(await mkdtemp(join(tmpdir(), "la-sidecar-")));
   let release = () => {};
   const held = new Promise<void>((resolve) => {
@@ -350,18 +350,26 @@ test("past 64 waiting requests the sidecar stops reading until they are answered
   });
   try {
     side.send({ id: 1, method: "ollama.models", params: {} });
-    for (let id = 2; id <= 64; id++) side.send({ id, method: "hello" });
-    // The 65th request is not read: not even a cancel is answered.
-    side.send({ id: 65, method: "agent.cancel", params: { runId: "r1" } });
     await Bun.sleep(100);
-    expect(side.frames).toEqual([]);
-    release();
-    expect(await side.frame((frame) => frame.id === 65)).toMatchObject({
-      ok: true,
+    // id 1 is in its turn; 2..65 wait behind it.
+    for (let id = 2; id <= 65; id++) side.send({ id, method: "hello" });
+    side.send({ id: 66, method: "hello" });
+    side.send({ id: 67, method: "agent.cancel", params: { runId: "r1" } });
+    expect(await side.frame((frame) => frame.id === 66)).toEqual({
+      id: 66,
+      ok: false,
+      error: "Too many requests waiting",
     });
-    expect(side.frames.map((frame) => frame.id)).toEqual(
-      Array.from({ length: 65 }, (_, at) => at + 1),
-    );
+    expect(await side.frame((frame) => frame.id === 67)).toMatchObject({
+      ok: true,
+      result: { cancelled: false },
+    });
+    expect(side.frames.some((frame) => frame.id === 2)).toBe(false);
+    release();
+    await side.frame((frame) => frame.id === 65);
+    expect(
+      side.frames.map((frame) => frame.id).filter((id) => Number(id) <= 65),
+    ).toEqual(Array.from({ length: 65 }, (_, at) => at + 1));
   } finally {
     release();
     side.child.kill();
@@ -606,6 +614,116 @@ for (const [how, end] of [
       await rm(root, { recursive: true, force: true });
     }
   });
+
+test("a request served after the shutdown began starts nothing", async () => {
+  const root = await sleeperRepo();
+  let release = () => {};
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    async fetch() {
+      await held;
+      return Response.json({ models: [] });
+    },
+  });
+  const side = sidecarChild({
+    DESKTOP_REPO_ROOT: root,
+    OLLAMA_HOST: server.url.origin,
+  });
+  try {
+    side.send({
+      id: 1,
+      method: "project.run",
+      params: { name: "test", runId: "p1" },
+    });
+    const first = await grandchildPid(root);
+    // A second run waits behind a slow request, which ends only once the
+    // shutdown has begun (the first run's cleanup holds it open).
+    side.send({ id: 2, method: "ollama.models", params: {} });
+    side.send({
+      id: 3,
+      method: "project.run",
+      params: { name: "test", runId: "p2" },
+    });
+    await Bun.sleep(50);
+    side.child.kill("SIGTERM");
+    await Bun.sleep(50);
+    release();
+    expect(await side.child.exited).toBe(0);
+    expect(await gone(first)).toBe(true);
+    // The pid file is the first run's: the second never started.
+    expect(Number(await readFile(join(root, "grandchild.pid"), "utf8"))).toBe(
+      first,
+    );
+  } finally {
+    release();
+    side.child.kill();
+    await side.child.exited;
+    await server.stop(true);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("input past the buffer limit ends the sidecar with an error, and its commands too", async () => {
+  const root = await sleeperRepo();
+  const side = sidecarChild({ DESKTOP_REPO_ROOT: root });
+  try {
+    side.send({
+      id: 1,
+      method: "project.run",
+      params: { name: "test", runId: "p1" },
+    });
+    const pid = await grandchildPid(root);
+    // The sidecar stops reading partway: the rest of the write fails.
+    try {
+      side.child.stdin.write("x".repeat(33 * 1024 * 1024));
+      await side.child.stdin.flush();
+    } catch {}
+    expect(await side.child.exited).toBe(1);
+    expect(await gone(pid)).toBe(true);
+  } finally {
+    side.child.kill();
+    await side.child.exited;
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("everything the console writes goes to stderr, so stdout stays frames", async () => {
+  const child = Bun.spawn(
+    [
+      process.execPath,
+      "-e",
+      [
+        `import ${JSON.stringify(new URL("./frames-only.ts", import.meta.url).pathname)};`,
+        'console.log("log"); console.info("info"); console.debug("debug");',
+        'console.count("count"); console.table([1]); console.dir({ dir: 1 });',
+        'console.group("group"); console.groupEnd(); console.time("t"); console.timeEnd("t");',
+        'console.write("write");',
+      ].join("\n"),
+    ],
+    { stdout: "pipe", stderr: "pipe" },
+  );
+  const [out, err] = await Promise.all([
+    new Response(child.stdout).text(),
+    new Response(child.stderr).text(),
+  ]);
+  expect(await child.exited).toBe(0);
+  expect(out).toBe("");
+  for (const word of [
+    "log",
+    "info",
+    "debug",
+    "count",
+    "dir",
+    "group",
+    "t:",
+    "write",
+  ])
+    expect(err).toContain(word);
+});
 
 test("a request with an id but no method is answered, not dropped", async () => {
   const side = sidecarChild({});

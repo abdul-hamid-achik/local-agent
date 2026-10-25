@@ -63,6 +63,8 @@ export class TextFileGrants {
     }
     if (!this.granted.has(real) && !this.namedAs(real))
       throw new Error(NOT_GRANTED);
+    // A FIFO or device named *.json would block the main process's read.
+    if (!statSync(real).isFile()) throw new Error("Not a regular file");
     return real;
   }
 

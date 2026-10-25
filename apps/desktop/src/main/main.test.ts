@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import {
   chmodSync,
   existsSync,
@@ -36,6 +37,7 @@ import {
   persistentProviderEnv,
   providerEnvProblem,
 } from "#desktop/main/provider-env";
+import { holdQuit } from "#desktop/main/quit";
 import { loadSettings, saveSettings } from "#desktop/main/settings";
 import { SidecarClient } from "#desktop/main/sidecar-client";
 
@@ -157,6 +159,17 @@ describe("TextFileGrants", () => {
     expect(() => grants.read(other)).toThrow("Browse");
     expect(() => grants.write(other, "x")).toThrow("Browse");
     expect(readFileSync(other, "utf8")).toBe("[1]");
+  });
+
+  test("a FIFO named like a config is refused, not read until it is written", () => {
+    const fifo = join(dir, "mcp.json");
+    execFileSync("mkfifo", [fifo]);
+    const grants = new TextFileGrants();
+    grants.grant(fifo);
+    grants.grantByName(fifo);
+    expect(() => grants.read(fifo)).toThrow("Not a regular file");
+    expect(() => grants.write(fifo, "[]")).toThrow("Not a regular file");
+    expect(() => grants.real(fifo)).toThrow("Not a regular file");
   });
 
   test("rejects non-JSON files even when picked, and unknown or odd paths", () => {
@@ -649,6 +662,75 @@ describe("SidecarClient lifecycle", () => {
     } finally {
       client.stop();
     }
+  });
+});
+
+describe("holdQuit", () => {
+  const event = () => {
+    const held = { prevented: 0, preventDefault: () => (held.prevented += 1) };
+    return held;
+  };
+
+  test("a quit waits for the stop, a second quit waits too, then it goes through", async () => {
+    let finish = () => {};
+    let stops = 0;
+    let quits = 0;
+    const guard = holdQuit(
+      () => {
+        stops += 1;
+        return new Promise<void>((resolve) => {
+          finish = resolve;
+        });
+      },
+      () => {
+        quits += 1;
+      },
+    );
+    const first = event();
+    guard.handle(first);
+    expect(first.prevented).toBe(1);
+    expect(guard.quitting).toBe(true);
+    const second = event();
+    guard.handle(second);
+    expect(second.prevented).toBe(1);
+    expect(stops).toBe(1);
+    expect(quits).toBe(0);
+    finish();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(quits).toBe(1);
+    // The quit that follows is not held.
+    const last = event();
+    guard.handle(last);
+    expect(last.prevented).toBe(0);
+    expect(stops).toBe(1);
+  });
+
+  test("with nothing to stop the quit goes through at once", () => {
+    let quits = 0;
+    const guard = holdQuit(
+      () => undefined,
+      () => {
+        quits += 1;
+      },
+    );
+    const only = event();
+    guard.handle(only);
+    expect(only.prevented).toBe(0);
+    expect(guard.quitting).toBe(false);
+    expect(quits).toBe(0);
+  });
+
+  test("a stop that fails still lets the quit go through", async () => {
+    let quits = 0;
+    const guard = holdQuit(
+      () => Promise.reject(new Error("gone")),
+      () => {
+        quits += 1;
+      },
+    );
+    guard.handle(event());
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(quits).toBe(1);
   });
 });
 

@@ -10,6 +10,7 @@ import {
 } from "#desktop/main/file-access";
 import { confine, externalUrl } from "#desktop/main/navigation";
 import { providerEnvProblem } from "#desktop/main/provider-env";
+import { holdQuit } from "#desktop/main/quit";
 import {
   loadSettings,
   type Settings,
@@ -63,7 +64,16 @@ function repoRoot(): string {
   throw new Error("Repository checkout not found");
 }
 
+// Quitting waits for the sidecar to cancel its runs and exit (SIGKILL after
+// the grace), so no run or command it started outlives the app.
+const quitGuard = holdQuit(
+  () => (sidecar?.running ? sidecar.stop() : undefined),
+  () => app.quit(),
+);
+
 function startSidecar(): void {
+  // A sidecar started while the app quits would be left to itself.
+  if (quitGuard.quitting) throw new Error("The app is quitting");
   // stop() reports no exit, so a run on the replaced sidecar would wait for
   // a run_done that never comes: say it ended.
   const replaced = sidecar?.running ?? false;
@@ -226,14 +236,4 @@ app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();
 });
 
-// Quitting waits for the sidecar to cancel its runs and exit (SIGKILL after
-// the grace), so no run or command it started outlives the app.
-let sidecarStopped = false;
-app.on("before-quit", (event) => {
-  if (sidecarStopped || !sidecar?.running) return;
-  event.preventDefault();
-  void sidecar.stop().finally(() => {
-    sidecarStopped = true;
-    app.quit();
-  });
-});
+app.on("before-quit", (event) => quitGuard.handle(event));
