@@ -80,6 +80,20 @@ export const SCENES: Record<string, Scene> = {
       { cols: 48, rows: 28 },
     ],
   },
+  subagents: {
+    frames: ["site-subagents-running", "site-subagents-done"],
+    screens: [
+      { cols: 64, rows: 26 },
+      { cols: 48, rows: 26 },
+    ],
+  },
+  search: {
+    frames: ["site-search", "site-search-viewer"],
+    screens: [
+      { cols: 64, rows: 24 },
+      { cols: 48, rows: 26 },
+    ],
+  },
 };
 
 /** The theme gallery: this sample at this size, in every theme. */

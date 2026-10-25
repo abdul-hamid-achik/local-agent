@@ -50,17 +50,38 @@ another layer's cache cost nothing. Of the 42 layers of
 A model that does not report the figures keeps 16384, as does a run that
 cannot reach Ollama. In the Tuimark client, `/status` shows how the size
 was chosen, and `/model` plans again for the new model. The planner stops at
-32768 because refilling a larger window takes long on small models; pass
-`--context` for more.
+32768 because a larger window costs time, not memory, on small models.
+
+In the Tuimark client and headless runs, a request that passes 70% of the
+window is compacted back to about 45% (see [Long turns](#long-turns)).
+Ollama keeps what it has already read, so a turn reads only the new messages,
+except when the model has to read part of the conversation again: all of it
+after the model was unloaded and after `/model` or `/context`, and everything
+from the first shortened message after a compaction. Ollama unloads a model
+5 minutes after its last request unless `OLLAMA_KEEP_ALIVE` on the server
+says otherwise; for the macOS app, set it with
+`launchctl setenv OLLAMA_KEEP_ALIVE 30m` and restart the app. Reading a
+conversation from its start, on an M5 with 16 GB, `qwen3.5:4b-q4_K_M` at a
+65536 window (server cache `q8_0`):
+
+| Conversation | Reading it | Generation |
+|---|---|---|
+| 11,600 tokens | 12 s | 36 tokens/s |
+| 23,000 tokens | 28 s | 33 tokens/s |
+| 34,000 tokens | 49 s | 30 tokens/s |
+| 45,000 tokens | 75 s | 26 tokens/s |
+
+At 32768 a conversation grows to about 23,000 tokens before compaction; at
+65536, to about 45,000. Pass `--context` for more.
 
 In the Tuimark client, `/context SIZE` (`64k`, say) changes the size
 mid-session. It is checked against the model and costed like `--context`,
 and Ollama reloads the model at that size on the next turn, which then reads
 the conversation again from its start. `/context auto` plans it again, and
 `/context` alone shows the size and how it was chosen. On a 16 GB machine,
-`qwen3.5:4b-q4_K_M` at 65536 tokens takes 5.5 GB, all of it in GPU memory,
-and a 9,500-token conversation took about 10 s to read again after the
-reload.
+`qwen3.5:4b-q4_K_M` at 65536 tokens takes 5.5 GB, all of it in GPU memory
+(4.5 GB with `OLLAMA_KV_CACHE_TYPE=q8_0` on the server), and a 9,500-token
+conversation took about 10 s to read again after the reload.
 
 `--context` applies to the local Ollama provider only; Chalupa negotiates its
 own. See [Providers](/providers).

@@ -473,6 +473,55 @@ const ecosystemGroups = [
             <TuiScreen scene="tools" :start="0.4" :step="2.4" />
           </div>
         </article>
+
+        <article class="la-question-panel la-goalloop-panel" aria-labelledby="subagents-panel-title">
+          <div class="la-question-copy">
+            <div class="la-panel-number" aria-hidden="true">06 / SUBAGENTS</div>
+            <h3 id="subagents-panel-title">Ask three things, get three answers at once.</h3>
+            <p>
+              The task tool hands one question to a subagent, and several task calls in one reply
+              run in parallel, up to four at a time. In the Tuimark client they share one Subagents
+              card while they run, a row each. When they finish, each gets a card with the turns it
+              took and the first line of its answer, and /details shows the rest.
+            </p>
+            <p class="la-question-rule">
+              A subagent only reads, fetches and searches: no edits, no commands, no MCP, no
+              subagents of its own, and it never asks you anything.
+            </p>
+          </div>
+
+          <div
+            class="la-tui-window"
+            role="img"
+            aria-label="Three subagents in the Tuimark client (a demo, not a real run): first one Subagents card, 3 subagents, 1 done, with a row each for how the fetch helper retries, where timeouts are configured and which tests cover src/fetch.ts; then a card per subagent, each succeeded, with the turns it took and the first line of its answer"
+          >
+            <TuiScreen scene="subagents" :start="0.4" :step="2.4" />
+          </div>
+        </article>
+
+        <article class="la-question-panel la-goalloop-panel" aria-labelledby="search-panel-title">
+          <div class="la-question-copy">
+            <div class="la-panel-number" aria-hidden="true">07 / SEARCH</div>
+            <h3 id="search-panel-title">Find it again without scrolling back.</h3>
+            <p>
+              In the fullscreen Tuimark client, ctrl+f (or /search) searches this conversation: your
+              messages, the replies and the tool cards. Up and down choose a match; enter opens it in
+              a viewer, where n and p step through the rest.
+            </p>
+            <p class="la-question-rule">
+              Inline, /search prints the matches into your scrollback instead. The client's own
+              notices are not searched.
+            </p>
+          </div>
+
+          <div
+            class="la-tui-window"
+            role="img"
+            aria-label="Searching the conversation in the Tuimark client (a demo, not a real run): the search box for retry lists 3 of 4 matches across your message, the reply and an edit card; then the viewer opens the third match, the fetchRetry function in the reply, with n next and p previous"
+          >
+            <TuiScreen scene="search" :start="0.4" :step="2.4" />
+          </div>
+        </article>
       </div>
     </section>
 

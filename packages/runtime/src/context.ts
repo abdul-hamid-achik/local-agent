@@ -11,8 +11,11 @@ const GIB = 1024 ** 3;
 const HEADROOM = 2.5 * GIB;
 /**
  * The largest planned size. Memory is rarely the limit on a 16 GB machine;
- * prefill is: refilling 64k tokens after a trim takes about a minute on a
- * 4B model. A larger window stays one --context away.
+ * reading the conversation again is (after an unload, a model or size change,
+ * or a compaction). Measured on an M5 with qwen3.5:4b-q4_K_M: 23,000 tokens,
+ * about where 32k compacts, take 28 s and generate at 33 tokens/s; 45,000,
+ * where 64k does, take 75 s at 26 tokens/s. A larger window stays one
+ * --context (or /context) away.
  */
 export const PLANNED_CONTEXT_MAX = 32_768;
 const STEPS = [32_768, 24_576, 16_384, 12_288, 8_192];

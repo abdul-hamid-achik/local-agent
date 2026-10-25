@@ -315,7 +315,10 @@ const EDIT_PROPOSAL: Extract<ApprovalRequest, { kind: "edit" }> = {
   identity: "x",
 };
 
-function base(messages: Message[] = MESSAGES): {
+function base(
+  messages: Message[] = MESSAGES,
+  profile: typeof provider = provider,
+): {
   store: Store;
   builder: ViewBuilder;
 } {
@@ -327,15 +330,15 @@ function base(messages: Message[] = MESSAGES): {
     if (view) transcript.push(view);
   }
   const store = initialStore({
-    provider,
+    provider: profile,
     intent: "build",
     sessionId: "a1b2c3d",
     mcpServers: 0,
     workspace: "project",
     transcript: transcript.snapshot(),
   });
-  store.header.ctx_label = contextLabel(9_800, provider.context_size);
-  store.header.ctx_pct = contextPct(9_800, provider.context_size);
+  store.header.ctx_label = contextLabel(9_800, profile.context_size);
+  store.header.ctx_pct = contextPct(9_800, profile.context_size);
   // The ambient status, the same idle and busy: the mode and the last turn.
   store.status = idleStatus(0, "build", {}, { seconds: 66, speed: "32 tok/s" });
   return { store, builder };
@@ -1526,6 +1529,59 @@ export function siteProviderSample(cols = 80): Store {
   return store;
 }
 
+/**
+ * Panel 06, first: three read-only subagents at once, on the default model,
+ * the second already done (subagentsRunningSample's batch).
+ */
+export function siteSubagentsRunningSample(): Store {
+  const { store, builder } = base(
+    [SUBAGENT_USER, SUBAGENT_ASSISTANT],
+    HERO_PROVIDER,
+  );
+  const batch = new SubagentBatch();
+  for (const call of SUBAGENT_CALLS) {
+    const taken = builder.takeCall();
+    batch.request(call.id, taken, builder.slotOf(taken));
+    batch.start(call.id, 0);
+  }
+  batch.finish("call-sub-2", 8_000, "succeeded");
+  store.live = batch.view(12_000) as LiveView;
+  store.placeholder = PLACEHOLDER_BUSY;
+  store.running = true;
+  return store;
+}
+
+/** Panel 06, then: the three finished, a card and a summary line each. */
+export function siteSubagentsDoneSample(): Store {
+  const { store } = base(
+    [SUBAGENT_USER, SUBAGENT_ASSISTANT, ...SUBAGENT_RESULTS],
+    HERO_PROVIDER,
+  );
+  const took = ["12s", "8.4s", "31s"];
+  let card = 0;
+  store.messages = store.messages.map((m) =>
+    m.is_tool ? { ...m, card: { ...m.card, took: took[card++] ?? "" } } : m,
+  );
+  return store;
+}
+
+/** Panel 07, first: ctrl+f over the conversation, the third match chosen. */
+export function siteSearchSample(): Store {
+  const { store } = base(MESSAGES, HERO_PROVIDER);
+  store.search = searchState(searchViews(store.messages, SEARCH_QUERY), 2);
+  store.status = SEARCH_STATUS;
+  return store;
+}
+
+/** Panel 07, then: enter opens the match in the viewer. */
+export function siteSearchViewerSample(): Store {
+  const { store } = base(MESSAGES, HERO_PROVIDER);
+  const result = searchViews(store.messages, SEARCH_QUERY);
+  store.details = searchViewer(result, 2, previewWidth(80));
+  store.status = `Match 3 of ${result.hits.length} · n next · p previous · esc back`;
+  return store;
+}
+
 export const SAMPLES = {
   sample: idleSample,
   "sample-empty": emptySample,
@@ -1579,6 +1635,10 @@ export const SAMPLES = {
   "site-tool-approval": siteToolApprovalSample,
   "site-tool-result": siteToolResultSample,
   "site-provider": siteProviderSample,
+  "site-subagents-running": siteSubagentsRunningSample,
+  "site-subagents-done": siteSubagentsDoneSample,
+  "site-search": siteSearchSample,
+  "site-search-viewer": siteSearchViewerSample,
 } as const;
 
 // ----------------------------------------------------------------- inline stores
