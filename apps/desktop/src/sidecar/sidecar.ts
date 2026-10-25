@@ -10,12 +10,12 @@ import { join, relative, resolve } from "node:path";
 import {
   type ApprovalRequest,
   admitOllamaModel,
-  connectMcp,
+  connectMcpServers,
   inspectRecovery,
   type McpConnection,
-  McpServerConfigSchema,
   type Provider,
   planContext,
+  readMcpConfig,
   resolveProvider,
   runAgent,
   type SessionContext,
@@ -28,6 +28,7 @@ import {
   type AdmissionView,
   type AgentStreamEvent,
   type ChatMessage,
+  type McpStatusView,
   type ProjectCommandName,
   ProjectCommands,
   type ProviderView,
@@ -203,17 +204,19 @@ async function handleAgentStart(id: number, params: unknown): Promise<void> {
     workspace = await Workspace.create(workspaceRoot);
     store = sessionDb ? await SessionStore.open(sessionDb) : undefined;
     if (mcpConfigPath) {
-      const file = Bun.file(mcpConfigPath);
-      if (file.size > 1_000_000) throw new Error("MCP config exceeds 1 MB");
-      const configs = McpServerConfigSchema.array()
-        .max(16)
-        .parse(await file.json());
-      if (new Set(configs.map((config) => config.name)).size !== configs.length)
-        throw new Error("Duplicate MCP server names");
-      for (const config of configs) {
-        controller.signal.throwIfAborted();
-        mcp.push(await connectMcp(config, controller.signal));
-      }
+      // The servers connect at once, as in the CLI; the user named this
+      // file for the run, so one that does not start is the run's failure.
+      const startup = await connectMcpServers(
+        await readMcpConfig(mcpConfigPath),
+        controller.signal,
+      );
+      mcp.push(...startup.connected.map(({ connection }) => connection));
+      if (startup.failed.length)
+        throw new Error(
+          startup.failed
+            .map((server) => `MCP server ${server.name}: ${server.error}`)
+            .join("; "),
+        );
     }
     let session: SessionContext | undefined;
     if (store) {
@@ -481,40 +484,29 @@ async function handleRecoveryInfo(params: unknown) {
 
 async function handleMcpStatus(params: unknown) {
   if (!isRecord(params)) throw new Error("Invalid mcp.status params");
-  const configPath = requiredString(params, "configPath");
-  const file = Bun.file(configPath);
-  if (file.size > 1_000_000) throw new Error("MCP config exceeds 1 MB");
-  const configs = McpServerConfigSchema.array()
-    .max(16)
-    .parse(await file.json());
-  if (new Set(configs.map((config) => config.name)).size !== configs.length)
-    throw new Error("Duplicate MCP server names");
-  const controller = new AbortController();
-  const servers = [];
-  for (const config of configs) {
-    try {
-      const connection = await connectMcp(config, controller.signal);
-      const tools = connection.tools.map((tool) => ({
-        name: tool.name,
-        description: tool.description,
-        readOnly: tool.readOnly,
-      }));
-      await connection.close();
-      servers.push({
-        name: config.name,
-        transport: config.transport.kind,
-        status: "connected",
-        tools,
-      });
-    } catch {
-      servers.push({
-        name: config.name,
-        transport: config.transport.kind,
-        status: "unavailable",
-        tools: [],
-      });
-    }
-  }
+  const configs = await readMcpConfig(requiredString(params, "configPath"));
+  const startup = await connectMcpServers(configs);
+  await Promise.allSettled(
+    startup.connected.map(({ connection }) => connection.close()),
+  );
+  const servers: McpStatusView["servers"] = configs.map((config) => {
+    const connected = startup.connected.find(
+      (server) => server.name === config.name,
+    )?.connection;
+    const failed = startup.failed.find((server) => server.name === config.name);
+    return {
+      name: config.name,
+      transport: config.transport.kind,
+      status: connected ? "connected" : "unavailable",
+      tools:
+        connected?.tools.map((tool) => ({
+          name: tool.name,
+          description: tool.description,
+          readOnly: tool.readOnly,
+        })) ?? [],
+      ...(failed ? { error: failed.error } : {}),
+    };
+  });
   return { servers };
 }
 

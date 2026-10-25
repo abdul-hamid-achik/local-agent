@@ -190,6 +190,8 @@ export type McpStatusView = {
     transport: string;
     status: "connected" | "unavailable";
     tools: Array<{ name: string; description?: string; readOnly: boolean }>;
+    /** Why an unavailable server did not start, on one line. */
+    error?: string;
   }>;
 };
 

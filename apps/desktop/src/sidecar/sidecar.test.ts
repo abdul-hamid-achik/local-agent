@@ -234,6 +234,80 @@ test("a cancel is answered while a slow request is still waiting", async () => {
   }
 });
 
+test("an MCP server that does not start says why, in mcp.status and in a run", async () => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), "la-sidecar-")));
+  const config = join(root, "mcp.json");
+  await writeFile(
+    config,
+    JSON.stringify([
+      {
+        name: "broken",
+        transport: {
+          kind: "stdio",
+          command: process.execPath,
+          args: ["-e", "console.error('no token for broken'); process.exit(2)"],
+        },
+      },
+      {
+        name: "missing",
+        transport: { kind: "stdio", command: join(root, "no-such-server") },
+      },
+    ]),
+  );
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch: (request) =>
+      new URL(request.url).pathname === "/api/tags"
+        ? Response.json({ models: [{ name: "fixture", size: 1000 }] })
+        : Response.json({
+            capabilities: ["completion", "tools"],
+            model_info: { "fixture.context_length": 16384 },
+          }),
+  });
+  const side = sidecarChild({
+    DESKTOP_REPO_ROOT: root,
+    OLLAMA_HOST: server.url.origin,
+  });
+  try {
+    side.send({ id: 1, method: "mcp.status", params: { configPath: config } });
+    const status = await side.frame((frame) => frame.id === 1);
+    expect(status).toMatchObject({ ok: true });
+    const servers = (status.result as { servers: Record<string, unknown>[] })
+      .servers;
+    expect(servers.map((entry) => [entry.name, entry.status])).toEqual([
+      ["broken", "unavailable"],
+      ["missing", "unavailable"],
+    ]);
+    expect(String(servers[0]?.error)).toContain("it said: no token for broken");
+    expect(String(servers[1]?.error)).toContain("no-such-server");
+
+    side.send({
+      id: 2,
+      method: "agent.start",
+      params: {
+        runId: "r2",
+        workspace: root,
+        intent: "build",
+        model: "fixture",
+        messages: [{ role: "user", content: "go" }],
+        mcpConfig: config,
+      },
+    });
+    const start = await side.frame((frame) => frame.id === 2);
+    expect(start).toMatchObject({ ok: false });
+    expect(String(start.error)).toContain("MCP server broken:");
+    expect(String(start.error)).toContain("no token for broken");
+    expect(String(start.error)).toContain("MCP server missing:");
+    expect(side.frames.some((frame) => frame.stream === "r2")).toBe(false);
+  } finally {
+    side.child.kill();
+    await side.child.exited;
+    await server.stop(true);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("a start that fails before it is answered gets its error and frees its run", async () => {
   const root = await realpath(await mkdtemp(join(tmpdir(), "la-sidecar-")));
   const side = sidecarChild({

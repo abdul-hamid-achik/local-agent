@@ -56,6 +56,7 @@
           <span class="badge">{{ server.transport }}</span>
           <span class="dim">{{ server.tools.length }} tools</span>
         </div>
+        <p v-if="server.error" class="mono dim">{{ server.error }}</p>
         <table v-if="server.tools.length" class="data">
           <thead>
             <tr>
@@ -149,7 +150,7 @@ async function check(): Promise<void> {
     const configPath = store.mcpConfig.trim();
     status.value = await api.mcpStatus(configPath);
     if (status.value.servers.some((server) => server.status === "unavailable")) {
-      notice.value = "At least one server is unavailable — see details above.";
+      notice.value = "At least one server is unavailable; its row says why.";
     }
   } catch (error_) {
     error.value = errorMessage(error_);
