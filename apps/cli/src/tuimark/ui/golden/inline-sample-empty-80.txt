@@ -8,4 +8,4 @@ shift-drag selects text · /copy copies the last reply
 ╔══════════════════════════════════════════════════════════════════════════════╗
 ║ Message the model                                                            ║
 ╚══════════════════════════════════════════════════════════════════════════════╝
- build · last 1m 06s · 32 tok/s   ^P commands  esc cancel  ^Y copy  ctrl+c quit 
+ build · last 1m 06s · 32 tok/s   ^P commands  ^Y copy  ctrl+c quit             

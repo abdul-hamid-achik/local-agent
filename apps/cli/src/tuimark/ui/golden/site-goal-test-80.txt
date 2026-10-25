@@ -28,4 +28,4 @@
 ╔══════════════════════════════════════════════════════════════════════════════╗
 ║ Type to queue a message                                                      ║
 ╚══════════════════════════════════════════════════════════════════════════════╝
- build   ^P commands  esc cancel  ^Y copy  ↑/↓ history  ^O earlier              
+ build   ^P commands  esc cancel  ^Y copy  ↑/↓ history  pgup/pgdn scroll        

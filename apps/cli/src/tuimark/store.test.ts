@@ -146,6 +146,7 @@ test("the initial store has every path the document reads", () => {
       "panel",
       "placeholder",
       "question",
+      "running",
       "slash",
       "status",
       "thinking",

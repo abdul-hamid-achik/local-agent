@@ -478,6 +478,7 @@
   },
   "draft": "",
   "placeholder": "Message the model",
+  "running": false,
   "status": "Latest tool output: read",
   "commit_buf": {
     "id": "commit",

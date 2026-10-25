@@ -28,4 +28,4 @@
 ╔══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╗
 ║ /m                                                                                                                   ║
 ╚══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╝
- build · last 1m 06s · 32 tok/s   ^P commands  ^Y copy  ^O earlier  pgup/pgdn scroll  ^L latest  shift+tab mode         
+ build · last 1m 06s · 32 tok/s   ^P commands  ^Y copy  pgup/pgdn scroll  ^L latest  shift+tab mode                     

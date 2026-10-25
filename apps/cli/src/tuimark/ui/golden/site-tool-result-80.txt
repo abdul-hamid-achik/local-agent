@@ -14,7 +14,7 @@
 │ ╭─ MCP · tuimark · validate ───────────────────────────────────────────────╮ ┃
 │ │ ! unverified · 0.4s                                                      │ ┃
 │ │ via mcphub · {"file":"ui/app.tui","strict":true}                         │ ┃
-│ │ unverified · domain unknown                                              │ ┃
+│ │ domain unknown                                                           │ ┃
 │ │ {                                                                        │ ┃
 │ │   "ok": true,                                                            │ ┃
 │ │   "diagnostics": []                                                      │ ┃
@@ -28,4 +28,4 @@
 ╔══════════════════════════════════════════════════════════════════════════════╗
 ║ Message the model                                                            ║
 ╚══════════════════════════════════════════════════════════════════════════════╝
- build   ^P commands  esc cancel  ^Y copy  ↑/↓ history  ^O earlier              
+ build   ^P commands  ^Y copy  ↑/↓ history  pgup/pgdn scroll  ^L latest         

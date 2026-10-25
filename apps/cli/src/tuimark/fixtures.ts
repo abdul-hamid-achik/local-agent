@@ -392,6 +392,7 @@ export function approvalSample(): Store {
   store.live = liveToolView(call, "edit", "approval");
   store.approval = approvalState(EDIT_PROPOSAL);
   store.head = headState("approval", 12);
+  store.running = true;
   store.placeholder = APPROVAL_PLACEHOLDER;
   store.status = APPROVAL_STATUS;
   return store;
@@ -451,6 +452,7 @@ function questionStore(
   store.live = { ...live, card: onHold(live.card, QUESTION_CARD_STATUS) };
   store.question = questionState(question, sel);
   store.head = headState("answer", 12);
+  store.running = true;
   store.placeholder =
     question.kind === "freetext"
       ? QUESTION_PLACEHOLDER_TEXT
@@ -521,6 +523,7 @@ export function streamingSample(): Store {
   );
   store.earlier = { n: 250 };
   store.placeholder = PLACEHOLDER_BUSY;
+  store.running = true;
   store.head = headState("streaming", 12);
   return store;
 }
@@ -537,6 +540,7 @@ export function thinkingSample(): Store {
     ].join("\n"),
   );
   store.placeholder = PLACEHOLDER_BUSY;
+  store.running = true;
   store.head = headState("thinking", 7);
   return store;
 }
@@ -594,6 +598,7 @@ export function goalSample(): Store {
   store.header.goal_on = true;
   store.live = streamingView("Running the fetch tests next.");
   store.placeholder = PLACEHOLDER_BUSY;
+  store.running = true;
   store.head = headState("streaming", 41);
   return store;
 }
@@ -622,6 +627,7 @@ export function commandApprovalSample(sandboxOn = false): Store {
     sandboxOn,
   );
   store.head = headState("approval", 12);
+  store.running = true;
   store.placeholder = APPROVAL_PLACEHOLDER;
   store.status = armedStatus(store.approval);
   return store;
@@ -917,6 +923,7 @@ function heroBase(messages: Message[]): { store: Store; builder: ViewBuilder } {
     m.is_tool ? { ...m, card: { ...m.card, took: took[card++] ?? "" } } : m,
   );
   store.placeholder = PLACEHOLDER_BUSY;
+  store.running = true;
   return { store, builder };
 }
 
@@ -1165,6 +1172,7 @@ export function siteGoalDoneSample(): Store {
   store.header.goal_on = false;
   store.status = `Goal ${reason}`;
   store.placeholder = PLACEHOLDER;
+  store.running = false;
   return store;
 }
 
@@ -1264,6 +1272,7 @@ export function siteToolResultSample(): Store {
     },
   ]);
   store.placeholder = PLACEHOLDER;
+  store.running = false;
   return store;
 }
 
@@ -1293,6 +1302,7 @@ export function siteProviderSample(cols = 80): Store {
     cols,
   );
   store.placeholder = PLACEHOLDER;
+  store.running = false;
   store.status = "Provider";
   return store;
 }

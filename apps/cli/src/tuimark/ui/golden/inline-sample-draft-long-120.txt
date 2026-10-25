@@ -10,4 +10,4 @@
 ║ draft line 11                                                                                                        █
 ║ draft line 12                                                                                                        █
 ╚══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╝
- build · last 1m 06s · 32 tok/s   ^P commands  esc cancel  ^Y copy  ctrl+c quit  ^L latest  shift+tab mode              
+ build · last 1m 06s · 32 tok/s   ^P commands  ^Y copy  ctrl+c quit  ^L latest  shift+tab mode                          

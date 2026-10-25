@@ -1,0 +1,25 @@
+=== grid 60x24 ===
+ Local Agent          build  LOCAL  qwen3-coder:30b         
+┌──────────────────────────────────────────────────────────┐
+│ │ + export const get = (url) => fetchRetry(url);       │ │
+│ ╰──────────────────────────────────────────────────────╯ │
+│                                                          │
+│ Assistant                                                │
+│ Done. The helper now retries three times.                │
+│                                                          │
+│ Assistant ⠿  waiting for your answer · 12s               │
+│                                                          │
+│ ╭─ Question ───────────────────────────────────────────╮ │
+│ │ ? asked, answer below                                │ ┃
+│ │ Which port does the staging server listen on?        │ ┃
+│ ╰──────────────────────────────────────────────────────╯ ┃
+│                                                          ┃
+└──────────────────────────────────────────────────────────┘
+╭─ Question ───────────────────────────────────────────────╮
+│ Which port does the staging server listen on?            │
+│ type the answer · enter send · esc skip · shift+enter n… │
+╰──────────────────────────────────────────────────────────╯
+╔══════════════════════════════════════════════════════════╗
+║ Type your answer                                         ║
+╚══════════════════════════════════════════════════════════╝
+ Waiting for your answer ^P commands  ^Y copy               

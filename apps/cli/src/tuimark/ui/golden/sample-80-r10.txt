@@ -8,4 +8,4 @@
 ╔══════════════════════════════════════════════════════════════════════════════╗
 ║ Message the model                                                            ║
 ╚══════════════════════════════════════════════════════════════════════════════╝
- build · last 1m 06s · 32 tok/s   ^P commands  esc cancel  ^Y copy  ↑/↓ history 
+ build · last 1m 06s · 32 tok/s   ^P commands  ^Y copy  ↑/↓ history             

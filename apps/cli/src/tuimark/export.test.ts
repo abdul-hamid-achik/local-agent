@@ -75,7 +75,7 @@ test("an MCP result exports as the server's text under its head, not the envelop
       },
     ]),
   );
-  expect(markdown).toContain("unverified · domain unknown\n{\n");
+  expect(markdown).toContain("domain unknown\n{\n");
   expect(markdown).not.toContain("transport");
 });
 

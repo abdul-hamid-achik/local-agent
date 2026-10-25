@@ -99,7 +99,9 @@
     <!-- Hint order is keymap order: commands first, so it is the one hint a
          narrow terminal still shows (the first that does not fit drops the rest). -->
     <bind keys="ctrl+p" action="palette_open" keycap="^P" label="commands"/>
-    <bind keys="esc" action="cancel" label="cancel"/>
+    <!-- Only while a turn runs: at rest esc has nothing to cancel, and a
+         hint for it would name a key that does nothing. -->
+    <bind keys="esc" action="cancel" label="cancel" when=".running"/>
     <!-- The last reply to the system clipboard (the same as /copy). Third in the
          hints, so it stays on a narrow terminal; the textarea does not take ctrl+y. -->
     <bind keys="ctrl+y" action="copy_reply" keycap="^Y" label="copy"/>
@@ -111,7 +113,7 @@
          they fall through to these rows, which recall what was sent. -->
     <bind keys="up" action="history_prev" when="#composer:focus" label="history" keycap="↑/↓"/>
     <bind keys="down" action="history_next" when="#composer:focus"/>
-    <bind keys="ctrl+o" action="load_earlier" keycap="^O" label="earlier"/>
+    <bind keys="ctrl+o" action="load_earlier" keycap="^O" label="earlier" when=".earlier"/>
     <bind keys="pgup" action="move-page-up" to="#log" label="scroll" keycap="pgup/pgdn"/>
     <bind keys="pgdn" action="move-page-down" to="#log"/>
     <!-- Jump back to the newest message (and re-stick the log). `end` cannot do
@@ -241,7 +243,7 @@
     </box>
   </template>
 
-  <screen id="main" focus="#composer" class:slashpop="slash.open" class:asking="question.open" class:grant-session="approval.session_ok" class:grant-always="approval.always_ok">
+  <screen id="main" focus="#composer" class:running="running" class:earlier="earlier.n" class:slashpop="slash.open" class:asking="question.open" class:grant-session="approval.session_ok" class:grant-always="approval.always_ok">
     <col id="app">
       <use template="k-appbar" brand="Local Agent" title="">
         <!-- By priority, so a narrow terminal clips the least important:

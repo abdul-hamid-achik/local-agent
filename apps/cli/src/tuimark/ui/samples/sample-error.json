@@ -429,6 +429,7 @@
   },
   "draft": "Add a retry to the fetch helper.",
   "placeholder": "Message the model",
+  "running": false,
   "status": "Ollama request failed: connection refused",
   "commit_buf": {
     "id": "commit",

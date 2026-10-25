@@ -87,7 +87,7 @@
         "running": false,
         "out": [
           {
-            "text": "unverified · domain unknown",
+            "text": "domain unknown",
             "class": "note"
           },
           "\n{\n  \"status\": \"confident\",\n  \"confidence\": \"high\",\n  \"recommendation\": {\n    \"server\": \"tuimark\",\n    \"tool\": \"validate\",\n    \"namespaced\": \"tuimark__validate\",",
@@ -124,7 +124,7 @@
         "running": false,
         "out": [
           {
-            "text": "unverified · domain unknown",
+            "text": "domain unknown",
             "class": "note"
           },
           "\n{\n  \"ok\": true,\n  \"diagnostics\": []\n}"
@@ -499,6 +499,7 @@
   },
   "draft": "",
   "placeholder": "Message the model",
+  "running": false,
   "status": "build",
   "commit_buf": {
     "id": "commit",

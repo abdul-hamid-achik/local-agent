@@ -3737,6 +3737,9 @@ test("an MCP tool's card and /details show the server's text, not the envelope",
     /^unverified · domain unknown\n\{\n {2}"alternatives"/,
   );
   await ui.fire("send", "/details");
+  // This script reports the call succeeded, so nothing else says the
+  // evidence is unverified: the head keeps it (the card's own state drops
+  // it only when it already says so).
   expect(detailsText(ui)).toContain("unverified · domain unknown");
   expect(detailsText(ui)).not.toContain("transport");
 });
@@ -6074,6 +6077,41 @@ test("ctrl+c between a goal's turns stops the goal before its next turn, and the
   expect(store(ui).status).toMatch(/^Goal stopped: you cancelled it/);
   expect(store(ui).header.goal_on).toBe(false);
   expect(await ui.fire("quit_request")).toBe("quit");
+});
+
+test("esc stays live between a goal's turns, and stops the goal there", async () => {
+  const { ui, client, seen } = setup(
+    turnsOf(
+      reporting(goes("wrote the parser"), wrote("w1")),
+      reporting(goes("tests run"), ran("c1", ["bun", "test"])),
+    ),
+  );
+  // The first turn's end keeps `running` (its esc row) for the next turn,
+  // and the press lands right there.
+  const kept: unknown[] = [];
+  const presses: Promise<unknown>[] = [];
+  ui.refuse = (writes) => {
+    if (
+      !presses.length &&
+      writes.some(
+        (write) =>
+          write.path === "placeholder" && write.value === "Message the model",
+      )
+    ) {
+      kept.push(writes.find((write) => write.path === "running")?.value);
+      presses.push(ui.fire("cancel"));
+    }
+    return undefined;
+  };
+  await ui.fire("send", "/goal make the tests pass");
+  await client.idle();
+  await presses[0];
+  expect(kept).toEqual([true]);
+  expect(seen).toHaveLength(1);
+  expect(store(ui).status).toMatch(/^Goal stopped: you cancelled its turn/);
+  expect(store(ui).header.goal_on).toBe(false);
+  // No turn followed: esc rests again.
+  expect(store(ui).running).toBe(false);
 });
 
 test("ctrl+c between a goal's turns gives a queued send back instead of running it", async () => {

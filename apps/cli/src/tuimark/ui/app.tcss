@@ -49,7 +49,8 @@
 .la-provider, .la-locality, .la-session, .la-ctx, .la-grants { width: auto; }
 /* Where the prompt goes is in the appbar at every width: the provider
  * label says it on a wide terminal, LOCAL or REMOTE in its place below
- * 111 columns, and in the compact tier the model name gives way to it. */
+ * 111 columns, and at 50 columns or fewer the model name gives way to it
+ * (at 60 the appbar has room for both). */
 .la-locality { color: $muted; }
 .la-locality.remote { color: $accent; bold: true; }
 @media (min-cols: 111) {
@@ -58,7 +59,7 @@
 @media (max-cols: 110) {
   .la-provider { display: none; }
 }
-@media (max-cols: 60) {
+@media (max-cols: 50) {
   .la-model { display: none; }
 }
 /* The grants label is long: the session id and then the ctx bar (the

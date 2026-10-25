@@ -1,5 +1,5 @@
 === grid 60x24 ===
- Local Agent                  build  LOCAL                  
+ Local Agent          build  LOCAL  qwen3-coder:30b         
 ┌──────────────────────────────────────────────────────────┐
 │      try { return await fetch(url); }                    │
 │      catch (e) { if (attempt === tries) throw e; }       │
@@ -22,4 +22,4 @@
 ╔══════════════════════════════════════════════════════════╗
 ║ Message the model                                        ║
 ╚══════════════════════════════════════════════════════════╝
- build · last 1m 06s · 32 tok… ^P commands  esc cancel      
+ build · last 1m 06s · 32 tok… ^P commands  ^Y copy         

@@ -596,6 +596,7 @@
   },
   "draft": "",
   "placeholder": "Type to queue a message",
+  "running": true,
   "status": "build · last 1m 06s · 32 tok/s",
   "commit_buf": {
     "id": "commit",

@@ -6,7 +6,7 @@
 │ ╭─ MCP · mcphub · re╭─ Call validate from server tuimark? ─────────────────────────────────────╮───────────────────╮ ┃
 │ │ ! unverified · 0.2│                                                                          │                   │ ┃
 │ │ {"query":"validate│  MCP tool validate from server tuimark, run by the gateway mcphub. Call  │                   │ ┃
-│ │ unverified · domai│  it with the arguments below.                                            │                   │ ┃
+│ │ domain unknown    │  it with the arguments below.                                            │                   │ ┃
 │ │ {                 │  ┌────────────────────────────────────────────────────────────────────┐  │                   │ ┃
 │ │   "status": "confi│  │tuimark__validate via mcphub                                        │  │                   │ ┃
 │ │   "confidence": "h│  │{                                                                   │  │                   │ ┃

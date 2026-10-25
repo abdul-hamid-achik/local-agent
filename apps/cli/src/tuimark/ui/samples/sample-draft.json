@@ -594,6 +594,7 @@
   },
   "draft": "first line\nsecond line\nthird line",
   "placeholder": "Message the model",
+  "running": false,
   "status": "build · last 1m 06s · 32 tok/s",
   "commit_buf": {
     "id": "commit",

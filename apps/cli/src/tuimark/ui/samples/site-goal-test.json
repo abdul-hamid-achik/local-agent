@@ -496,6 +496,7 @@
   },
   "draft": "",
   "placeholder": "Type to queue a message",
+  "running": true,
   "status": "build",
   "commit_buf": {
     "id": "commit",

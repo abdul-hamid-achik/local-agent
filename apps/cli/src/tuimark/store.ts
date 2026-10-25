@@ -387,6 +387,11 @@ export interface Store {
   };
   draft: string;
   placeholder: string;
+  /**
+   * A turn runs, from its send until it settles: esc cancels it only then,
+   * so its hint shows only then (the document keys the row on it).
+   */
+  running: boolean;
   /** The status bar: ambient facts, or a transient message (see idleStatus). */
   status: string;
   /**
@@ -578,8 +583,8 @@ export function questionChoices(
 export const QUESTION_CARD_STATUS = "asked, answer below";
 /** While the question is not armed yet: only esc works. */
 export const QUESTION_WAIT_STATUS = "Question for you · esc skip";
-/** Once enter answers it. */
-export const QUESTION_STATUS = "Waiting for your answer · esc skip";
+/** Once enter answers it. The box under the log names its keys, esc skip among them. */
+export const QUESTION_STATUS = "Waiting for your answer";
 /** The composer's placeholder while it answers a question. */
 export const QUESTION_PLACEHOLDER_CHOICE = "enter takes the chosen row";
 export const QUESTION_PLACEHOLDER_TEXT = "Type your answer";
@@ -617,12 +622,13 @@ export function questionState(question: Question, sel: number): QuestionState {
     text: clip(cleanText(question.question), 2048),
     rows,
     choosing,
+    // esc skip before the extras: a narrow box clips the end of the line.
     hint:
       question.kind === "yes_no"
-        ? "↑/↓ choose · enter answer · or type y or n · esc skip"
+        ? "↑/↓ choose · enter answer · esc skip · or type y or n"
         : choosing
-          ? "↑/↓ choose · enter answer · or type its number · esc skip"
-          : "type the answer · enter send · shift+enter new line · esc skip",
+          ? "↑/↓ choose · enter answer · esc skip · or type its number"
+          : "type the answer · enter send · esc skip · shift+enter new line",
   };
 }
 
@@ -745,6 +751,7 @@ export function initialStore(init: StoreInit): Store {
     },
     draft: "",
     placeholder: PLACEHOLDER,
+    running: false,
     status: idleStatus(init.mcpServers, init.intent, {
       connecting: init.mcpConnecting,
     }),

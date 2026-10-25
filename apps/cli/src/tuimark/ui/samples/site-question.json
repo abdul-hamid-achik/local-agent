@@ -149,7 +149,7 @@
       }
     ],
     "choosing": true,
-    "hint": "↑/↓ choose · enter answer · or type its number · esc skip"
+    "hint": "↑/↓ choose · enter answer · esc skip · or type its number"
   },
   "details": {
     "open": false,
@@ -408,7 +408,8 @@
   },
   "draft": "",
   "placeholder": "enter takes the chosen row",
-  "status": "Waiting for your answer · esc skip",
+  "running": true,
+  "status": "Waiting for your answer",
   "commit_buf": {
     "id": "commit",
     "is_user": false,

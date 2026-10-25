@@ -491,10 +491,11 @@ test("a command result shows its exit code before its output", () => {
       timedOut: false,
       truncated: true,
     }),
+    "succeeded",
   );
   expect(shown).toBe("exit 0, truncated\nok\n");
-  expect(resultSummary("read", "plain")).toBe("plain");
-  expect(resultSummary("run_command", "not json")).toBe("not json");
+  expect(resultSummary("read", "plain", "succeeded")).toBe("plain");
+  expect(resultSummary("run_command", "not json", "failed")).toBe("not json");
 });
 
 test("a call summary names the path, the command or the arguments", () => {
@@ -659,9 +660,12 @@ test("an MCP card shows the server's text under a head that keeps the doubt", ()
     raw,
   );
   const lines = runsText(card?.out ?? []).split("\n");
-  expect(lines[0]).toBe("unverified · domain unknown");
+  // The card's state says unverified; the head adds what else is unknown.
+  expect(card?.status).toBe("unverified");
+  expect(card?.warn).toBe(true);
+  expect(lines[0]).toBe("domain unknown");
   expect(card?.out[0]).toEqual({
-    text: "unverified · domain unknown",
+    text: "domain unknown",
     class: "note",
   });
   // The text is pretty-printed and none of the envelope's keys show.
@@ -677,7 +681,7 @@ test("an MCP card shows the server's text under a head that keeps the doubt", ()
   expect(runsText(card?.out ?? [])).not.toContain("transport");
   // /details (and so /export) read the same parse, whole.
   expect(receipt?.output.split("\n").slice(0, 2)).toEqual([
-    "unverified · domain unknown",
+    "domain unknown",
     "{",
   ]);
   expect(receipt?.output).not.toContain("isError");
@@ -699,8 +703,8 @@ test("an MCP error is class err, and text that is not JSON stays as it is", () =
     "\nrate limited",
   ]);
   // Cut by the runtime's output cap, or a bare scalar: the bytes stay.
-  expect(show('{"cut": ')).toBe('unverified · domain unknown\n{"cut": ');
-  expect(show("42")).toBe("unverified · domain unknown\n42");
+  expect(show('{"cut": ')).toBe('domain unknown\n{"cut": ');
+  expect(show("42")).toBe("domain unknown\n42");
   // JSON that would not print back the same is shown as sent: a 20-digit id
   // would be rounded, a repeated key dropped, an escape rewritten.
   for (const sent of [
@@ -709,14 +713,12 @@ test("an MCP error is class err, and text that is not JSON stays as it is", () =
     '{"e": "\\u00e9"}',
     '{"n": 1.0}',
   ])
-    expect(show(sent)).toBe(`unverified · domain unknown\n${sent}`);
+    expect(show(sent)).toBe(`domain unknown\n${sent}`);
   // Spaces inside strings are kept, after an escaped quote too, and do not
   // stop the indenting.
-  expect(show('{"t": "a\\" b"}')).toBe(
-    'unverified · domain unknown\n{\n  "t": "a\\" b"\n}',
-  );
+  expect(show('{"t": "a\\" b"}')).toBe('domain unknown\n{\n  "t": "a\\" b"\n}');
   expect(show('{ "say" : "a  b",\n "t": "\\"q\\" " }')).toBe(
-    'unverified · domain unknown\n{\n  "say": "a  b",\n  "t": "\\"q\\" "\n}',
+    'domain unknown\n{\n  "say": "a  b",\n  "t": "\\"q\\" "\n}',
   );
 });
 

@@ -14345,6 +14345,7 @@
   },
   "draft": "",
   "placeholder": "Answer the approval first",
+  "running": true,
   "status": "Preview truncated · n deny · y allow · Esc deny",
   "commit_buf": {
     "id": "commit",

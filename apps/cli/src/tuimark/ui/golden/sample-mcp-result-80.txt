@@ -7,7 +7,7 @@
 │ ╭─ MCP · mcphub · resolve_tool ────────────────────────────────────────────╮ │
 │ │ ! unverified                                                             │ │
 │ │ {"goal":"find the retry docs"}                                           │ │
-│ │ unverified · domain unknown                                              │ │
+│ │ domain unknown                                                           │ │
 │ │ {                                                                        │ │
 │ │   "status": "confident",                                                 │ │
 │ │   "ambiguous": false,                                                    │ │
@@ -28,4 +28,4 @@
 ╔══════════════════════════════════════════════════════════════════════════════╗
 ║ Message the model                                                            ║
 ╚══════════════════════════════════════════════════════════════════════════════╝
- build · last 1m 06s · 32 tok/s   ^P commands  esc cancel  ^Y copy  ↑/↓ history 
+ build · last 1m 06s · 32 tok/s   ^P commands  ^Y copy  ↑/↓ history             

@@ -488,6 +488,11 @@ export class TuimarkClient {
   // the turn
   private busy = false;
   private turn?: AbortController;
+  /**
+   * The store's `running` (esc cancels) stayed on past a turn's end for
+   * the turn that follows it: runTurn turns it off when none does.
+   */
+  private runningKept = false;
   /** The turn a ctrl+c cancelled: its end says the next press quits. */
   private quitCancelled?: AbortController;
   private turnDone: Promise<void> = Promise.resolve();
@@ -3702,7 +3707,11 @@ export class TuimarkClient {
   ): Promise<void> {
     try {
       // Inline, the prompt is printed as it is sent; the region keeps no copy.
-      if (this.inline && userView) await this.commitView(userView);
+      // Esc cancels from the send on, the print included.
+      if (this.inline && userView) {
+        await this.write([{ path: "running", value: true }]);
+        await this.commitView(userView);
+      }
       await this.publishMessages([
         // A new turn takes the screen: an open viewer closes with it.
         ...this.closeDetailsWrite(),
@@ -3711,6 +3720,7 @@ export class TuimarkClient {
         { path: "empty", value: false },
         { path: "draft", value: "" },
         { path: "placeholder", value: PLACEHOLDER_BUSY },
+        { path: "running", value: true },
         // The same ambient status as at rest: a transient one of the last
         // turn (an error, a command's answer) goes with the new turn.
         { path: "status", value: this.idleText() },
@@ -3733,7 +3743,8 @@ export class TuimarkClient {
     this.queued = undefined;
     const live = !this.quitting && !this.options.signal.aborted;
     const goal = this.goal && this.goalContinues ? this.goal : undefined;
-    if (!live || (next === undefined && !goal)) return;
+    if (!live) return;
+    if (next === undefined && !goal) return this.dropKeptRunning();
     // Neither a queued send nor a goal's next turn goes into the runtime's
     // refusal past an unknown outcome: the send goes back to the composer.
     const unknown = this.unknownOutcomes();
@@ -3741,17 +3752,19 @@ export class TuimarkClient {
       if (goal) this.goalStop ??= "stopped: a call's outcome is unknown";
       await this.endStoppedGoal();
       await this.refuseForRecovery(unknown, next);
-      return;
+      return this.dropKeptRunning();
     }
     // A queued send runs first; the goal continues after it.
     if (next !== undefined) {
+      this.runningKept = false;
       await this.beginTurn(next);
       await this.turnDone;
       return;
     }
-    // A stop that landed after the turn's own check (ctrl+c between
-    // turns) ends the goal before another turn starts.
-    if (!goal || (await this.endStoppedGoal())) return;
+    // A stop that landed after the turn's own check (esc or ctrl+c
+    // between turns) ends the goal before another turn starts.
+    if (!goal || (await this.endStoppedGoal())) return this.dropKeptRunning();
+    this.runningKept = false;
     // A goal left open goes on with its next turn: host-written, marked,
     // shown as a notice.
     await this.beginTurn(goal.nextMessage(), true);
@@ -3759,6 +3772,13 @@ export class TuimarkClient {
   }
 
   /** Ends a goal a stop was asked of; true when there was one. */
+  /** No turn followed the one that kept `running` on: esc rests again. */
+  private async dropKeptRunning(): Promise<void> {
+    if (!this.runningKept) return;
+    this.runningKept = false;
+    await this.write([{ path: "running", value: false }]);
+  }
+
   private async endStoppedGoal(): Promise<boolean> {
     if (!this.goal || this.goalStop === undefined) return false;
     const line = await this.endGoal(this.goal, this.goalStop);
@@ -4117,8 +4137,14 @@ export class TuimarkClient {
         status = goalEnd;
         ambient = false;
       }
+      // Esc stays live while a goal's next turn or a queued send is still
+      // to come: there it stops the goal, or gives the send back.
+      this.runningKept =
+        (this.goal !== undefined && this.goalContinues) ||
+        this.queued !== undefined;
       await this.publishMessages([
         { path: "placeholder", value: PLACEHOLDER },
+        { path: "running", value: this.runningKept },
         // The ambient status as of now, not as of the turn's last event: a
         // send queued while the placement or the goal settled is a fact in it.
         { path: "status", value: ambient ? this.idleText() : status },

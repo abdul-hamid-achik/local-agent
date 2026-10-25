@@ -28,4 +28,4 @@
 ╔══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╗
 ║ Add a retry to the fetch helper.                                                                                     ║
 ╚══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╝
- Ollama request failed: connection refused   ^P commands  esc cancel  ^Y copy  ↑/↓ history  ^O earlier                  
+ Ollama request failed: connection refused   ^P commands  ^Y copy  ↑/↓ history  pgup/pgdn scroll  ^L latest             

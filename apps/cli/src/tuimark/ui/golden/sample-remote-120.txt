@@ -28,4 +28,4 @@
 ╔══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╗
 ║ Message the model                                                                                                    ║
 ╚══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╝
- build · last 1m 06s · 32 tok/s   ^P commands  esc cancel  ^Y copy  ↑/↓ history  ^O earlier  pgup/pgdn scroll           
+ build · last 1m 06s · 32 tok/s   ^P commands  ^Y copy  ↑/↓ history  pgup/pgdn scroll  ^L latest  shift+tab mode        

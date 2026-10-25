@@ -649,6 +649,7 @@
   },
   "draft": "",
   "placeholder": "Message the model",
+  "running": false,
   "status": "Goal reported done — evidence: `bun test src/fetch.test.ts` exited 0",
   "commit_buf": {
     "id": "commit",

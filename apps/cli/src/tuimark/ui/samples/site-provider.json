@@ -392,6 +392,7 @@
   },
   "draft": "",
   "placeholder": "Message the model",
+  "running": false,
   "status": "Provider",
   "commit_buf": {
     "id": "commit",

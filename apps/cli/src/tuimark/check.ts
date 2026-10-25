@@ -417,7 +417,8 @@ const extraDumps: {
     cols: 60,
     rows: 24,
     golden: "sample-60-r24.txt",
-    contains: ["^P commands", "esc cancel"],
+    // At rest: no esc hint (nothing to cancel), and room for the model.
+    contains: ["^P commands", "qwen3-coder:30b"],
   },
   {
     doc: "app.tui",
@@ -444,6 +445,16 @@ const extraDumps: {
     rows: 24,
     golden: "sample-approval-unarmed-60-r24.txt",
     contains: ["Waiting for approval · n deny · Esc deny"],
+  },
+  // The status names no key while a question waits: the box's hint does,
+  // and at 60 columns its longest one still keeps esc skip.
+  {
+    doc: "app.tui",
+    sample: "sample-question-text",
+    cols: 60,
+    rows: 24,
+    golden: "sample-question-text-60-r24.txt",
+    contains: ["Waiting for your answer", "esc skip"],
   },
   {
     doc: "app.tui",
@@ -693,14 +704,30 @@ const plays: Expect[] = [
     actions: ["typed", "send"],
     value: "/help",
   },
-  { sample: "sample", input: "esc", actions: ["cancel"] },
+  // esc cancels a running turn, and its hint shows only then: at rest it
+  // has nothing to cancel, fires nothing and is not offered. ^O earlier
+  // likewise shows only when earlier messages are there to load.
+  {
+    sample: "sample-streaming",
+    input: "esc",
+    cols: 120,
+    actions: ["cancel"],
+    screen: ["esc cancel", "^O earlier"],
+  },
+  {
+    sample: "sample",
+    input: "esc",
+    actions: [],
+    notScreen: ["esc cancel", "^O earlier"],
+  },
   // ctrl+y copies the last reply (the composer does not take it), and its
-  // hint is third on the status line, so it survives a narrow terminal.
+  // hint is second on the status line at rest, so it survives a narrow
+  // terminal.
   {
     sample: "sample",
     input: "ctrl+y",
     actions: ["copy_reply"],
-    screen: ["^P commands", "esc cancel", "^Y copy"],
+    screen: ["^P commands", "^Y copy"],
   },
   { sample: "sample", input: "ctrl+c", actions: ["quit_request"] },
   // The welcome names the native selection (a modifier-drag while mouse
@@ -1259,12 +1286,22 @@ const plays: Expect[] = [
     actions: ["typed", "typed", "typed", "send"],
     value: "one\ntwo",
   },
+  // Inline too, esc cancels only a running turn.
+  {
+    sample: "inline-sample-streaming",
+    doc: "inline.tui",
+    inline: true,
+    input: "esc",
+    actions: ["cancel"],
+    screen: ["esc cancel"],
+  },
   {
     sample: "inline-sample",
     doc: "inline.tui",
     inline: true,
     input: "esc",
-    actions: ["cancel"],
+    actions: [],
+    notScreen: ["esc cancel"],
   },
   {
     sample: "inline-sample",

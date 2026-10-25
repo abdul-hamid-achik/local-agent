@@ -1490,6 +1490,7 @@ export function outputRuns(
  */
 function mcpEnvelope(
   output: string,
+  state: ToolState,
 ): { head: { text: string; bad: boolean }; body: string } | undefined {
   let r: Record<string, unknown>;
   try {
@@ -1510,11 +1511,13 @@ function mcpEnvelope(
   )
     return undefined;
   // Transport success says the call went through, nothing about the result:
-  // the head names what is and is not known about it.
+  // the head names what is and is not known about it. When the card's state
+  // already says unverified (and the viewer's title and the export's heading
+  // with it), the head does not say it twice.
   const head = [
     isError ? "error" : "",
     transport === "success" ? "" : `transport ${transport}`,
-    evidence,
+    evidence === "unverified" && state === "unverified" ? "" : evidence,
     `domain ${domain}`,
   ].filter(Boolean);
   return {
@@ -1564,9 +1567,10 @@ function withoutSpaces(json: string): string {
 function resultParts(
   name: string,
   output: string,
+  state: ToolState,
 ): { head?: { text: string; bad: boolean }; body: string } {
   if (mcpParts(name)) {
-    const mcp = mcpEnvelope(output);
+    const mcp = mcpEnvelope(output, state);
     if (mcp) return mcp;
   }
   if (name === "run_command") {
@@ -1600,8 +1604,12 @@ function resultParts(
 }
 
 /** What to show under a finished tool card, from the `{status, output}` the runtime stores. */
-export function resultSummary(name: string, output: string): string {
-  const { head, body } = resultParts(name, output);
+export function resultSummary(
+  name: string,
+  output: string,
+  state: ToolState,
+): string {
+  const { head, body } = resultParts(name, output, state);
   return head ? [head.text, body].join("\n") : body;
 }
 
@@ -1667,7 +1675,7 @@ function toolCard(
   output = "",
   details?: number,
 ): Card {
-  const parts = resultParts(name, output);
+  const parts = resultParts(name, output, state);
   const line = callLine(call);
   const bad = state === "denied" || state === "failed";
   const running =
@@ -1944,8 +1952,8 @@ export class ViewBuilder {
       args: callSummary(call),
       output: capDetailsOutput(
         change
-          ? `${resultSummary(name, output)}\n${change}`
-          : resultSummary(name, output),
+          ? `${resultSummary(name, output, state)}\n${change}`
+          : resultSummary(name, output, state),
       ),
     };
   }

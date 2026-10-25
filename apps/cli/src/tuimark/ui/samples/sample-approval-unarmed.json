@@ -686,6 +686,7 @@
   },
   "draft": "",
   "placeholder": "Answer the approval first",
+  "running": true,
   "status": "Waiting for approval · n deny · Esc deny",
   "commit_buf": {
     "id": "commit",

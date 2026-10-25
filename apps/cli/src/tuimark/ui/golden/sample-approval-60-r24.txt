@@ -1,5 +1,5 @@
 === grid 60x24 ===
- Local Agent                  build  LOCAL                  
+ Local Agent          build  LOCAL  qwen3-coder:30b         
 ╭─ Edit src/fetch.ts? ─────────────────────────────────────╮
 │                                                          │
 │  Apply this change to the workspace.                     │

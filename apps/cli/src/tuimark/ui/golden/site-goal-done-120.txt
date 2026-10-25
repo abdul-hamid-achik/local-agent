@@ -28,4 +28,4 @@
 ╔══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╗
 ║ Message the model                                                                                                    ║
 ╚══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╝
- Goal reported done — evidence: `bun test src/fetch.test.ts` exited 0   ^P commands  esc cancel  ^Y copy  ↑/↓ history   
+ Goal reported done — evidence: `bun test src/fetch.test.ts` exited 0   ^P commands  ^Y copy  ↑/↓ history               

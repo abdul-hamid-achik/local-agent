@@ -609,6 +609,7 @@
   },
   "draft": "",
   "placeholder": "Message the model",
+  "running": false,
   "status": "MCP servers: 1 · 2 tools",
   "commit_buf": {
     "id": "commit",

@@ -335,7 +335,7 @@
     "text": "Which port does the staging server listen on?",
     "rows": [],
     "choosing": false,
-    "hint": "type the answer · enter send · shift+enter new line · esc skip"
+    "hint": "type the answer · enter send · esc skip · shift+enter new line"
   },
   "details": {
     "open": false,
@@ -594,7 +594,8 @@
   },
   "draft": "",
   "placeholder": "Type your answer",
-  "status": "Waiting for your answer · esc skip",
+  "running": true,
+  "status": "Waiting for your answer",
   "commit_buf": {
     "id": "commit",
     "is_user": false,
