@@ -79,9 +79,11 @@ describe("provider configuration boundary", () => {
         keep_alive,
       }),
     });
-    for (const value of ["30m", "1h30m", "-1m", "-1", "0", 3600, -1])
+    for (const value of ["30m", "1h30m", "-1m", "0", 3600, -1])
       expect(resolveProvider(profile(value)).keep_alive).toBe(value);
-    for (const value of ["forever", "30 m", "", 1.5])
+    // Ollama's ParseDuration refuses a bare number in a string: every chat
+    // would fail, so the profile does instead.
+    for (const value of ["forever", "30 m", "", "-1", "3600", 1.5])
       expect(() => resolveProvider(profile(value))).toThrow(/keep_alive/);
     // Without it, nothing is invented: the server keeps its default.
     expect(resolveProvider(profile(undefined))).not.toHaveProperty(

@@ -148,8 +148,12 @@ const checkOpenAIKeyTransport = (
     });
 };
 
-/** Ollama's keep_alive: a Go duration (30m, 1h30m, -1m) or whole seconds. */
-const KEEP_ALIVE = /^-?(?:(?:\d+(?:\.\d+)?(?:ns|us|µs|ms|s|m|h))+|\d+)$/u;
+/**
+ * Ollama's keep_alive as a string: a Go duration (30m, 1h30m, -1m). Ollama
+ * parses it with time.ParseDuration, which refuses a bare number other than
+ * 0, so whole seconds travel as a JSON number instead.
+ */
+const KEEP_ALIVE = /^-?(?:(?:\d+(?:\.\d+)?(?:ns|us|µs|ms|s|m|h))+|0)$/u;
 
 /** Reused to normalize OLLAMA_HOST below. */
 const endpoint = z.string().superRefine(checkOllamaOrigin);
@@ -181,8 +185,8 @@ export const ProviderSchema = z
     api_key: z.string().trim().min(1).max(4096).optional(),
     /**
      * Sent to Ollama as `keep_alive` on every chat: how long the model stays
-     * loaded after a request (a Go duration such as 30m, or seconds, negative
-     * for no limit). Chalupa's to set, since a model's residency on its GPU is
+     * loaded after a request (a Go duration such as 30m, or a number of
+     * seconds; negative for no limit). Chalupa's to set, since a model's residency on its GPU is
      * placement; unset keeps the server's own default.
      */
     keep_alive: z
