@@ -20,6 +20,7 @@
 // them. If a write is refused the store no longer matches what this class
 // thinks it holds: `markStale()` makes the next drain send everything.
 
+import { terminalText } from "#cli/text";
 import {
   type Block,
   cleanText,
@@ -52,7 +53,38 @@ export const REPARSE_MS = 250;
  */
 export const FENCE_REPARSE_MS = 1500;
 
+/** How often the controller flushes the live message, in ms (about 30 Hz). */
+export const FLUSH_MS = 33;
+
+/**
+ * A refused commit is offered again after this long, and after twice as long
+ * for each further refusal, up to COMMIT_RETRY_MAX_MS: a host that keeps
+ * refusing is not asked at the flush rate.
+ */
+export const COMMIT_RETRY_MS = 100;
+export const COMMIT_RETRY_MAX_MS = 5000;
+
 const PREFIX = "l";
+
+/**
+ * Where a piece of text ends in something that is not whole yet: the high half
+ * of an emoji, or an escape sequence (`ESC`, `ESC [ 3`, `ESC ] 0 ; title`)
+ * still waiting for its end. Cleaned alone, the escape's ESC would go and the
+ * rest of it would show. Only the last OPEN_END_MAX units are looked at, so a
+ * longer sequence is not waited for.
+ */
+const OPEN_END =
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: ESC and BEL are what the pattern looks for
+  /(?:[\ud800-\udbff]|\u001b(?:\[[0-?]*[ -/]*|\][^\u0007\u001b]*|[ -/]*)?)$/;
+const OPEN_END_MAX = 64;
+
+/** Splits `text` into what is whole and the end that waits for the next piece. */
+function splitOpenEnd(text: string): [whole: string, open: string] {
+  const at = Math.max(0, text.length - OPEN_END_MAX);
+  const m = OPEN_END.exec(text.slice(at));
+  if (!m) return [text, ""];
+  return [text.slice(0, at + m.index), text.slice(at + m.index)];
+}
 
 function liveWith(blocks: Block[], tail: Block[], links: LinkRef[]): LiveView {
   return { ...IDLE_LIVE, active: true, blocks, tail, links };
@@ -63,6 +95,9 @@ export class LiveStream {
   private pending = "";
   /** Text that arrived since the last drain, cleaned. */
   private unsent = "";
+  /** The end of the last piece that is not whole yet (see `splitOpenEnd`), per stream. */
+  private openAnswer = "";
+  private openThinking = "";
   /**
    * The reply's link targets so far. The live blocks carry the body's [n]
    * markers, and the committed view renders the same sources row from this
@@ -98,6 +133,9 @@ export class LiveStream {
   // below it is ever offered again.
   private committedCount = 0;
   private offeredCount = 0;
+  /** Refused commits in a row, and when the next attempt may be made. */
+  private refusals = 0;
+  private retryAt = 0;
   private readonly inline: boolean;
 
   /** The width a table may take, read at each parse (a stream is written once). */
@@ -115,6 +153,8 @@ export class LiveStream {
   reset(): void {
     this.pending = "";
     this.unsent = "";
+    this.openAnswer = "";
+    this.openThinking = "";
     this.linkRefs = [];
     this.linksSent = 0;
     this.blocks = [];
@@ -133,6 +173,8 @@ export class LiveStream {
     this.answered = false;
     this.committedCount = 0;
     this.offeredCount = 0;
+    this.refusals = 0;
+    this.retryAt = 0;
   }
 
   /** The reply's link targets, as the body's [n] markers number them. */
@@ -149,8 +191,9 @@ export class LiveStream {
       (this.answered && this.inStore.thinking) ||
       // Text went on the end of the tail unparsed and the stream has gone quiet.
       (this.raw && this.now() - this.lastParse >= REPARSE_MS) ||
-      // Final blocks nobody has committed yet (a refused commit retries).
+      // Final blocks nobody has committed yet (a refused commit retries, later).
       (this.inline &&
+        this.commitDue &&
         this.blocks.length > this.committedCount + this.offeredCount)
     );
   }
@@ -160,16 +203,21 @@ export class LiveStream {
     if (!text) return;
     this.answered = true;
     if (this.cut) return;
-    const clean = cleanText(text);
+    const [whole, open] = splitOpenEnd(this.openAnswer + text);
+    this.openAnswer = open;
+    const clean = cleanText(whole);
     this.unsent += clean;
-    this.pending += clean;
+    // The source keeps its tabs: a code block shows them at tab stops.
+    this.pending += terminalText(whole);
     this.chars += clean.length;
   }
 
   /** A piece of the model's reasoning; it is ignored once the answer has started. */
   pushThinking(text: string): void {
     if (!text || this.answered) return;
-    const clean = cleanText(text);
+    const [whole, open] = splitOpenEnd(this.openThinking + text);
+    this.openThinking = open;
+    const clean = cleanText(whole);
     this.think += clean;
     this.thinkUnsent += clean;
   }
@@ -202,9 +250,21 @@ export class LiveStream {
     return fresh;
   }
 
-  /** Hands offered blocks back after a refused commit, for the next attempt. */
+  /**
+   * Hands offered blocks back after a refused commit, for a later attempt: each
+   * refusal in a row doubles the wait (`commitDue`).
+   */
   releaseFinal(count: number): void {
     this.offeredCount = Math.max(0, this.offeredCount - count);
+    this.retryAt =
+      this.now() +
+      Math.min(COMMIT_RETRY_MAX_MS, COMMIT_RETRY_MS * 2 ** this.refusals);
+    this.refusals++;
+  }
+
+  /** False while a refused commit is waiting out its delay. */
+  get commitDue(): boolean {
+    return this.now() >= this.retryAt;
   }
 
   /**
@@ -215,6 +275,8 @@ export class LiveStream {
   confirmCommitted(count: number): Write[] {
     this.committedCount += count;
     this.offeredCount = Math.max(0, this.offeredCount - count);
+    this.refusals = 0;
+    this.retryAt = 0;
     if (!this.inStore.live) return [];
     return [{ path: "live.blocks", value: this.visibleBlocks() }];
   }
@@ -252,6 +314,9 @@ export class LiveStream {
     }
     this.pending = "";
     this.unsent = "";
+    // A piece that never finished (an emoji half, an escape) is not text.
+    this.openAnswer = "";
+    this.openThinking = "";
     this.raw = false;
     return this.takeFinal();
   }
@@ -394,7 +459,7 @@ export class LiveStream {
    * the block before it (a `|` that becomes a table row).
    */
   private parse(text: string): void {
-    const lines = cleanText(text).split("\n");
+    const lines = terminalText(text).split("\n");
     const complete = lines.slice(0, -1).join("\n");
     let cutLine = lines.length - 1;
     if (complete.trim() !== "") {

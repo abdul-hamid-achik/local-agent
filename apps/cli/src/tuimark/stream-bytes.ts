@@ -7,54 +7,15 @@
 // would put on fd 3 (the JSON line of each batch) and applies the writes to a
 // store, so the run also proves the store ends up holding the reply. The fixture
 // stream is a markdown reply (paragraphs, a list, a code block) cut into tokens
-// of about four characters, with a short reasoning block before it.
+// of about four characters, with a short reasoning block before it
+// (`fixtureTokens`, in stream-fixture.ts).
 
 import type { AgentEvent, Provider, Workspace } from "@local-agent/runtime";
 import { runsText } from "#cli/tuimark/blocks";
 import { TuimarkClient } from "#cli/tuimark/controller";
 import { FakeHost } from "#cli/tuimark/fake-host";
-
-/**
- * A reply of about `tokens` tokens, as the pieces a model would stream. "mixed"
- * is paragraphs, a list and short code blocks; "fence" is one code block that
- * runs the whole way (a model writing a file).
- */
-export function fixtureTokens(
-  tokens: number,
-  shape: "mixed" | "fence" = "mixed",
-): string[] {
-  if (shape === "fence") {
-    let code = "Here is the file:\n\n```ts\n";
-    for (let n = 0; code.length < tokens * 4; n++)
-      code += `export function step${n}(input: number): number {\n  return input * ${n} + 1; // line ${n}\n}\n\n`;
-    const pieces: string[] = [];
-    for (let i = 0; i < code.length && pieces.length < tokens; i += 4)
-      pieces.push(code.slice(i, i + 4));
-    return pieces;
-  }
-  const paragraph =
-    "The helper wraps the call in a **bounded retry** with exponential backoff, and `AbortError` is never retried because the caller asked for it. ";
-  const code = [
-    "```ts",
-    "export async function fetchRetry(url: string, tries = 3) {",
-    "  for (let attempt = 1; ; attempt++) {",
-    "    try { return await fetch(url); }",
-    "    catch (e) { if (attempt === tries) throw e; }",
-    "  }",
-    "}",
-    "```",
-    "",
-  ].join("\n");
-  const list =
-    "- the last error is rethrown\n- the delay doubles\n- stream complete\n\n";
-  let text = "";
-  for (let n = 0; text.length < tokens * 4; n++)
-    text += `${paragraph}${paragraph}\n\n${n % 3 === 1 ? code : ""}${n % 3 === 2 ? list : ""}`;
-  const pieces: string[] = [];
-  for (let i = 0; i < text.length && pieces.length < tokens; i += 4)
-    pieces.push(text.slice(i, i + 4));
-  return pieces;
-}
+import { FLUSH_MS } from "#cli/tuimark/stream";
+import { fixtureTokens } from "#cli/tuimark/stream-fixture";
 
 export interface StreamBytes {
   tokens: number;
@@ -74,12 +35,13 @@ export async function measure(options: {
   flushMs?: number;
   thinkingTokens?: number;
 }): Promise<StreamBytes> {
-  const { tokens = 2000, tokenMs = 10, flushMs = 33 } = options;
+  const { tokens = 2000, tokenMs = 10, flushMs = FLUSH_MS } = options;
   const thinkingTokens = options.thinkingTokens ?? 0;
   const pieces = fixtureTokens(tokens, options.shape);
   const thinking = Array.from({ length: thinkingTokens }, (_, i) =>
     `step ${i} of the plan\n`.slice(0, 4 + (i % 3) * 5),
   );
+  const count = pieces.length + thinking.length;
   const reply = pieces.join("");
   const ui = new FakeHost();
   let shown = "";
@@ -128,25 +90,34 @@ export async function measure(options: {
   await send({ seq: 1, action: "send", source: "", keys: {}, value: "go" });
   await client.idle();
   return {
-    tokens: pieces.length + thinking.length,
+    tokens: count,
     bytes: ui.bytes,
     batches: ui.batches.length,
-    perToken: ui.bytes / (pieces.length + thinking.length),
+    perToken: count === 0 ? 0 : ui.bytes / count,
     shown,
     reply,
   };
 }
 
 if (import.meta.main) {
+  // A flag's number: --tokens without one, or with a word, is a usage error
+  // (NaN would run an empty stream and print NaN).
   const flag = (name: string, fallback: number) => {
     const at = Bun.argv.indexOf(`--${name}`);
-    return at > 0 ? Number(Bun.argv[at + 1]) : fallback;
+    if (at < 0) return fallback;
+    const raw = Bun.argv[at + 1];
+    const value = raw === undefined || raw === "" ? Number.NaN : Number(raw);
+    if (!Number.isFinite(value) || value < 0) {
+      console.error(`--${name} needs a number (got ${raw ?? "nothing"})`);
+      process.exit(2);
+    }
+    return value;
   };
   const result = await measure({
     shape: Bun.argv.includes("--fence") ? "fence" : "mixed",
     tokens: flag("tokens", 2000),
     tokenMs: flag("token-ms", 10),
-    flushMs: flag("flush-ms", 33),
+    flushMs: flag("flush-ms", FLUSH_MS),
     thinkingTokens: flag("thinking", 0),
   });
   console.log(

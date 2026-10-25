@@ -9,12 +9,15 @@ import {
 } from "#cli/tuimark/blocks";
 import { applyWrite, batchBytes } from "#cli/tuimark/fake-host";
 import {
+  COMMIT_RETRY_MAX_MS,
+  COMMIT_RETRY_MS,
   FENCE_REPARSE_MS,
+  FLUSH_MS,
   LiveStream,
   REPARSE_MS,
   streamingView,
 } from "#cli/tuimark/stream";
-import { fixtureTokens } from "#cli/tuimark/stream-bytes";
+import { fixtureTokens } from "#cli/tuimark/stream-fixture";
 
 interface Live {
   active: boolean;
@@ -89,6 +92,25 @@ const MARKDOWN = [
   "The end.",
 ].join("\n");
 
+/**
+ * Text a split can hurt: emoji (a surrogate pair), CJK, colour and title
+ * escapes, CRLF line ends and a tab. Cleaned, it reads as the markdown it is.
+ */
+const WIDE = [
+  "## Résumé 日本語 😀",
+  "",
+  "Emoji 😀 and \u001b[31mred\u001b[0m text,\u001b]0;a title\u0007 a [リンク](https://example.com/日本) and **太字 😀**.",
+  "",
+  "- 項目 one",
+  "- \u001b[1;32mtwo\u001b[m 🧑‍💻",
+  "",
+  "```ts",
+  "const s = '😀';\tconst t = \u001b[33m'日本'\u001b[0m;",
+  "```",
+  "",
+  "The end. 👍🏽",
+].join("\r\n");
+
 /** A small deterministic generator, so a failure repeats. */
 function prng(seed: number) {
   let state = seed;
@@ -99,29 +121,109 @@ function prng(seed: number) {
 }
 
 test("a stream split anywhere ends with the blocks parseBlocks makes of the whole text", () => {
-  for (let seed = 1; seed <= 40; seed++) {
-    const next = prng(seed);
-    const r = rig();
-    for (let i = 0; i < MARKDOWN.length; ) {
-      const size = 1 + Math.floor(next() * 9);
-      r.stream.pushText(MARKDOWN.slice(i, i + size));
-      i += size;
-      r.advance(next() < 0.3 ? REPARSE_MS : 5);
+  // Pieces of one to nine units cut an emoji, an escape and a CRLF in two.
+  for (const text of [MARKDOWN, WIDE]) {
+    for (let seed = 1; seed <= 40; seed++) {
+      const next = prng(seed);
+      const r = rig();
+      for (let i = 0; i < text.length; ) {
+        const size = 1 + Math.floor(next() * 9);
+        r.stream.pushText(text.slice(i, i + size));
+        i += size;
+        r.advance(next() < 0.3 ? REPARSE_MS : 5);
+        r.drain();
+      }
+      // The stream goes quiet: a tail with raw text on its end is parsed again by itself.
+      r.advance(REPARSE_MS);
       r.drain();
+      const live = r.live();
+      expect(live.active).toBe(true);
+      const links: LinkRef[] = [];
+      expect(shape([...live.blocks, ...live.tail]), `seed ${seed}`).toEqual(
+        shape(parseBlocks(text, "l", links)),
+      );
+      // The body's markers and the live view's sources row are one list.
+      expect(live.links).toEqual(links);
+      expect(r.stream.dirty).toBe(false);
     }
-    // The stream goes quiet: a tail with raw text on its end is parsed again by itself.
-    r.advance(REPARSE_MS);
-    r.drain();
-    const live = r.live();
-    expect(live.active).toBe(true);
-    const links: LinkRef[] = [];
-    expect(shape([...live.blocks, ...live.tail])).toEqual(
-      shape(parseBlocks(MARKDOWN, "l", links)),
-    );
-    // The body's markers and the live view's sources row are one list.
-    expect(live.links).toEqual(links);
-    expect(r.stream.dirty).toBe(false);
   }
+});
+
+test("a piece that ends in half an emoji or half an escape waits for the rest", () => {
+  const r = rig();
+  const seen = () =>
+    runsText([...r.live().blocks, ...r.live().tail].flatMap((b) => b.runs));
+  for (const piece of ["Say \ud83d", "\ude00 and \u001b[3", "1mred\u001b[0m"]) {
+    r.stream.pushText(piece);
+    r.advance(FLUSH_MS);
+    r.drain();
+    // What the host holds is never half an emoji, and no escape's text shows.
+    expect(seen().isWellFormed()).toBe(true);
+    expect(seen()).not.toMatch(/\[3/);
+  }
+  r.advance(REPARSE_MS);
+  r.drain();
+  expect(seen()).toBe("Say 😀 and red");
+  // The same for the reasoning.
+  const think = rig();
+  const thought = () => runsText(think.thinking().runs as string[]);
+  for (const piece of ["plan \ud83d", "\ude00 \u001b[3", "1mnow"]) {
+    think.stream.pushThinking(piece);
+    think.advance(FLUSH_MS);
+    think.drain();
+    expect(thought().isWellFormed()).toBe(true);
+    expect(thought()).not.toMatch(/\[3/);
+  }
+  expect(thought()).toBe("plan 😀 now");
+});
+
+test("a piece that never finishes is dropped when the reply ends, not shown", () => {
+  for (const unfinished of ["\ud83d", "\u001b[3"]) {
+    const r = rig();
+    r.stream.pushText("end ");
+    r.stream.pushText(unfinished);
+    expect(r.stream.finishTail().map((b) => runsText(b.runs))).toEqual([
+      "end ",
+    ]);
+  }
+});
+
+test("a refused commit is offered again after a delay that doubles, and a confirmed one starts over", () => {
+  const r = rig({ inline: true });
+  r.stream.pushText("one\n\ntwo\n\nthree\n\nfour");
+  r.advance(FLUSH_MS);
+  r.drain();
+  expect(r.stream.dirty).toBe(true);
+  let offered = r.stream.takeFinal();
+  expect(offered).toHaveLength(2);
+  expect(r.stream.dirty).toBe(false);
+  // Each refusal waits twice as long as the last, up to the cap.
+  let wait = COMMIT_RETRY_MS;
+  for (let refusal = 0; refusal < 8; refusal++) {
+    r.stream.releaseFinal(offered.length);
+    expect(r.stream.commitDue).toBe(false);
+    expect(r.stream.dirty).toBe(false);
+    r.advance(wait - 1);
+    expect(r.stream.commitDue).toBe(false);
+    expect(r.stream.dirty).toBe(false);
+    r.advance(1);
+    expect(r.stream.commitDue).toBe(true);
+    expect(r.stream.dirty).toBe(true);
+    offered = r.stream.takeFinal();
+    expect(offered).toHaveLength(2);
+    wait = Math.min(COMMIT_RETRY_MAX_MS, wait * 2);
+  }
+  expect(wait).toBe(COMMIT_RETRY_MAX_MS);
+  // The ack ends it: the next refusal is quick again.
+  r.stream.confirmCommitted(2);
+  r.stream.pushText("\n\nfive\n\nsix");
+  r.advance(FLUSH_MS);
+  r.drain();
+  offered = r.stream.takeFinal();
+  expect(offered.length).toBeGreaterThan(0);
+  r.stream.releaseFinal(offered.length);
+  r.advance(COMMIT_RETRY_MS);
+  expect(r.stream.commitDue).toBe(true);
 });
 
 test("final blocks are only ever appended, and the first text writes the live message whole", () => {
@@ -129,7 +231,7 @@ test("final blocks are only ever appended, and the first text writes the live me
   const text = MARKDOWN;
   for (let i = 0; i < text.length; i += 7) {
     r.stream.pushText(text.slice(i, i + 7));
-    r.advance(40);
+    r.advance(FLUSH_MS);
     r.drain();
   }
   const writes = r.log.flat();
@@ -214,13 +316,13 @@ test("a tail with raw text on its end is parsed again once the stream goes quiet
 test("2000 tokens take about a hundred bytes each on fd 3, not thousands", () => {
   const r = rig();
   const pieces = fixtureTokens(2000);
-  // 100 tokens a second, a tick every 33 ms.
+  // 100 tokens a second, a tick every FLUSH_MS.
   let ticked = 0;
   for (const piece of pieces) {
     r.stream.pushText(piece);
     r.advance(10);
     ticked += 10;
-    if (ticked >= 33) {
+    if (ticked >= FLUSH_MS) {
       ticked = 0;
       r.drain();
     }
@@ -241,7 +343,7 @@ test("the reasoning is appended, cut back to its end, and gone when the answer s
   for (let n = 0; n < 200; n++) {
     r.stream.pushThinking(line);
     sent += line;
-    r.advance(33);
+    r.advance(FLUSH_MS);
     r.drain();
     const held = runsText(r.thinking().runs as string[]).length;
     expect(held).toBeLessThanOrEqual(THINK_KEEP + line.length);
@@ -253,23 +355,23 @@ test("the reasoning is appended, cut back to its end, and gone when the answer s
   );
   // The answer starts: the block goes in the same write as the first text.
   r.stream.pushText("Answer");
-  r.advance(33);
+  r.advance(FLUSH_MS);
   const writes = r.drain();
   expect(writes.map((w) => w.path)).toEqual(["thinking", "live"]);
   expect(r.thinking()).toEqual({ on: false, runs: [] });
   // Reasoning after the answer began is ignored.
   r.stream.pushThinking("late");
-  r.advance(33);
+  r.advance(FLUSH_MS);
   expect(r.drain()).toEqual([]);
 });
 
 test("after markStale the next drain sends the live message and the reasoning whole", () => {
   const r = rig();
   r.stream.pushText("first paragraph\n\nsecond");
-  r.advance(40);
+  r.advance(FLUSH_MS);
   r.drain();
   r.stream.pushText(" half");
-  r.advance(40);
+  r.advance(FLUSH_MS);
   r.drain();
   // Pretend the last write was refused: wipe what the store holds of it.
   r.store.live = { active: false, blocks: [], tail: [] };
@@ -287,7 +389,7 @@ test("a reply past the view's bounds says so once and stops following", () => {
   const r = rig();
   for (let n = 0; n < MAX_MESSAGE_BLOCKS + 20; n++) {
     r.stream.pushText(`paragraph ${n}\n\n`);
-    r.advance(40);
+    r.advance(FLUSH_MS);
     r.drain();
   }
   const live = r.live();
@@ -297,7 +399,7 @@ test("a reply past the view's bounds says so once and stops following", () => {
   );
   expect(live.tail).toEqual([]);
   r.stream.pushText("more");
-  r.advance(40);
+  r.advance(FLUSH_MS);
   expect(r.drain()).toEqual([]);
 });
 
@@ -306,7 +408,7 @@ test("a reply past the view's bounds says so once and stops following", () => {
 test("inline: final blocks are offered once, confirmed only on ack, then gone from the live message", () => {
   const r = rig({ inline: true });
   r.stream.pushText("first paragraph\n\nsecond paragraph\n\nthird half");
-  r.advance(40);
+  r.advance(FLUSH_MS);
   r.drain();
   const offered = r.stream.takeFinal();
   expect(offered.map((b) => runsText(b.runs))).toEqual(["first paragraph"]);
@@ -326,7 +428,7 @@ test("inline: final blocks are offered once, confirmed only on ack, then gone fr
 test("inline: a released offer comes back whole, so a refused commit loses nothing", () => {
   const r = rig({ inline: true });
   r.stream.pushText("first\n\nsecond\n\nthird");
-  r.advance(40);
+  r.advance(FLUSH_MS);
   r.drain();
   const first = r.stream.takeFinal();
   expect(first.length).toBe(1);
@@ -341,7 +443,7 @@ test("inline: a released offer comes back whole, so a refused commit loses nothi
 test("inline: a resync never re-emits a block whose commit was acked", () => {
   const r = rig({ inline: true });
   r.stream.pushText("first paragraph\n\nsecond paragraph\n\nthird half");
-  r.advance(40);
+  r.advance(FLUSH_MS);
   r.drain();
   const offered = r.stream.takeFinal();
   const clear = r.stream.confirmCommitted(offered.length);
@@ -390,7 +492,7 @@ test("inline: past the bounds the note is a final block and the region keeps its
   const r = rig({ inline: true });
   for (let n = 0; n < MAX_MESSAGE_BLOCKS + 20; n++) {
     r.stream.pushText(`paragraph ${n}\n\n`);
-    r.advance(40);
+    r.advance(FLUSH_MS);
     r.drain();
   }
   const live = r.live();
@@ -423,7 +525,7 @@ test("fullscreen: a stopped finish does not promise the finished message", () =>
   const long = (r: ReturnType<typeof rig>) => {
     for (let n = 0; n < MAX_MESSAGE_BLOCKS + 20; n++) {
       r.stream.pushText(`paragraph ${n}\n\n`);
-      r.advance(40);
+      r.advance(FLUSH_MS);
       r.drain();
     }
   };
@@ -446,7 +548,7 @@ test("fullscreen: a stopped finish does not promise the finished message", () =>
 test("reset forgets everything and streamingView is the first write of a stream", () => {
   const r = rig();
   r.stream.pushText("text\n\nmore");
-  r.advance(40);
+  r.advance(FLUSH_MS);
   r.drain();
   r.stream.reset();
   expect(r.stream.dirty).toBe(false);
@@ -460,14 +562,14 @@ test("reset forgets everything and streamingView is the first write of a stream"
 test("an open code block is not parsed again at every line, only when it closes or on its period", () => {
   const r = rig();
   r.stream.pushText("Here:\n\n```ts\nconst a = 1;\n");
-  r.advance(40);
+  r.advance(FLUSH_MS);
   r.drain();
   const parsedAt = (writes: { path: string }[]) =>
     writes.some((w) => w.path === "live.tail");
   // Lines end, the block stays open: the text goes on the end of the tail.
   for (let n = 0; n < 20; n++) {
     r.stream.pushText(`const b${n} = ${n};\n`);
-    r.advance(40);
+    r.advance(FLUSH_MS);
     expect(parsedAt(r.drain())).toBe(false);
   }
   // Its period passes.
@@ -475,7 +577,7 @@ test("an open code block is not parsed again at every line, only when it closes 
   r.stream.pushText("const c = 3;\n");
   expect(parsedAt(r.drain())).toBe(true);
   // The closing line parses it at once, and the code is highlighted.
-  r.advance(40);
+  r.advance(FLUSH_MS);
   r.stream.pushText("```\n");
   expect(parsedAt(r.drain())).toBe(true);
   expect(r.live().tail.some((b) => b.code && b.runs.length > 1)).toBe(true);
@@ -489,7 +591,7 @@ test("a reply that is one long code block costs about as much per token as prose
     r.stream.pushText(piece);
     r.advance(10);
     ticked += 10;
-    if (ticked >= 33) {
+    if (ticked >= FLUSH_MS) {
       ticked = 0;
       r.drain();
     }

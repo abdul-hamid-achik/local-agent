@@ -1,5 +1,5 @@
 import type { Message } from "@local-agent/runtime";
-import { expect, test } from "vitest";
+import { expect, test, vi } from "vitest";
 import {
   callSummary,
   capDetailsOutput,
@@ -13,7 +13,7 @@ import {
   inlineRuns,
   type LinkRef,
   liveToolView,
-  MAX_CODE_COLS,
+  MAX_CODE_CHARS,
   MAX_CODE_LINES,
   MAX_IMAGE_B64,
   MAX_IMAGES,
@@ -21,6 +21,7 @@ import {
   MAX_LINKS,
   MAX_MESSAGE_BLOCKS,
   MAX_MESSAGE_CHARS,
+  MAX_PARA_CHARS,
   type MessageView,
   messageImages,
   outputRuns,
@@ -30,8 +31,10 @@ import {
   resultSummary,
   runsText,
   startsOpenFence,
+  THINK_TRIM,
   tableRuns,
   tableWidth,
+  thinkingTail,
   tokenizeLine,
   toolTitle,
   ViewBuilder,
@@ -1248,9 +1251,9 @@ test("a message view is bounded: characters, blocks and code line width", () => 
     "… 7 more blocks not shown in this view",
   );
   const [code] = parseBlocks(
-    ["```", "z".repeat(MAX_CODE_COLS + 500), "```"].join("\n"),
+    ["```", "z".repeat(MAX_CODE_CHARS + 500), "```"].join("\n"),
   );
-  expect(runsText(code?.runs ?? [])).toHaveLength(MAX_CODE_COLS);
+  expect(runsText(code?.runs ?? [])).toHaveLength(MAX_CODE_CHARS);
 });
 
 // ----------------------------------------------------------- the inline scanner
@@ -1309,11 +1312,15 @@ test("a marker that does not close stays literal, however a stream ends", () => 
   const message = "Use **bold**, `code`, *em* and [a link](https://x.dev/a_b).";
   const whole = runsText(inlineRuns(message));
   expect(whole).toBe("Use bold, code, em and a link.");
+  // What a prefix shows is its letters, spaces and punctuation, in order: only
+  // markers (`*`, `` ` ``, brackets) and a finished link's url may be missing.
+  const kept = (s: string) => s.replace(/[^A-Za-z ,.]/g, "");
   for (let n = 0; n <= message.length; n++) {
     const head = message.slice(0, n);
-    const text = runsText(inlineRuns(head));
-    expect(text.length).toBeGreaterThanOrEqual(Math.min(head.length, 1) - 1);
-    expect(text).not.toContain("undefined");
+    const visible = head.includes("(https://x.dev/a_b)")
+      ? head.replace("https://x.dev/a_b", "")
+      : head;
+    expect(kept(runsText(inlineRuns(head))), head).toBe(kept(visible));
   }
 });
 
@@ -1532,25 +1539,84 @@ test("the visible text is the source minus its markers, whatever the input", () 
   expect(runsText(inlineRuns(source))).toBe("a b c d f g 日本 😀 * *h");
 });
 
-test("pathological input stays linear", () => {
-  const size = 20_000;
-  const cases = [
-    "*a ".repeat(size),
-    "**a _b ~~c ".repeat(size / 4),
-    "[a](".repeat(size / 2),
-    "[a".repeat(size),
-    "](".repeat(size),
-    "`a``b```c".repeat(size / 4),
-    "*a**b***c****".repeat(size / 8),
-    `${"[a](x".repeat(size / 8)}${"(".repeat(size)}`,
-    "*a ".repeat(size / 2) + "a* ".repeat(size / 2),
-  ];
-  const start = performance.now();
-  for (const text of cases) {
-    const runs = inlineRuns(text);
-    expect(runsText(runs).length).toBeGreaterThan(0);
+/** The least time of a few runs of `run`, in ms (a busy machine only adds). */
+function bestOf(run: () => void): number {
+  let best = Number.POSITIVE_INFINITY;
+  for (let i = 0; i < 3; i++) {
+    const start = performance.now();
+    run();
+    best = Math.min(best, performance.now() - start);
   }
-  expect(performance.now() - start).toBeLessThan(2000);
+  return best;
+}
+
+test("pathological input scales linearly: four times the text, about four times the time", () => {
+  /** An inline case; `literal` says none of its markers can close, so it is shown as written. */
+  const inline = (
+    name: string,
+    build: (n: number) => string,
+    literal = false,
+  ) => ({
+    name,
+    build,
+    literal,
+    parse: (text: string) => runsText(inlineRuns(text)),
+  });
+  const blocks = (name: string, build: (n: number) => string) => ({
+    name,
+    build,
+    literal: false,
+    parse: (text: string) => String(parseBlocks(text).length),
+  });
+  const cases = [
+    inline("open stars", (n) => "*a ".repeat(n), true),
+    inline("mixed openers", (n) => "**a _b ~~c ".repeat(n / 4), true),
+    inline("link openers", (n) => "[a](".repeat(n / 2), true),
+    inline("brackets", (n) => "[a".repeat(n), true),
+    inline("closers", (n) => "](".repeat(n), true),
+    inline("backtick runs", (n) => "`a``b```c".repeat(n / 4)),
+    inline("star runs", (n) => "*a**b***c****".repeat(n / 8)),
+    inline(
+      "links and parens",
+      (n) => `${"[a](x".repeat(n / 8)}${"(".repeat(n)}`,
+      true,
+    ),
+    inline(
+      "emphasis that closes late",
+      (n) => "*a ".repeat(n / 2) + "a* ".repeat(n / 2),
+    ),
+    blocks("a fence line of spaces", (n) => `\`\`\`${" ".repeat(n)}\``),
+    blocks("a long table", (n) =>
+      [
+        "| a | b | c |",
+        "|---|---|---|",
+        ...Array.from({ length: n / 4 }, (_, i) => `| ${i} | x | yy |`),
+      ].join("\n"),
+    ),
+    blocks(
+      "a long code block",
+      (n) => `\`\`\`\n${"let x = 1;\n".repeat(n / 4)}\`\`\``,
+    ),
+  ];
+  const size = 10_000;
+  for (const { name, build, literal, parse } of cases) {
+    const small = build(size);
+    const large = build(size * 4);
+    const shown = parse(large);
+    expect(shown.length, name).toBeGreaterThan(0);
+    if (literal) expect(shown, name).toBe(large);
+    // Linear is about 4x; a quadratic scan is 16x (the limit is 8x). The floor keeps a case
+    // that takes a millisecond from failing on timer noise.
+    const before = Math.max(
+      bestOf(() => parse(small)),
+      3,
+    );
+    const after = bestOf(() => parse(large));
+    expect(
+      after,
+      `${name}: ${before.toFixed(1)} ms to ${after.toFixed(1)} ms`,
+    ).toBeLessThan(before * 8);
+  }
 });
 
 // ---------------------------------------------------------- links and images
@@ -1761,4 +1827,93 @@ test("fencedCodeBlocks keeps an empty fence as an empty block and the whole of a
   const huge = `${"filler\n\n".repeat(MAX_MESSAGE_CHARS / 4)}\`\`\`\nlast one\n\`\`\``;
   expect(huge.length).toBeGreaterThan(MAX_MESSAGE_CHARS);
   expect(fencedCodeBlocks(huge).at(-1)?.text).toBe("last one");
+});
+
+// ------------------------------------------------- cuts that land inside text
+
+test("a message cut at the character bound never ends in half an emoji", () => {
+  // The bound falls between the two halves of the first emoji.
+  let text = "";
+  while (text.length + 1002 < MAX_MESSAGE_CHARS - 1)
+    text += `${"y".repeat(1000)}\n\n`;
+  text += "z".repeat(MAX_MESSAGE_CHARS - 1 - text.length);
+  text += "😀😀 tail";
+  expect(text.charCodeAt(MAX_MESSAGE_CHARS - 1)).toBe(0xd83d);
+  const blocks = parseBlocks(text);
+  for (const block of blocks)
+    expect(runsText(block.runs).isWellFormed()).toBe(true);
+  // The note counts what is left out in characters: two emoji and " tail".
+  expect(runsText(blocks.at(-1)?.runs ?? [])).toBe(
+    "… message truncated in this view (7 more characters)",
+  );
+});
+
+test("the reasoning's tail never starts with half an emoji", () => {
+  // 802 units long, so the last THINK_TRIM start on the low half of an emoji.
+  const text = `a${"😀".repeat(400)}b`;
+  expect(text.charCodeAt(text.length - THINK_TRIM)).toBe(0xde00);
+  const tail = thinkingTail(text);
+  expect(tail.isWellFormed()).toBe(true);
+  expect(tail).toBe(text.slice(text.length - THINK_TRIM + 1));
+  // Cut at a line start when there is one, whole characters either way.
+  expect(thinkingTail(`${"x".repeat(600)}\nlast line`)).toBe("last line");
+  expect(thinkingTail("short")).toBe("short");
+});
+
+test("a paragraph, quote or item past the bound says how much it dropped", () => {
+  const over = (text: string) => runsText(parseBlocks(text)[0]?.runs ?? []);
+  const long = "x".repeat(MAX_PARA_CHARS + 37);
+  for (const source of [long, `> ${long}`, `- ${long}`])
+    expect(over(source)).toBe(
+      `${"x".repeat(MAX_PARA_CHARS)}\n… 37 more characters`,
+    );
+  // Characters, not UTF-16 units, and no emoji is split.
+  const emoji = over("😀".repeat(MAX_PARA_CHARS + 5));
+  expect(emoji.isWellFormed()).toBe(true);
+  expect(emoji.endsWith("\n… 5 more characters")).toBe(true);
+  // At the bound exactly, nothing is dropped and nothing is said.
+  expect(over("x".repeat(MAX_PARA_CHARS))).toBe("x".repeat(MAX_PARA_CHARS));
+});
+
+test("a tab in code reaches the next tab stop; in prose it is two spaces", () => {
+  const shown = (source: string) =>
+    runsText(parseBlocks(source)[0]?.runs ?? []);
+  expect(shown("```make\nall:\n\tgo build\n\ta\tb\n```")).toBe(
+    "all:\n    go build\n    a   b",
+  );
+  expect(shown("```\nid\tname\nlonger\tx\n```")).toBe("id  name\nlonger  x");
+  // Under a list item the fence's own indent comes off first: a tab reaching
+  // past it leaves what is left of the stop.
+  const code = parseBlocks("- item\n  ```go\n\tx := 1\n  ```")[1];
+  expect(runsText(code?.runs ?? [])).toBe("  x := 1");
+  expect(shown("a\tb")).toBe("a  b");
+  // The copy keeps the tab as written.
+  expect(fencedCodeBlocks("```\n\tx\n```")).toEqual([
+    { lang: "", text: "\tx" },
+  ]);
+});
+
+test("a fence closes on the same mark, as long, indented at most three past it", () => {
+  const codes = (source: string) => parseBlocks(source).map((b) => b.code);
+  expect(codes("```\nx\n```\nafter")).toEqual([true, false]);
+  expect(codes("```\nx\n`````  \nafter")).toEqual([true, false]);
+  expect(codes("~~~\nx\n~~~~\nafter")).toEqual([true, false]);
+  expect(codes("  ```\nx\n     ```\nafter")).toEqual([true, false]);
+  // Not closing: another mark, a shorter run, too much indent, text after it.
+  for (const closer of ["~~~", "``", "     ```", "``` x", "```` `"])
+    expect(codes(`\`\`\`\nx\n${closer}\nmore`), closer).toEqual([true]);
+  expect(codes("````\nx\n```\nmore")).toEqual([true]);
+});
+
+test("a long code block builds no pattern per line", () => {
+  const made = vi.spyOn(globalThis, "RegExp");
+  try {
+    const open = `\`\`\`\n${"let x = 1;\n".repeat(3000)}`;
+    expect(parseBlocks(`${open}\`\`\``)).toHaveLength(1);
+    expect(startsOpenFence(open)).toBe(true);
+    // Not one per line (6000 calls). The tokenizer builds one per kept line.
+    expect(made.mock.calls.length).toBeLessThanOrEqual(MAX_CODE_LINES + 10);
+  } finally {
+    made.mockRestore();
+  }
 });

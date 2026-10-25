@@ -181,7 +181,7 @@ import {
   statusLines,
   windowedNotice,
 } from "#cli/tuimark/store";
-import { LiveStream } from "#cli/tuimark/stream";
+import { FLUSH_MS, LiveStream } from "#cli/tuimark/stream";
 import { earlier, Transcript } from "#cli/tuimark/transcript";
 
 /** The part of the SDK's Host the client uses (a fake implements it in tests). */
@@ -304,7 +304,7 @@ export interface ClientOptions {
   signal: AbortSignal;
   /** Replaces the runtime's agent loop (tests). */
   run?: RunAgent;
-  /** Live flush period in ms. Default 33 (~30 Hz). */
+  /** Live flush period in ms. Default FLUSH_MS (33, ~30 Hz). */
   flushMs?: number;
   /** Messages the store holds at first, and how many "load earlier" adds. */
   windowSize?: number;
@@ -2101,7 +2101,7 @@ export class TuimarkClient {
   /** Prints the reply's newly final blocks, as they close. */
   private async commitFinals(): Promise<void> {
     await this.flushSpill();
-    if (this.spill.length > 0) return;
+    if (this.spill.length > 0 || !this.stream.commitDue) return;
     const blocks = this.stream.takeFinal();
     if (blocks.length > 0) await this.commitOffered(blocks);
   }
@@ -3740,7 +3740,10 @@ export class TuimarkClient {
     } finally {
       published();
     }
-    this.timer = setInterval(() => this.tick(), this.options.flushMs ?? 33);
+    this.timer = setInterval(
+      () => this.tick(),
+      this.options.flushMs ?? FLUSH_MS,
+    );
     await this.loop(prompt, hostWritten, request, userView);
     // A send queued while busy runs now, after success and after an error
     // alike (it is the user's latest intent); esc and quit already dropped

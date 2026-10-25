@@ -5254,6 +5254,25 @@ test("F3: persistently refused reply blocks survive into the next healthy turn",
   );
 });
 
+test("inline: a host that keeps refusing a commit is asked at a growing delay, not at every tick", async () => {
+  const reply = "first\n\nsecond\n\nthird";
+  const { ui, client } = setup(async function* () {
+    yield { type: "text", text: reply };
+    // About twenty flush ticks with the first two blocks final and refused.
+    await new Promise((r) => setTimeout(r, 700));
+    yield { type: "message", message: { role: "assistant", content: reply } };
+  }, inline);
+  // The user's own commit lands; every commit of the reply is refused.
+  ui.refuseCommit = (_commit, index) => (index > 0 ? "refused" : undefined);
+  await ui.fire("send", "hi");
+  await client.idle();
+  const refused = ui.commits.filter((c) => !c.ok).length;
+  expect(refused).toBeGreaterThan(1);
+  // 100 ms, then 200, then 400: a handful of attempts, the last ones being
+  // the turn's end. Every tick would be twenty and more.
+  expect(refused).toBeLessThan(10);
+});
+
 test("F8: refused pre-tool text prints before the tool card", async () => {
   let refusingPre = true;
   let releaseTool: () => void = () => {};

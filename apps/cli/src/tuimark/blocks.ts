@@ -28,9 +28,54 @@ import { goalNotice } from "#cli/tuimark/goal";
 
 // ---------------------------------------------------------------- text hygiene
 
-/** Strips ANSI and control characters, drops CR and expands tabs. */
+/**
+ * Strips ANSI and control characters, drops CR and expands tabs to two spaces
+ * (a fence's code lines are the exception: `codeLine` keeps their tab stops).
+ */
 export function cleanText(text: string): string {
   return terminalText(text).replaceAll("\t", "  ");
+}
+
+/** A tab in code reaches the next multiple of this many columns. */
+const CODE_TAB = 4;
+
+/** `text` with each tab replaced by the spaces up to the next tab stop. */
+function expandTabs(text: string): string {
+  let out = "";
+  let col = 0;
+  for (const ch of text) {
+    if (ch === "\t") {
+      const pad = CODE_TAB - (col % CODE_TAB);
+      out += " ".repeat(pad);
+      col += pad;
+    } else {
+      out += ch;
+      col += Bun.stringWidth(ch);
+    }
+  }
+  return out;
+}
+
+/** True for the low half of a UTF-16 surrogate pair. */
+function isLowSurrogate(code: number): boolean {
+  return code >= 0xdc00 && code <= 0xdfff;
+}
+
+/** True for the high half of a UTF-16 surrogate pair. */
+function isHighSurrogate(code: number): boolean {
+  return code >= 0xd800 && code <= 0xdbff;
+}
+
+/** The number of code points in `text`, without building an array of them. */
+function codePointCount(text: string): number {
+  let n = text.length;
+  for (let i = 1; i < text.length; i++)
+    if (
+      isLowSurrogate(text.charCodeAt(i)) &&
+      isHighSurrogate(text.charCodeAt(i - 1))
+    )
+      n--;
+  return n;
 }
 
 /**
@@ -519,8 +564,12 @@ export interface Block {
 export const MAX_CODE_LINES = 300;
 /** A paragraph keeps this many characters. */
 export const MAX_PARA_CHARS = 20_000;
-/** A code line keeps this many characters. */
-export const MAX_CODE_COLS = 1000;
+/**
+ * A code line keeps this many characters. They are code points, not terminal
+ * columns: a wide character takes two, so a line of them wraps onto more rows
+ * (the limit bounds the work, not the rows).
+ */
+export const MAX_CODE_CHARS = 1000;
 /** One message view keeps this many characters of source and this many blocks. */
 export const MAX_MESSAGE_CHARS = 256 * 1024;
 export const MAX_MESSAGE_BLOCKS = 400;
@@ -589,7 +638,7 @@ export function tokenizeLine(line: string): Token[] {
 
 /**
  * The runs of a block of lines: at most MAX_CODE_LINES lines of at most
- * MAX_CODE_COLS characters, `\n` between them (the template paints them with
+ * MAX_CODE_CHARS characters, `\n` between them (the template paints them with
  * `wrap: pre-wrap`), and a final dim "N more lines" row when lines were dropped.
  */
 function linesToRuns(
@@ -600,7 +649,7 @@ function linesToRuns(
   const kept = source.slice(0, MAX_CODE_LINES);
   kept.forEach((line, n) => {
     if (n > 0) pushRun(runs, "\n");
-    for (const tok of tokens(clip(line, MAX_CODE_COLS), n))
+    for (const tok of tokens(clip(line, MAX_CODE_CHARS), n))
       pushRun(runs, tok.t, tok.cls);
   });
   if (source.length > kept.length)
@@ -637,17 +686,26 @@ function codeBlock(id: string, lang: string, source: string[]): Block {
   );
 }
 
+/**
+ * The runs of a paragraph, heading, quote or item. Past MAX_PARA_CHARS the
+ * rest is dropped, and a note says how many characters.
+ */
+function proseRuns(text: string, links?: LinkRef[]): Run[] {
+  if (text.length <= MAX_PARA_CHARS) return inlineRuns(text, links);
+  const chars = Array.from(text);
+  if (chars.length <= MAX_PARA_CHARS) return inlineRuns(text, links);
+  const runs = inlineRuns(chars.slice(0, MAX_PARA_CHARS).join(""), links);
+  pushRun(runs, `\n… ${chars.length - MAX_PARA_CHARS} more characters`, "note");
+  return runs;
+}
+
 function textBlock(
   id: string,
   kind: "para" | "head" | "quote",
   t: string,
   links?: LinkRef[],
 ): Block {
-  return block(
-    id,
-    { [kind]: true },
-    inlineRuns(clip(t, MAX_PARA_CHARS), links),
-  );
+  return block(id, { [kind]: true }, proseRuns(t, links));
 }
 
 // ------------------------------------------------------------------------ tables
@@ -751,7 +809,7 @@ function wrapAtoms(atoms: readonly Atom[], max: number, hang = 0): Atom[][] {
 
 /** A cell's source as atoms with its inline marks parsed, whitespace collapsed. */
 function cellAtoms(source: string, header: boolean, links?: LinkRef[]): Atom[] {
-  const runs = inlineRuns(clip(source, MAX_CODE_COLS), links);
+  const runs = inlineRuns(clip(source, MAX_CODE_CHARS), links);
   return wrapAtoms(atomsOf(runs, header), Number.POSITIVE_INFINITY)[0] ?? [];
 }
 
@@ -953,10 +1011,12 @@ const LIST_ITEM = /^(\s*)([-*+]|\d{1,9}[.)])\s+(.*)$/;
 
 /** The same mark, at least as long, indented at most three past the opening. */
 function closesFence(line: string, open: string, indent: number): boolean {
-  const mark = open[0] ?? "`";
-  return new RegExp(
-    `^\\s{0,${indent + 3}}\\${mark}{${open.length},}\\s*$`,
-  ).test(line);
+  // Not a RegExp built per line: a long block asks this of every line.
+  if (line.length - line.trimStart().length > indent + 3) return false;
+  const marks = line.trim();
+  if (marks.length < open.length) return false;
+  for (let i = 0; i < marks.length; i++) if (marks[i] !== open[0]) return false;
+  return true;
 }
 
 /**
@@ -983,6 +1043,24 @@ function leavesFence(line: string, indent: number): boolean {
 function unindent(line: string, indent: number): string {
   const lead = /^ */.exec(line)?.[0].length ?? 0;
   return line.slice(Math.min(lead, indent));
+}
+
+/**
+ * A code line as shown: without the fence's indent, and with each tab at the
+ * next tab stop, so a Makefile or a TSV keeps its columns (the line is the
+ * text before `cleanText` turned its tabs into two spaces).
+ */
+function codeLine(line: string, indent: number): string {
+  if (!line.includes("\t")) return unindent(line, indent);
+  let col = 0;
+  let at = 0;
+  for (; at < line.length && col < indent; at++) {
+    if (line[at] === " ") col++;
+    else if (line[at] === "\t") col += CODE_TAB - (col % CODE_TAB);
+    else break;
+  }
+  // A tab that reaches past the indent leaves the difference as spaces.
+  return expandTabs(" ".repeat(Math.max(0, col - indent)) + line.slice(at));
 }
 
 /**
@@ -1072,8 +1150,17 @@ export function parseBlocksAt(
   const blocks: Block[] = [];
   const starts: number[] = [];
   const cut = codes === undefined && markdown.length > MAX_MESSAGE_CHARS;
-  const source = cut ? markdown.slice(0, MAX_MESSAGE_CHARS) : markdown;
+  // The cut never lands inside an emoji: its high half alone is no character.
+  const end = isHighSurrogate(markdown.charCodeAt(MAX_MESSAGE_CHARS - 1))
+    ? MAX_MESSAGE_CHARS - 1
+    : MAX_MESSAGE_CHARS;
+  const source = cut ? markdown.slice(0, end) : markdown;
   const lines = cleanText(source).split("\n");
+  // The same lines with their tabs, for the code a fence holds (cleaning
+  // changes no line break, so the two line up).
+  const tabbed = source.includes("\t")
+    ? terminalText(source).split("\n")
+    : lines;
   // The source's own lines, for the text a capture keeps. Cleaning can only
   // disagree on the count when an escape sequence spans lines; then the
   // cleaned lines stand in, so the two never misalign.
@@ -1107,7 +1194,7 @@ export function parseBlocksAt(
         block(
           next(),
           { item: true, nest: item.nest, marker: item.marker },
-          inlineRuns(clip(item.lines.join("\n"), MAX_PARA_CHARS), links),
+          proseRuns(item.lines.join("\n"), links),
         ),
       );
       item = undefined;
@@ -1134,7 +1221,7 @@ export function parseBlocksAt(
           i--;
           break;
         }
-        body.push(unindent(lines[i] ?? "", indent));
+        body.push(codeLine(tabbed[i] ?? "", indent));
         rawBody.push(unindent(rawLines[i] ?? "", indent));
       }
       const lang = clip((fence[3] ?? "").trim().split(/\s+/)[0] ?? "", 24);
@@ -1233,7 +1320,7 @@ export function parseBlocksAt(
         `${prefix}${first + blocks.length}`,
         "quote",
         cut
-          ? `… message truncated in this view (${markdown.length - MAX_MESSAGE_CHARS} more characters)`
+          ? `… message truncated in this view (${codePointCount(markdown.slice(end))} more characters)`
           : `… ${dropped} more blocks not shown in this view`,
       ),
     );
@@ -1395,7 +1482,8 @@ function stateLabel(name: string, state: ToolState): string {
 }
 
 const OUT_LINES = 8;
-const OUT_COLS = 200;
+/** A line of a tool's output keeps this many characters (code points, as MAX_CODE_CHARS). */
+const OUT_CHARS = 200;
 
 /** One line that says what a tool call is about: a path, a command, or the arguments. */
 export function callSummary(call: ToolCall | undefined): string {
@@ -1530,7 +1618,7 @@ export function outputRuns(
   all.slice(0, OUT_LINES).forEach((row, n) => {
     // A line break between two rows of one class stays in their run.
     if (n > 0) pushRun(runs, "\n", all[n - 1]?.cls === row.cls ? row.cls : "");
-    pushRun(runs, clip(row.text, OUT_COLS), row.cls);
+    pushRun(runs, clip(row.text, OUT_CHARS), row.cls);
   });
   const more = all.length - OUT_LINES;
   // The pointer names this card's own output: on an older card, /details
@@ -1873,7 +1961,9 @@ export function thinkingView(text: string): ThinkingView {
 /** The last THINK_TRIM characters of `text`, starting at a line when there is one. */
 export function thinkingTail(text: string): string {
   if (text.length <= THINK_TRIM) return text;
-  const tail = text.slice(-THINK_TRIM);
+  let tail = text.slice(-THINK_TRIM);
+  // The cut may land inside an emoji: its low half alone is no character.
+  if (isLowSurrogate(tail.charCodeAt(0))) tail = tail.slice(1);
   const nl = tail.indexOf("\n");
   return nl >= 0 && nl < tail.length - 1 ? tail.slice(nl + 1) : tail;
 }
