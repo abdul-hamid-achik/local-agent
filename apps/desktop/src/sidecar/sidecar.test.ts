@@ -189,6 +189,51 @@ function sidecarChild(env: Record<string, string>) {
   };
 }
 
+test("a cancel is answered while a slow request is still waiting", async () => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), "la-sidecar-")));
+  let release = () => {};
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    async fetch() {
+      await held;
+      return Response.json({ models: [{ name: "fixture", size: 1000 }] });
+    },
+  });
+  const side = sidecarChild({
+    DESKTOP_REPO_ROOT: root,
+    OLLAMA_HOST: server.url.origin,
+  });
+  try {
+    side.send({ id: 1, method: "ollama.models", params: {} });
+    side.send({ id: 2, method: "agent.cancel", params: { runId: "r1" } });
+    side.send({ id: 3, method: "hello" });
+    expect(await side.frame((frame) => frame.id === 2)).toMatchObject({
+      ok: true,
+      result: { cancelled: false },
+    });
+    // The rest keep their order: hello waits for the inventory.
+    expect(side.frames.some((frame) => frame.id === 1 || frame.id === 3)).toBe(
+      false,
+    );
+    release();
+    expect(await side.frame((frame) => frame.id === 3)).toMatchObject({
+      ok: true,
+    });
+    expect(side.frames.map((frame) => frame.id)).toEqual([2, 1, 3]);
+    expect(side.frames[1]).toMatchObject({ ok: true });
+  } finally {
+    release();
+    side.child.kill();
+    await side.child.exited;
+    await server.stop(true);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("a start that fails before it is answered gets its error and frees its run", async () => {
   const root = await realpath(await mkdtemp(join(tmpdir(), "la-sidecar-")));
   const side = sidecarChild({

@@ -726,10 +726,19 @@ async function dispatch(request: RpcRequest): Promise<void> {
   writeFrame({ id, ok: true, result });
 }
 
+/** A run's controls: answered at once, never behind a slow request. */
+const CONTROLS = new Set<string>([
+  SidecarMethods.agentDecide,
+  SidecarMethods.agentCancel,
+  SidecarMethods.projectCancel,
+]);
+
 async function main(): Promise<void> {
   const reader = Bun.stdin.stream().getReader();
   const decoder = new TextDecoder();
   let buffer = "";
+  // Other requests are answered in order, each after the one before it.
+  let ordered = Promise.resolve();
   for (;;) {
     const chunk = await reader.read();
     if (chunk.done) break;
@@ -753,20 +762,20 @@ async function main(): Promise<void> {
       } catch {
         continue;
       }
+      const answer = () =>
+        dispatch(request).catch((error: unknown) => fail(request.id, error));
       if (
         request.method === SidecarMethods.agentStart ||
-        request.method === SidecarMethods.projectRun
+        request.method === SidecarMethods.projectRun ||
+        CONTROLS.has(request.method)
       ) {
-        // Streaming handlers run concurrently: decide/cancel must be served
-        // while a run is in flight. They own their response frame.
-        dispatch(request).catch((error: unknown) => fail(request.id, error));
+        // Streaming handlers run concurrently and own their response frame,
+        // and a decide or a cancel is served while a run, or a slow request
+        // (an MCP status connects every server), is in flight.
+        void answer();
         continue;
       }
-      try {
-        await dispatch(request);
-      } catch (error) {
-        fail(request.id, error);
-      }
+      ordered = ordered.then(answer);
     }
   }
 }
