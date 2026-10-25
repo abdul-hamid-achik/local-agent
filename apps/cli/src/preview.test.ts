@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { approvalPreview, tokensPerSecond } from "#cli/preview";
+import { approvalPreview, messageText, tokensPerSecond } from "#cli/preview";
 
 test("a command approval shows each argument as it runs: no line break, escape or override hides in it", () => {
   const preview = approvalPreview(
@@ -90,4 +90,39 @@ test("tokensPerSecond needs both of Ollama's counters", () => {
   expect(tokensPerSecond(5, 1_000_000_000)).toBe("5.0 tok/s");
   expect(tokensPerSecond(0, 1_000_000_000)).toBeUndefined();
   expect(tokensPerSecond(30, 0)).toBeUndefined();
+});
+
+test("a replayed MCP result keeps what is and is not known about it", () => {
+  const text = messageText({
+    role: "tool",
+    tool_name: "hub__snapshot",
+    content: JSON.stringify({
+      status: "unverified",
+      source: "external",
+      transport: "success",
+      domain: "unknown",
+      evidence: "unverified",
+      isError: false,
+      output: "cpu 12%",
+    }),
+  });
+  const [status, output] = [
+    text.slice(0, text.indexOf("\n")),
+    text.slice(text.indexOf("\n") + 1),
+  ];
+  expect(status).toBe("unverified");
+  expect(JSON.parse(output)).toEqual({
+    transport: "success",
+    domain: "unknown",
+    evidence: "unverified",
+    isError: false,
+    text: "cpu 12%",
+  });
+  expect(
+    messageText({
+      role: "tool",
+      content: JSON.stringify({ status: "succeeded", output: "ok" }),
+    }),
+  ).toBe("succeeded\nok");
+  expect(messageText({ role: "tool", content: "raw" })).toBe("raw");
 });

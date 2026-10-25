@@ -8,6 +8,7 @@ import {
   type Message,
   secretPathNotes,
   shellWord,
+  toolReceipt,
 } from "@local-agent/runtime";
 import { terminalText } from "#cli/text";
 
@@ -85,15 +86,6 @@ export function tokensPerSecond(
 
 export function messageText(message: Message): string {
   if (message.role !== "tool") return message.content;
-  try {
-    const result = JSON.parse(message.content) as {
-      status?: unknown;
-      output?: unknown;
-    };
-    return typeof result.output === "string"
-      ? `${typeof result.status === "string" ? result.status : "unknown"}\n${result.output}`
-      : message.content;
-  } catch {
-    return message.content;
-  }
+  const receipt = toolReceipt(message.content);
+  return receipt ? `${receipt.status}\n${receipt.output}` : message.content;
 }

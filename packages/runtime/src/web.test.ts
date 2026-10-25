@@ -7,6 +7,7 @@ import {
   type AgentOptions,
   type ApprovalRequest,
   runAgent,
+  toolReceipt,
 } from "#runtime/agent";
 import { resolveProvider } from "#runtime/config";
 import type { McpConnection } from "#runtime/mcp";
@@ -339,6 +340,47 @@ test("an MCP result reaches the model as its envelope's fields and its text, esc
   } finally {
     await run.cleanup();
   }
+});
+
+test("a client reads an MCP receipt back as the envelope, from either form", () => {
+  const envelope = {
+    transport: "success",
+    domain: "unknown",
+    evidence: "unverified",
+    isError: true,
+    text: '{"error":"rate limited"}',
+  };
+  const flat = JSON.stringify({
+    status: "failed",
+    source: "external",
+    transport: "success",
+    domain: "unknown",
+    evidence: "unverified",
+    isError: true,
+    output: envelope.text,
+  });
+  // A session saved before the fields moved holds the envelope as a string.
+  const nested = JSON.stringify({
+    status: "failed",
+    source: "external",
+    output: JSON.stringify(envelope),
+  });
+  for (const content of [flat, nested])
+    expect(JSON.parse(toolReceipt(content)?.output ?? "")).toEqual(envelope);
+  expect(toolReceipt(flat)?.status).toBe("failed");
+  // A built-in result is as it was; anything else is not a receipt.
+  expect(
+    toolReceipt(JSON.stringify({ status: "succeeded", output: "ok" })),
+  ).toEqual({
+    status: "succeeded",
+    output: "ok",
+  });
+  expect(toolReceipt(JSON.stringify({ output: "x" }))?.status).toBe("unknown");
+  expect(toolReceipt("not json")).toBeUndefined();
+  expect(toolReceipt("[1]")).toBeUndefined();
+  expect(
+    toolReceipt(JSON.stringify({ status: "succeeded", output: 5 })),
+  ).toBeUndefined();
 });
 
 test("fetch truncates bodies over 512 KiB with a note", async () => {

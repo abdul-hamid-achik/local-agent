@@ -18,6 +18,7 @@ export {
   StepLimitError,
   sessionProblem,
   type ToolReference,
+  toolReceipt,
   toolReference,
 } from "#runtime/agent";
 export { commandLine, secretPathNotes, shellWord } from "#runtime/command";

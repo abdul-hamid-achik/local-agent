@@ -1636,8 +1636,58 @@ export const EXTERNAL_SOURCE = "external";
  * string inside this JSON would escape the text twice, so each quote of a
  * JSON text took four characters.
  */
-function mcpReceipt(status: string, { text, ...fields }: McpToolResult) {
-  return { status, source: EXTERNAL_SOURCE, ...fields, output: text };
+function mcpReceipt(status: string, result: McpToolResult) {
+  const { transport, domain, evidence, isError, text } = result;
+  return {
+    status,
+    source: EXTERNAL_SOURCE,
+    transport,
+    domain,
+    evidence,
+    isError,
+    output: text,
+  };
+}
+
+/**
+ * A tool message's `{status, output}`, for a client to show, or undefined
+ * when its content is not the runtime's receipt. An MCP result's output is
+ * its envelope (`McpToolResult` as JSON), as the result event carries it,
+ * whether the message holds the envelope's fields beside the text or (a
+ * session saved before 0.54.2) the envelope as one string.
+ */
+export function toolReceipt(
+  content: string,
+): { status: string; output: string } | undefined {
+  let receipt: Record<string, unknown>;
+  try {
+    const parsed: unknown = JSON.parse(content);
+    if (typeof parsed !== "object" || parsed === null) return undefined;
+    receipt = parsed as Record<string, unknown>;
+  } catch {
+    return undefined;
+  }
+  const { output, transport, domain, evidence, isError } = receipt;
+  if (typeof output !== "string") return undefined;
+  const status =
+    typeof receipt.status === "string" ? receipt.status : "unknown";
+  if (
+    typeof transport === "string" &&
+    typeof domain === "string" &&
+    typeof evidence === "string" &&
+    typeof isError === "boolean"
+  )
+    return {
+      status,
+      output: JSON.stringify({
+        transport,
+        domain,
+        evidence,
+        isError,
+        text: output,
+      }),
+    };
+  return { status, output };
 }
 
 /** JSON with object keys sorted, so equal arguments give equal text. */
