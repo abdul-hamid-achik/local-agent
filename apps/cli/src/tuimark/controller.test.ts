@@ -1028,20 +1028,23 @@ test("several subagents in one reply are one group while they run, then numbered
   await until(() => rows()[0]?.endsWith("· 5s") === true);
   releaseFirst();
   // Two cards are committed in call order; the third is still in the group.
-  await until(() => store(ui).live.card.args === "3 subagents · 2 done");
-  expect(
+  // Wait for the cards, not the count: it says "2 done" as soon as both
+  // results are in, before their messages are committed.
+  const toolTitles = () =>
     store(ui)
       .messages.filter((m: MessageView) => m.is_tool)
-      .map((m: MessageView) => m.card.title),
-  ).toEqual(["Subagent 1/3", "Subagent 2/3"]);
+      .map((m: MessageView) => m.card.title);
+  await until(() => toolTitles().length === 2);
+  expect(toolTitles()).toEqual(["Subagent 1/3", "Subagent 2/3"]);
+  expect(store(ui).live.card.args).toBe("3 subagents · 2 done");
   expect(rows()).toEqual(["3/3 … read the tests · 5s"]);
   releaseLast();
   await client.idle();
-  expect(
-    store(ui)
-      .messages.filter((m: MessageView) => m.is_tool)
-      .map((m: MessageView) => m.card.title),
-  ).toEqual(["Subagent 1/3", "Subagent 2/3", "Subagent 3/3"]);
+  expect(toolTitles()).toEqual([
+    "Subagent 1/3",
+    "Subagent 2/3",
+    "Subagent 3/3",
+  ]);
   expect(store(ui).live.active).toBe(false);
 });
 
