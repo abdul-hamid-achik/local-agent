@@ -34,7 +34,7 @@
         <div
           v-if="message.role === 'assistant' || message.role === 'user'"
           class="markdown-body"
-          v-html="renderMarkdown(message.content)"
+          v-html="rendered[index]"
         />
         <pre v-else>{{ message.content }}</pre>
         <details v-if="message.thinking" class="thinking">
@@ -49,7 +49,7 @@
       </div>
       <div v-if="state.liveText" class="message assistant">
         <div class="message-head"><span class="badge green">assistant</span></div>
-        <div class="markdown-body" v-html="renderMarkdown(state.liveText)" />
+        <div class="markdown-body" v-html="liveHtml" />
       </div>
       <div v-if="state.liveThinking" class="thinking-live">
         <span class="badge">thinking…</span>
@@ -94,11 +94,12 @@
 </template>
 
 <script setup lang="ts">
-import { nextTick, onUnmounted, ref } from "vue";
+import { computed, nextTick, onUnmounted, ref } from "vue";
 import ApprovalCard from "#desktop/renderer/components/ApprovalCard.vue";
 import { api, errorMessage } from "#desktop/renderer/api";
 import { clearConversation, useChat } from "#desktop/renderer/chat-run";
 import { isSendKey } from "#desktop/renderer/composer";
+import { liveMarkdown } from "#desktop/renderer/live-markdown";
 import { renderMarkdown } from "#desktop/renderer/markdown";
 import { parseSlashCommand } from "#desktop/renderer/slash";
 import { store, workspaceRoot } from "#desktop/renderer/store";
@@ -110,6 +111,19 @@ defineOptions({ name: "ChatView" });
 const chat = useChat();
 const state = chat.state;
 const draft = ref("");
+// A finished message renders once, not again on every delta of the live
+// reply; the live reply renders at most once a frame.
+const rendered = computed(() =>
+  state.messages.map((message) =>
+    message.role === "assistant" || message.role === "user"
+      ? renderMarkdown(message.content)
+      : "",
+  ),
+);
+const { html: liveHtml, stop: stopLive } = liveMarkdown(() => state.liveText, {
+  request: (callback) => requestAnimationFrame(callback),
+  cancel: (id) => cancelAnimationFrame(id),
+});
 const transcriptEl = ref<HTMLElement | undefined>();
 
 const shortId = (id: string) => (id.length > 12 ? `${id.slice(0, 8)}…` : id);
@@ -199,6 +213,7 @@ async function submit(): Promise<void> {
 
 onUnmounted(() => {
   if (chat.onEvent === scrollDown) chat.onEvent = () => undefined;
+  stopLive();
 });
 </script>
 
