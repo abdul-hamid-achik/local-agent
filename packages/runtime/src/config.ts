@@ -148,6 +148,9 @@ const checkOpenAIKeyTransport = (
     });
 };
 
+/** Ollama's keep_alive: a Go duration (30m, 1h30m, -1m) or whole seconds. */
+const KEEP_ALIVE = /^-?(?:(?:\d+(?:\.\d+)?(?:ns|us|µs|ms|s|m|h))+|\d+)$/u;
+
 /** Reused to normalize OLLAMA_HOST below. */
 const endpoint = z.string().superRefine(checkOllamaOrigin);
 
@@ -176,6 +179,15 @@ export const ProviderSchema = z
     stream_idle_timeout_ms: z.number().int().positive().optional(),
     /** Some local servers require a dummy bearer token; optional for loopback servers. */
     api_key: z.string().trim().min(1).max(4096).optional(),
+    /**
+     * Sent to Ollama as `keep_alive` on every chat: how long the model stays
+     * loaded after a request (a Go duration such as 30m, or seconds, negative
+     * for no limit). Chalupa's to set, since a model's residency on its GPU is
+     * placement; unset keeps the server's own default.
+     */
+    keep_alive: z
+      .union([z.string().trim().regex(KEEP_ALIVE), z.number().int()])
+      .optional(),
   })
   .superRefine((profile, ctx) => {
     if (profile.type === "openai_local") {
@@ -235,6 +247,7 @@ export const ProviderSchema = z
     } else if (
       profile.max_model_bytes !== undefined ||
       profile.stream_idle_timeout !== undefined ||
+      profile.keep_alive !== undefined ||
       (profile.stream_idle_timeout_ms !== undefined &&
         profile.type !== "ollama" &&
         profile.type !== "openai_local")

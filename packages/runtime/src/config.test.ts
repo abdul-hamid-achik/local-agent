@@ -66,6 +66,38 @@ describe("provider configuration boundary", () => {
     });
   });
 
+  test("keeps a Chalupa keep_alive, and refuses a bad one or one on another provider", () => {
+    const profile = (keep_alive: unknown) => ({
+      LOCAL_AGENT_PROVIDER: "chalupa",
+      LOCAL_AGENT_LOCAL_ONLY: "false",
+      LOCAL_AGENT_PROVIDER_CONFIG: JSON.stringify({
+        type: "ollama_remote",
+        base_url: "http://127.0.0.1:11435",
+        model: "fixture",
+        max_model_bytes: 40_000_000_000,
+        stream_idle_timeout: "10m",
+        keep_alive,
+      }),
+    });
+    for (const value of ["30m", "1h30m", "-1m", "-1", "0", 3600, -1])
+      expect(resolveProvider(profile(value)).keep_alive).toBe(value);
+    for (const value of ["forever", "30 m", "", 1.5])
+      expect(() => resolveProvider(profile(value))).toThrow(/keep_alive/);
+    // Without it, nothing is invented: the server keeps its default.
+    expect(resolveProvider(profile(undefined))).not.toHaveProperty(
+      "keep_alive",
+    );
+    for (const type of ["ollama", "openai_local"])
+      expect(
+        ProviderSchema.safeParse({
+          type,
+          base_url: "http://127.0.0.1:11434",
+          model: "fixture",
+          keep_alive: "30m",
+        }).success,
+      ).toBe(false);
+  });
+
   test("requires remote negotiated limits and rejects invalid durations", () => {
     expect(() =>
       resolveProvider({

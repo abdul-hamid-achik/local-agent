@@ -96,6 +96,50 @@ test("streams a real HTTP fixture and sends the negotiated context", async () =>
     });
     // An unset think is not sent: the model keeps its own default.
     expect(request).not.toHaveProperty("think");
+    // Nor a keep_alive: only a Chalupa profile carries one.
+    expect(request).not.toHaveProperty("keep_alive");
+  } finally {
+    await server.stop(true);
+  }
+});
+
+test("sends a Chalupa profile's keep_alive with the chat", async () => {
+  let request: unknown;
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    async fetch(req) {
+      request = await req.json();
+      return new Response(
+        `${JSON.stringify({
+          message: { role: "assistant", content: "" },
+          done: true,
+          prompt_eval_count: 1,
+          eval_count: 1,
+        })}\n`,
+        { headers: { "Content-Type": "application/x-ndjson" } },
+      );
+    },
+  });
+  try {
+    const provider = resolveProvider({
+      LOCAL_AGENT_PROVIDER: "chalupa",
+      LOCAL_AGENT_LOCAL_ONLY: "false",
+      LOCAL_AGENT_PROVIDER_CONFIG: JSON.stringify({
+        type: "ollama_remote",
+        base_url: server.url.origin,
+        model: "fixture",
+        max_model_bytes: 40_000_000_000,
+        stream_idle_timeout: "10m",
+        keep_alive: "30m",
+      }),
+    });
+    for await (const _ of chat(
+      provider,
+      [{ role: "user", content: "Hello" }],
+      new AbortController().signal,
+    ));
+    expect(request).toMatchObject({ model: "fixture", keep_alive: "30m" });
   } finally {
     await server.stop(true);
   }

@@ -626,6 +626,10 @@ export async function* chat(
       tools,
       // Sent only when set: an unset `think` keeps the model's own default.
       ...(config.think === undefined ? {} : { think: config.think }),
+      // Only a Chalupa profile carries it; unset keeps the server's default.
+      ...(config.keep_alive === undefined
+        ? {}
+        : { keep_alive: config.keep_alive }),
       options: { num_ctx: config.context_size },
     });
     let outputSize = 0;
