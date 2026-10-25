@@ -439,9 +439,10 @@ export class SessionStore {
    *
    * A result the state cannot hold (the history would pass 8 MiB) is saved
    * as a short note in its place (`shortenedResult`), with the event, and
-   * the returned session holds the note. The ledger keeps the receipt it
-   * keeps of any result (ledgerReceipt). Only when the note does not fit either is nothing written and
-   * ConversationFullError thrown: the call stays `started`, to recover.
+   * the returned session holds the note. The ledger keeps the bounded
+   * receipt it keeps of any result (ledgerReceipt). Only when the note does
+   * not fit either is nothing written and ConversationFullError thrown: the
+   * call stays `started`, to recover.
    */
   commitOutcome(
     event: ExecutionEvent,
