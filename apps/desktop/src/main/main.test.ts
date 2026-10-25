@@ -18,7 +18,12 @@ import {
   resolveBun,
 } from "#desktop/main/bun-path";
 import { TextFileGrants, userMcpConfigPath } from "#desktop/main/file-access";
-import { externalUrl, staysInApp } from "#desktop/main/navigation";
+import {
+  type ConfinedContents,
+  confine,
+  externalUrl,
+  staysInApp,
+} from "#desktop/main/navigation";
 import { LineDecoder } from "#desktop/main/ndjson";
 import { writePrivateFile } from "#desktop/main/private-file";
 import {
@@ -515,5 +520,51 @@ describe("navigation", () => {
     expect(staysInApp("file:///tmp/evil.html", packaged)).toBe(false);
     expect(staysInApp("https://example.com/", packaged)).toBe(false);
     expect(staysInApp("not a url", packaged)).toBe(false);
+  });
+
+  test("the window refuses any frame's navigation or redirect away from home", () => {
+    const listeners = new Map<string, (details: never) => void>();
+    let openHandler = (_details: { url: string }) => ({ action: "deny" });
+    const contents: ConfinedContents = {
+      setWindowOpenHandler(handler) {
+        openHandler = handler;
+      },
+      on(event: string, listener: (details: never) => void) {
+        listeners.set(event, listener);
+      },
+    };
+    const opened: string[] = [];
+    confine(contents, "http://localhost:5173/", (url) => opened.push(url));
+    const navigate = (
+      event: string,
+      url: string,
+      isMainFrame: boolean,
+    ): boolean => {
+      let prevented = false;
+      const listener = listeners.get(event) as (details: object) => void;
+      listener({ url, isMainFrame, preventDefault: () => (prevented = true) });
+      return prevented;
+    };
+
+    expect(openHandler({ url: "https://example.com/" })).toEqual({
+      action: "deny",
+    });
+    for (const event of ["will-frame-navigate", "will-redirect"]) {
+      expect(navigate(event, "http://localhost:5173/#/sessions", true)).toBe(
+        false,
+      );
+      expect(navigate(event, "https://example.com/main", true)).toBe(true);
+      expect(navigate(event, "https://example.com/frame", false)).toBe(true);
+      expect(navigate(event, "file:///etc/hosts", true)).toBe(true);
+    }
+    // A new window and a main frame go to openOutside, which opens only a
+    // web link; a subframe goes nowhere.
+    expect(opened).toEqual([
+      "https://example.com/",
+      "https://example.com/main",
+      "file:///etc/hosts",
+      "https://example.com/main",
+      "file:///etc/hosts",
+    ]);
   });
 });

@@ -35,3 +35,45 @@ export function staysInApp(url: string, current: string): boolean {
     return false;
   }
 }
+
+/** A navigation or a redirect, as the window reports it. */
+interface Navigation {
+  url: string;
+  isMainFrame: boolean;
+  preventDefault(): void;
+}
+
+/** The part of a window's webContents that `confine` uses. */
+export interface ConfinedContents {
+  setWindowOpenHandler(
+    handler: (details: { url: string }) => { action: "deny" },
+  ): void;
+  on(
+    event: "will-frame-navigate",
+    listener: (details: Navigation) => void,
+  ): unknown;
+  on(event: "will-redirect", listener: (details: Navigation) => void): unknown;
+}
+
+/**
+ * Keeps the window on `home`, the app's page: a new window is denied, and a
+ * navigation of any frame, or a redirect during one, that would leave it is
+ * refused. A main frame's web link opens in the system browser instead.
+ */
+export function confine(
+  contents: ConfinedContents,
+  home: string,
+  openOutside: (url: string) => void,
+): void {
+  contents.setWindowOpenHandler(({ url }) => {
+    openOutside(url);
+    return { action: "deny" };
+  });
+  const guard = (navigation: Navigation) => {
+    if (staysInApp(navigation.url, home)) return;
+    navigation.preventDefault();
+    if (navigation.isMainFrame) openOutside(navigation.url);
+  };
+  contents.on("will-frame-navigate", guard);
+  contents.on("will-redirect", guard);
+}

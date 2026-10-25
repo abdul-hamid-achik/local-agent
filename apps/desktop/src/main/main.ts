@@ -1,9 +1,10 @@
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
 import { TextFileGrants, userMcpConfigPath } from "#desktop/main/file-access";
-import { externalUrl, staysInApp } from "#desktop/main/navigation";
+import { confine, externalUrl } from "#desktop/main/navigation";
 import { providerEnvProblem } from "#desktop/main/provider-env";
 import {
   loadSettings,
@@ -107,27 +108,14 @@ function createWindow(): void {
       sandbox: true,
     },
   });
-  const devUrl = process.env.ELECTRON_RENDERER_URL;
-  if (devUrl) {
-    void mainWindow.loadURL(devUrl);
-  } else {
-    void mainWindow.loadFile(
+  // No other page loads in this window: its bridge drives the sidecar.
+  const home =
+    process.env.ELECTRON_RENDERER_URL ||
+    pathToFileURL(
       join(import.meta.dirname, "..", "dist-renderer", "index.html"),
-    );
-  }
-  const contents = mainWindow.webContents;
-  // No other page loads in this window (its bridge drives the sidecar): a
-  // new window or a link away from the app opens in the system browser,
-  // when it is a web link, and never here.
-  contents.setWindowOpenHandler(({ url }) => {
-    openOutside(url);
-    return { action: "deny" };
-  });
-  contents.on("will-navigate", (event, url) => {
-    if (staysInApp(url, contents.getURL())) return;
-    event.preventDefault();
-    openOutside(url);
-  });
+    ).href;
+  confine(mainWindow.webContents, home, openOutside);
+  void mainWindow.loadURL(home);
   mainWindow.on("closed", () => {
     mainWindow = undefined;
   });
