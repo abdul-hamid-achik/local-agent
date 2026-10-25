@@ -119,9 +119,9 @@ try {
     process.exit(0);
   }
   if (values.help) {
-    console.log(`Bun Local Agent — experimental agent
+    console.log(`local-agent — a local coding agent for Ollama (experimental)
 
-bun dev [--model MODEL (default: ${DEFAULT_OLLAMA_MODEL})] [--mode fullscreen|inline|headless] [--ui vue|tuimark] [-p PROMPT] [--json]
+local-agent [--model MODEL (default: ${DEFAULT_OLLAMA_MODEL})] [--mode fullscreen|inline|headless] [--ui vue|tuimark] [-p PROMPT] [--json]
   --version            Print the CLI version and exit
   --model MODEL        Ollama model (default: ${DEFAULT_OLLAMA_MODEL}, or LOCAL_AGENT_MODEL);
                        Chalupa keeps the model of its profile

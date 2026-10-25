@@ -37,7 +37,8 @@
 // opens the client with only --session-db (a fresh, empty current session):
 // the spec switches to the second saved one from the /sessions picker.
 //
-// No inference and no credentials. The Tuimark binary comes from
+// No inference and no credentials. LOCAL_AGENT_BIN, when set, is the
+// executable to run instead of the source. The Tuimark binary comes from
 // TUIMARK_BINARY (CI installs the pinned release); the SDK may download it
 // otherwise, so HOME and the cache variables are forwarded.
 
@@ -354,7 +355,12 @@ const server = Bun.serve({
   },
 });
 
-const baseArgs = ["apps/cli/src/main.ts", "--model", model, "--workspace", workspaceRoot];
+// LOCAL_AGENT_BIN runs a release's compiled executable instead of this
+// checkout's source: release.yml runs specs against each archive it builds.
+const cli = process.env.LOCAL_AGENT_BIN
+  ? [process.env.LOCAL_AGENT_BIN]
+  : [process.execPath, "apps/cli/src/main.ts"];
+const baseArgs = ["--model", model, "--workspace", workspaceRoot];
 const env = {
   PATH: process.env.PATH ?? "",
   TERM: process.env.TERM ?? "xterm-256color",
@@ -431,7 +437,7 @@ process.on("SIGTERM", () => void shutdown(143));
 async function headless(prompt: string, database: string): Promise<string> {
   await going();
   const run = Bun.spawn(
-    [process.execPath, ...baseArgs, "--mode", "headless", "-p", prompt, "--session-db", database],
+    [...cli, ...baseArgs, "--mode", "headless", "-p", prompt, "--session-db", database],
     { stdout: "ignore", stderr: "pipe", env },
   );
   children.push(run);
@@ -475,7 +481,7 @@ if (mode === "sessions") {
 await going();
 const child = Bun.spawn(
   [
-    process.execPath,
+    ...cli,
     ...baseArgs,
     "--mode",
     inline ? "inline" : "fullscreen",
