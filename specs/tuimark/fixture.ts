@@ -3,7 +3,7 @@
 //   bun specs/tuimark/fixture.ts chat|edit-approve|edit-deny|session|goal[-inline]
 //
 // A mode ending in -inline runs the same flow with --mode inline (the opt-in
-// Tuimark inline client); its port is the fullscreen one plus 100.
+// Tuimark inline client).
 //
 // The reply depends only on the last message, so one run can hold several turns:
 //
@@ -42,17 +42,8 @@ const rawMode = Bun.argv[2] ?? "chat";
 const inline = rawMode.endsWith("-inline");
 const mode = inline ? rawMode.slice(0, -"-inline".length) : rawMode;
 const model = "fixture-model";
-const basePort = {
-  chat: 19210,
-  "edit-approve": 19211,
-  "edit-deny": 19212,
-  session: 19213,
-  "edit-session": 19214,
-  sessions: 19215,
-  goal: 19216,
-}[mode];
-if (!basePort) throw new Error(`unknown mode: ${rawMode}`);
-const port = inline ? basePort + 100 : basePort;
+const modes = ["chat", "edit-approve", "edit-deny", "session", "edit-session", "sessions", "goal"];
+if (!modes.includes(mode)) throw new Error(`unknown mode: ${rawMode}`);
 
 const workspaceRoot = await mkdtemp(join(tmpdir(), "local-agent-tuimark-"));
 const configHome = await mkdtemp(join(tmpdir(), "local-agent-config-"));
@@ -146,8 +137,9 @@ const goalStatus = (args: object) => ({
 /** Tool-result replies so far: "edit applied 2" proves a second edit landed. */
 let toolReplies = 0;
 
+// Any free port: the client is given the server's own URL.
 const server = Bun.serve({
-  port,
+  port: 0,
   hostname: "127.0.0.1",
   idleTimeout: 0,
   async fetch(request) {
@@ -358,55 +350,74 @@ const env = {
   ),
 };
 
-const extraArgs: string[] = [];
+/** Every process this fixture started, headless setup runs included. */
+const children: Bun.Subprocess[] = [];
 let sessionDirectory: string | undefined;
+
+let cleaned = false;
+async function shutdown(exitCode: number) {
+  if (cleaned) return;
+  cleaned = true;
+  for (const run of children) if (run.exitCode === null) run.kill("SIGTERM");
+  await Promise.all(children.map((run) => run.exited));
+  server.stop(true);
+  try {
+    const contents = await readFile(join(workspaceRoot, "notes.txt"), "utf8").catch(() => undefined);
+    // Approved: the exact edit landed (twice for edit-session: the second
+    // edit only lands if the session grant let it through; once for goal,
+    // in its second turn). Otherwise nothing may have changed.
+    const expected =
+      mode === "edit-session"
+        ? "final\n"
+        : mode === "edit-approve" || mode === "goal"
+          ? "after\n"
+          : "before\n";
+    if (contents !== expected) exitCode = 1;
+  } finally {
+    await rm(workspaceRoot, { recursive: true, force: true });
+    await rm(configHome, { recursive: true, force: true });
+    if (sessionDirectory) await rm(sessionDirectory, { recursive: true, force: true });
+  }
+  process.exit(exitCode);
+}
+
+// Before any process starts: a spec that times out during the headless
+// setup still stops it and removes the directories.
+process.once("SIGINT", () => void shutdown(130));
+process.once("SIGTERM", () => void shutdown(143));
+
+/** A headless turn for the setup; a failure ends the fixture with 1. */
+async function headless(prompt: string, database: string): Promise<string> {
+  const run = Bun.spawn(
+    [process.execPath, ...baseArgs, "--mode", "headless", "-p", prompt, "--session-db", database],
+    { stdout: "ignore", stderr: "pipe", env },
+  );
+  children.push(run);
+  const log = await new Response(run.stderr).text();
+  if ((await run.exited) !== 0) {
+    console.error(`headless session failed: ${log}`);
+    await shutdown(1);
+  }
+  return log;
+}
+
+const extraArgs: string[] = [];
 if (mode === "session") {
   sessionDirectory = await mkdtemp(join(tmpdir(), "local-agent-tuimark-db-"));
   const database = join(sessionDirectory, "sessions.db");
-  const first = Bun.spawn(
-    [
-      process.execPath,
-      ...baseArgs,
-      "--mode",
-      "headless",
-      "-p",
-      "stream the first reply",
-      "--session-db",
-      database,
-    ],
-    { stdout: "ignore", stderr: "pipe", env },
-  );
-  const log = await new Response(first.stderr).text();
+  const log = await headless("stream the first reply", database);
   const id = /Session: (\w+)/.exec(log)?.[1];
-  if ((await first.exited) !== 0 || !id) {
-    console.error(`headless session failed: ${log}`);
-    process.exit(1);
+  if (!id) {
+    console.error(`headless session named no session: ${log}`);
+    await shutdown(1);
   }
-  extraArgs.push("--session-db", database, "--resume", id);
+  extraArgs.push("--session-db", database, "--resume", id ?? "");
 }
 if (mode === "sessions") {
   sessionDirectory = await mkdtemp(join(tmpdir(), "local-agent-tuimark-db-"));
   const database = join(sessionDirectory, "sessions.db");
-  for (const prompt of ["stream the first reply", "stream the second reply"]) {
-    const run = Bun.spawn(
-      [
-        process.execPath,
-        ...baseArgs,
-        "--mode",
-        "headless",
-        "-p",
-        prompt,
-        "--session-db",
-        database,
-      ],
-      { stdout: "ignore", stderr: "pipe", env },
-    );
-    const log = await new Response(run.stderr).text();
-    if ((await run.exited) !== 0) {
-      console.error(`headless session failed: ${log}`);
-      process.exit(1);
-    }
-  }
+  for (const prompt of ["stream the first reply", "stream the second reply"])
+    await headless(prompt, database);
   extraArgs.push("--session-db", database);
 }
 
@@ -422,31 +433,5 @@ const child = Bun.spawn(
   ],
   { stdin: "inherit", stdout: "inherit", stderr: "inherit", env },
 );
-
-let cleaned = false;
-async function shutdown(exitCode: number) {
-  if (cleaned) return;
-  cleaned = true;
-  if (child.exitCode === null) child.kill("SIGTERM");
-  await child.exited;
-  server.stop(true);
-  const contents = await readFile(join(workspaceRoot, "notes.txt"), "utf8");
-  // Approved: the exact edit landed (twice for edit-session: the second
-  // edit only lands if the session grant let it through; once for goal,
-  // in its second turn). Otherwise nothing may have changed.
-  const expected =
-    mode === "edit-session"
-      ? "final\n"
-      : mode === "edit-approve" || mode === "goal"
-        ? "after\n"
-        : "before\n";
-  if (contents !== expected) exitCode = 1;
-  await rm(workspaceRoot, { recursive: true, force: true });
-  await rm(configHome, { recursive: true, force: true });
-  if (sessionDirectory) await rm(sessionDirectory, { recursive: true, force: true });
-  process.exit(exitCode);
-}
-
-process.once("SIGINT", () => void shutdown(130));
-process.once("SIGTERM", () => void shutdown(143));
+children.push(child);
 await shutdown(await child.exited);
