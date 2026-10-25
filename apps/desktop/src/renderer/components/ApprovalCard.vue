@@ -1,5 +1,5 @@
 <template>
-  <div class="approval">
+  <div ref="card" class="approval" role="group" aria-label="Approval requested" tabindex="-1">
     <div class="row">
       <span class="badge amber">approval requested</span>
       <span class="badge violet">{{ proposal.kind }}</span>
@@ -30,7 +30,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, onMounted, ref } from "vue";
 import type { ApprovalStatus } from "#desktop/renderer/chat-run";
 import type { AgentStreamEvent } from "#desktop/shared/protocol";
 
@@ -38,6 +38,13 @@ type Proposal = Extract<AgentStreamEvent, { type: "approval_requested" }>["propo
 
 const props = defineProps<{ proposal: Proposal; status: ApprovalStatus }>();
 defineEmits<{ decide: [allowed: boolean] }>();
+
+// A run waits on this card: a keyboard or screen-reader user is brought to
+// it, since the transcript's live region does not announce a pending ask.
+const card = ref<HTMLElement>();
+onMounted(() => {
+  if (props.status === "pending") card.value?.focus();
+});
 
 const statusText = computed(() =>
   props.status === "ended" ? "not decided: the run is no longer waiting" : props.status,

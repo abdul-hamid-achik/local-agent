@@ -559,7 +559,7 @@ async function handleOllamaModels(params: unknown) {
 /* Project commands (allowlisted) and repo inventory                   */
 /* ------------------------------------------------------------------ */
 
-type ProjectRun = { process: ReturnType<typeof Bun.spawn>; killed: boolean };
+type ProjectRun = { process: ReturnType<typeof Bun.spawn> };
 const projectRuns = new Map<string, ProjectRun>();
 /** How long a stopped project command's group has before SIGKILL. */
 const PROJECT_KILL_GRACE_MS = 2_000;
@@ -581,7 +581,6 @@ function signalGroup(pid: number, signal: NodeJS.Signals | 0): boolean {
  * still there after the grace.
  */
 function stopProjectRun(run: ProjectRun): void {
-  run.killed = true;
   const pid = run.process.pid;
   if (!signalGroup(pid, "SIGTERM")) return;
   setTimeout(() => {
@@ -611,7 +610,7 @@ async function handleProjectRun(id: number, params: unknown): Promise<void> {
     // Its own group, so a cancel reaches what it started.
     detached: true,
   });
-  projectRuns.set(runId, { process: child, killed: false });
+  projectRuns.set(runId, { process: child });
   writeFrame({ id, ok: true, result: { runId } });
 
   let emitted = 0;

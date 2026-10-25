@@ -14,7 +14,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import {
   bunNotFoundMessage,
   isExecutableFile,
@@ -653,6 +653,33 @@ describe("SidecarClient lifecycle", () => {
       expect(client.running).toBe(true);
       expect(exits).toBe(0);
     } finally {
+      await client.stop();
+    }
+  });
+
+  test("an answer nobody waits for is said, and the waiting invoke is unharmed", async () => {
+    const client = scripted("twice.mjs", [
+      'process.stdin.setEncoding("utf8");',
+      'process.stdin.on("data", (data) => {',
+      '  for (const line of data.split("\\n").filter(Boolean)) {',
+      "    const { id } = JSON.parse(line);",
+      '    process.stdout.write(JSON.stringify({ id, ok: true, result: 1 }) + "\\n");',
+      '    process.stdout.write(JSON.stringify({ id, ok: true, result: 2 }) + "\\n");',
+      "  }",
+      "});",
+    ]);
+    const said = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    client.start();
+    try {
+      await expect(client.invoke("hello")).resolves.toBe(1);
+      await vi.waitFor(() =>
+        expect(said).toHaveBeenCalledWith(
+          expect.stringContaining("unknown request"),
+        ),
+      );
+      expect(client.running).toBe(true);
+    } finally {
+      said.mockRestore();
       await client.stop();
     }
   });

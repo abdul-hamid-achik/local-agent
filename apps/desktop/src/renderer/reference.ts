@@ -1,6 +1,75 @@
 /** The Reference view's bounds table, from the runtime's own LIMITS. */
 
+import type { RouteName } from "#desktop/renderer/router";
 import type { ReferenceView } from "#desktop/shared/protocol";
+
+/**
+ * What the Reference view's feature map lists. A feature with a `route` has
+ * a workbench view of its own (and is live there); one without is the
+ * terminal client's alone, and the table says so instead of linking to the
+ * page it is on.
+ */
+export type Feature = {
+  name: string;
+  detail: string;
+  route?: Exclude<RouteName, "reference">;
+};
+
+export const features: Feature[] = [
+  {
+    name: "Agent chat",
+    detail: "streaming turns, thinking, receipts",
+    route: "chat",
+  },
+  {
+    name: "Approvals",
+    detail: "edit diff, argv, MCP args — approve/deny inline",
+    route: "chat",
+  },
+  {
+    name: "Plan / build intents",
+    detail: "read-only plan vs gated build",
+    route: "chat",
+  },
+  {
+    name: "Sessions",
+    detail: "SQLite create/list/resume/inspect",
+    route: "sessions",
+  },
+  {
+    name: "Recovery",
+    detail: "hazard review tokens, never auto-replay",
+    route: "recovery",
+  },
+  { name: "Workspace", detail: "fd-pinned bounded reads", route: "workspace" },
+  {
+    name: "MCP",
+    detail: "stdio/HTTP trust, status, tool catalog",
+    route: "mcp",
+  },
+  {
+    name: "Provider admission",
+    detail: "inventory, weight, context evidence",
+    route: "providers",
+  },
+  {
+    name: "Chalupa profile",
+    detail: "process-scoped remote config",
+    route: "providers",
+  },
+  {
+    name: "Project checks",
+    detail: "check, test, builds, git",
+    route: "project",
+  },
+  {
+    name: "Contracts",
+    detail: "Glyphrun loopback specs inventory",
+    route: "project",
+  },
+  { name: "Fullscreen TUI", detail: "terminal-only; command provided" },
+  { name: "Inline TUI", detail: "terminal-only; command provided" },
+];
 
 /** A byte count in the unit it is set in: MiB or KiB for a power of two,
  * MB for a round million. */

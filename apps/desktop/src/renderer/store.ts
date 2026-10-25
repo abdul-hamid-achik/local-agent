@@ -6,6 +6,8 @@ export type ConnectionState = "connecting" | "ready" | "error";
 export const store = reactive({
   connection: "connecting" as ConnectionState,
   connectionError: "",
+  // An error no component handled (see main.ts); App shows it.
+  uiError: "",
   repoRoot: "",
   workspace: "",
   model: "",
@@ -15,7 +17,7 @@ export const store = reactive({
   mcpConfig: "",
   mcpAttached: true,
   provider: undefined as ProviderView | undefined,
-  providerSource: "" as string,
+  providerSource: "",
 });
 
 export function workspaceRoot(): string {

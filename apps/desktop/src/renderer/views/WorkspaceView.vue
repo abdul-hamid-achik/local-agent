@@ -29,7 +29,7 @@
             >
               <span class="entry-icon">{{ icons[entry.kind] }}</span>
               <span class="mono">{{ entry.name }}</span>
-              <span v-if="entry.kind === 'file'" class="dim size">{{ formatSize(entry.size) }}</span>
+              <span v-if="entry.kind === 'file'" class="dim size">{{ formatBytes(entry.size) }}</span>
             </button>
           </li>
         </ul>
@@ -41,9 +41,13 @@
           <div class="row viewer-head">
             <span class="mono">{{ openPath }}</span>
             <span class="spacer" />
-            <span class="dim">{{ formatSize(openBytes) }}</span>
+            <span class="dim">{{ formatBytes(openBytes) }}</span>
           </div>
-          <pre class="file-content"><code>{{ openText }}</code></pre>
+          <pre class="file-content"><code>{{ preview.shown }}</code></pre>
+          <div v-if="preview.clipped" class="row foot">
+            <span class="dim">Showing the first {{ PREVIEW_CHARS.toLocaleString("en-US") }} characters.</span>
+            <button class="small" @click="showAll = true">Show all</button>
+          </div>
         </template>
       </div>
     </div>
@@ -53,6 +57,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from "vue";
 import { api, errorMessage } from "#desktop/renderer/api";
+import { formatBytes, previewText } from "#desktop/renderer/format";
 import { latest } from "#desktop/renderer/latest";
 import { store, workspaceRoot } from "#desktop/renderer/store";
 import type { WorkspaceEntry } from "#desktop/shared/protocol";
@@ -63,6 +68,15 @@ const truncated = ref(false);
 const openPath = ref("");
 const openText = ref("");
 const openBytes = ref(0);
+// A file may be 8 MB: laying out all of it in one <pre> stalls the window,
+// so the start is shown until the reader asks for the rest.
+const PREVIEW_CHARS = 200_000;
+const showAll = ref(false);
+const preview = computed(() =>
+  showAll.value
+    ? { shown: openText.value, clipped: false }
+    : previewText(openText.value, PREVIEW_CHARS),
+);
 const error = ref("");
 // A slow answer for an earlier click, or for the previous workspace, must not
 // replace the current listing or file.
@@ -84,12 +98,6 @@ const unopenable: Partial<Record<WorkspaceEntry["kind"], string>> = {
 const crumbs = computed(() => (dir.value ? dir.value.split("/") : []));
 const crumbPath = (index: number) => crumbs.value.slice(0, index + 1).join("/");
 const entryPath = (name: string) => (dir.value ? `${dir.value}/${name}` : name);
-
-function formatSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-}
 
 async function openDir(next: string): Promise<void> {
   error.value = "";
@@ -114,6 +122,7 @@ async function openFile(path: string): Promise<void> {
     openPath.value = path;
     openText.value = result.text;
     openBytes.value = result.bytes;
+    showAll.value = false;
   } catch (error_) {
     if (current()) error.value = errorMessage(error_);
   }

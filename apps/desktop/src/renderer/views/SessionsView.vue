@@ -10,9 +10,9 @@
 
     <div class="card">
       <div class="field">
-        <label>Session database</label>
+        <label for="sessions-db">Session database</label>
         <div class="row">
-          <input v-model="store.sessionDb" type="text" placeholder="/path/to/sessions.db" spellcheck="false" />
+          <input id="sessions-db" v-model="store.sessionDb" type="text" placeholder="/path/to/sessions.db" spellcheck="false" />
           <button class="small" @click="pickDb">Browse</button>
           <button class="small primary" :disabled="!store.sessionDb" @click="refresh">List</button>
           <button class="small" :disabled="!store.sessionDb" @click="create">New session</button>
@@ -145,10 +145,7 @@ watch([() => store.sessionDb, () => workspaceRoot()], () => {
 });
 
 async function pickDb(): Promise<void> {
-  const picked = await api.pick({
-    kind: "file",
-    filters: [{ name: "SQLite", extensions: ["db", "sqlite", "sqlite3"] }],
-  });
+  const picked = await api.pickSessionDb();
   if (picked) {
     store.sessionDb = picked;
     await refresh();

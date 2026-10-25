@@ -13,12 +13,13 @@
           <div class="brand-sub">Workbench</div>
         </div>
       </div>
-      <nav>
+      <nav aria-label="Main">
         <button
           v-for="route in routes"
           :key="route.name"
           class="nav-item"
           :class="{ active: currentRoute === route.name }"
+          :aria-current="currentRoute === route.name ? 'page' : undefined"
           :title="route.hint"
           @click="navigate(route.name)"
         >
@@ -62,6 +63,10 @@
         </div>
       </header>
       <div v-if="pickError" class="error-box pick-error">{{ pickError }}</div>
+      <div v-if="store.uiError" class="error-box pick-error" role="alert">
+        {{ store.uiError }}
+        <button class="small ghost" @click="store.uiError = ''">Dismiss</button>
+      </div>
       <main class="content">
         <div v-if="store.connection === 'error'" class="view">
           <div class="error-box">

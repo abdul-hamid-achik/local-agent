@@ -14,6 +14,9 @@ export function parseSlashCommand(input: string): SlashCommand {
     return { kind: "mode", requested: modeCommand[1]?.toLowerCase() };
   if (command === "/help") return { kind: "help" };
   if (command === "/mcp") return { kind: "mcp" };
-  if (command.startsWith("/")) return { kind: "unknown", command };
+  // Only a word right after the slash is a command. A pasted path or a URL
+  // ("/tmp/log.txt explain this") is a prompt, and goes to the model.
+  if (/^\/[a-z][\w-]*(?:\s|$)/i.test(command))
+    return { kind: "unknown", command };
   return { kind: "not-slash" };
 }

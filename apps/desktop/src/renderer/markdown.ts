@@ -9,10 +9,13 @@ function escapeHtml(text: string): string {
 }
 
 function inline(text: string): string {
-  return escapeHtml(text)
-    .replaceAll(/`([^`\n]+)`/g, "<code>$1</code>")
-    .replaceAll(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
-    .replaceAll(/(^|\W)_([^_]+)_(\W|$)/g, "$1<em>$2</em>$3");
+  return (
+    escapeHtml(text)
+      .replaceAll(/`([^`\n]+)`/g, "<code>$1</code>")
+      .replaceAll(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+      // Looked at, not consumed: "_a_ _b_" shares a space between two marks.
+      .replaceAll(/(?<!\w)_([^_]+)_(?!\w)/g, "<em>$1</em>")
+  );
 }
 
 export function renderMarkdown(source: string): string {

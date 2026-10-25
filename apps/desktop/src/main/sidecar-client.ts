@@ -270,7 +270,13 @@ export class SidecarClient {
 
   private handleResponse(frame: RpcResponse): void {
     const entry = this.pending.get(frame.id);
-    if (!entry) return; // Duplicate/terminal frame from a streaming method.
+    if (!entry) {
+      // The sidecar answers each request once, and every waiting invoke is
+      // rejected (and forgotten) only when the child is gone, so an answer
+      // nobody waits for is a correlation bug: said, not swallowed.
+      console.error(`[main] ignored an answer to unknown request ${frame.id}`);
+      return;
+    }
     this.pending.delete(frame.id);
     if (frame.ok) entry.resolve(frame.result);
     else

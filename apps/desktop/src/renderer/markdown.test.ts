@@ -1,6 +1,14 @@
 import { describe, expect, test } from "vitest";
 import { renderMarkdown } from "#desktop/renderer/markdown";
 
+/** The HTML with the renderer's own tags taken out: what is left is text. */
+function onlyOwnTags(html: string): string {
+  return html.replaceAll(
+    /<\/?(?:p|em|strong|code|pre|ul|li|h[1-4])(?: data-lang="[^"<>]*")?>/g,
+    "",
+  );
+}
+
 describe("renderMarkdown", () => {
   test("escapes HTML before decorating", () => {
     const html = renderMarkdown('<script>alert("x")</script>');
@@ -72,5 +80,57 @@ describe("renderMarkdown", () => {
     expect(renderMarkdown("```a`b\nnext")).toBe(
       "<p>``<code>a</code>b</p><p>next</p>",
     );
+  });
+  test("two emphasis marks one space apart both apply, and snake_case does not", () => {
+    expect(renderMarkdown("use _foo_ _bar_")).toBe(
+      "<p>use <em>foo</em> <em>bar</em></p>",
+    );
+    expect(renderMarkdown("_a_ _b_ _c_")).toBe(
+      "<p><em>a</em> <em>b</em> <em>c</em></p>",
+    );
+    expect(renderMarkdown("a_b_c and (_x_).")).toBe(
+      "<p>a_b_c and (<em>x</em>).</p>",
+    );
+  });
+
+  // Every place text lands in the HTML: a payload must stay text in each.
+  const payload = '<img src=x onerror="alert(1)">';
+  test.each([
+    ["a heading", `# ${payload}`],
+    ["a list item", `- ${payload}`],
+    ["a paragraph", payload],
+    ["emphasis", `_${payload}_`],
+    ["bold", `**${payload}**`],
+    ["inline code", `\`${payload}\``],
+    ["a fenced block", `\`\`\`\n${payload}\n\`\`\``],
+    ["an unclosed fence, as a reply still streaming has", `\`\`\`\n${payload}`],
+  ])("%s: a tag in it stays text", (_where, source) => {
+    const html = renderMarkdown(source);
+    expect(html).not.toMatch(/<img/);
+    expect(onlyOwnTags(html)).not.toMatch(/[<>]/);
+    expect(html).toContain("&lt;img src=x onerror=&quot;alert(1)&quot;&gt;");
+  });
+
+  test("a fence's language cannot break out of its attribute", () => {
+    const html = renderMarkdown('```x"onmouseover="alert(1)\ncode\n```');
+    expect(html).toBe(
+      '<pre><code data-lang="x&quot;onmouseover=&quot;alert(1)">code</code></pre>',
+    );
+    expect(
+      renderMarkdown('```"><script>alert(1)</script>\nx\n```'),
+    ).not.toContain("<script");
+  });
+
+  test("links are text: nothing here produces an anchor or an attribute", () => {
+    for (const source of [
+      "[click](javascript:alert(1))",
+      "<a href='javascript:alert(1)'>x</a>",
+      "![x](https://example.test/x.png)",
+      "<https://example.test>",
+    ]) {
+      const html = renderMarkdown(source);
+      expect(html, source).not.toMatch(/<(a|img)\b/);
+      expect(onlyOwnTags(html), source).not.toMatch(/[<>]/);
+    }
   });
 });

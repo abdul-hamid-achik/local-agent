@@ -1,6 +1,11 @@
 import { LIMITS } from "@local-agent/runtime";
 import { expect, test } from "vitest";
-import { bytes, duration, limitRows } from "#desktop/renderer/reference";
+import {
+  bytes,
+  duration,
+  features,
+  limitRows,
+} from "#desktop/renderer/reference";
 
 test("a byte count reads in the unit it is set in", () => {
   expect(bytes(8 * 1024 * 1024)).toBe("8 MiB");
@@ -26,4 +31,16 @@ test("the bounds table shows every bound the runtime has", () => {
       JSON.stringify(limitRows({ ...LIMITS, [key]: LIMITS[key] * 3 })),
       key,
     ).not.toBe(shown);
+});
+
+test("no feature links to the Reference page it is listed on", () => {
+  // A feature the workbench has no view for has no route, not this one.
+  expect(features.filter((f) => (f.route as string) === "reference")).toEqual(
+    [],
+  );
+  expect(features.filter((f) => !f.route).map((f) => f.name)).toEqual([
+    "Fullscreen TUI",
+    "Inline TUI",
+  ]);
+  expect(new Set(features.map((f) => f.name)).size).toBe(features.length);
 });

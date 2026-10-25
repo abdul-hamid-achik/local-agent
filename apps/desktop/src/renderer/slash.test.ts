@@ -35,7 +35,23 @@ describe("parseSlashCommand", () => {
       kind: "unknown",
       command: "/mode plan extra",
     });
+    expect(parseSlashCommand("/theme dark")).toEqual({
+      kind: "unknown",
+      command: "/theme dark",
+    });
     expect(parseSlashCommand("hello")).toEqual({ kind: "not-slash" });
     expect(parseSlashCommand("")).toEqual({ kind: "not-slash" });
+  });
+
+  test("a pasted path or a lone slash is a prompt, not an unknown command", () => {
+    for (const text of [
+      "/tmp/log.txt explain this error",
+      "/Users/me/project/src/main.ts",
+      "/ what is a slash",
+      "//comment",
+      "/-flag",
+      "/mode: plan",
+    ])
+      expect(parseSlashCommand(text), text).toEqual({ kind: "not-slash" });
   });
 });

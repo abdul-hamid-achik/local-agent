@@ -11,16 +11,16 @@
     <div class="card">
       <div class="grid-2">
         <div class="field">
-          <label>Session database</label>
+          <label for="recovery-db">Session database</label>
           <div class="row">
-            <input v-model="store.sessionDb" type="text" placeholder="/path/to/sessions.db" spellcheck="false" />
+            <input id="recovery-db" v-model="store.sessionDb" type="text" placeholder="/path/to/sessions.db" spellcheck="false" />
             <button class="small" @click="pickDb">Browse</button>
           </div>
         </div>
         <div class="field">
-          <label>Session handle</label>
+          <label for="recovery-handle">Session handle</label>
           <div class="row">
-            <input v-model="handle" type="text" placeholder="session handle" spellcheck="false" />
+            <input id="recovery-handle" v-model="handle" type="text" placeholder="session handle" spellcheck="false" />
             <button class="small primary" :disabled="!store.sessionDb || !handle" @click="inspect">
               Inspect
             </button>
@@ -97,10 +97,7 @@ watch(
 );
 
 async function pickDb(): Promise<void> {
-  const picked = await api.pick({
-    kind: "file",
-    filters: [{ name: "SQLite", extensions: ["db", "sqlite", "sqlite3"] }],
-  });
+  const picked = await api.pickSessionDb();
   if (picked) store.sessionDb = picked;
 }
 
@@ -122,11 +119,5 @@ async function inspect(): Promise<void> {
   color: var(--text-faint);
   font-size: 12px;
   margin-bottom: 8px;
-}
-
-.help {
-  font-size: 12px;
-  color: var(--text-faint);
-  margin-top: 8px;
 }
 </style>

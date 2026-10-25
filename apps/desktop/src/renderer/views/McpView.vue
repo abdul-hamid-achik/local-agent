@@ -11,9 +11,9 @@
 
     <div class="card">
       <div class="field">
-        <label>Trusted config (JSON array, max 16 servers, 1 MB)</label>
+        <label for="mcp-config-path">Trusted config (JSON array, max 16 servers, 1 MB)</label>
         <div class="row">
-          <input v-model="store.mcpConfig" type="text" placeholder="/path/to/mcp.json" spellcheck="false" />
+          <input id="mcp-config-path" v-model="store.mcpConfig" type="text" placeholder="/path/to/mcp.json" spellcheck="false" />
           <button class="small" @click="pickConfig">Browse</button>
           <button class="small" @click="loadFile">Load</button>
           <button class="small primary" :disabled="!store.mcpConfig.trim() || checking" @click="check">
@@ -26,8 +26,8 @@
         </div>
       </div>
       <div class="field">
-        <label>Config editor</label>
-        <textarea v-model="editor" rows="8" class="mono" spellcheck="false" />
+        <label for="mcp-config-editor">Config editor</label>
+        <textarea id="mcp-config-editor" v-model="editor" rows="8" class="mono" spellcheck="false" />
         <div class="row" style="margin-top: 8px">
           <button class="small" :disabled="!loadedPath" @click="saveFile">Save</button>
           <span v-if="loadedPath" class="dim mono" :title="loadedPath">→ {{ loadedPath }}</span>
@@ -215,15 +215,5 @@ async function check(): Promise<void> {
 
 .attach input {
   width: auto;
-}
-
-.spacer {
-  flex: 1;
-}
-
-.help {
-  font-size: 12px;
-  color: var(--text-faint);
-  margin-top: 8px;
 }
 </style>

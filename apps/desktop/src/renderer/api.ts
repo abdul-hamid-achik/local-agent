@@ -170,6 +170,12 @@ export const api = {
     kind: "directory" | "file";
     filters?: { name: string; extensions: string[] }[];
   }) => bridge().pick(options),
+  // The session database picker of the Sessions and Recovery views.
+  pickSessionDb: async () =>
+    bridge().pick({
+      kind: "file",
+      filters: [{ name: "SQLite", extensions: ["db", "sqlite", "sqlite3"] }],
+    }),
   readTextFile: async (path: string) => bridge().readTextFile(path),
   writeTextFile: async (path: string, text: string) =>
     bridge().writeTextFile(path, text),

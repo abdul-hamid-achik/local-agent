@@ -13,7 +13,7 @@
     <div class="card">
       <h2>Resolved profile</h2>
       <div class="row wrap">
-        <input v-model="store.model" type="text" placeholder="model (must exist)" spellcheck="false" style="max-width: 260px" />
+        <input v-model="store.model" type="text" placeholder="model (must exist)" aria-label="Model" spellcheck="false" style="max-width: 260px" />
         <button class="small primary" @click="resolve">Resolve</button>
         <button class="small" :disabled="!store.provider" @click="admit">Run admission</button>
         <button class="small ghost" :disabled="!store.provider" @click="inventory">List models</button>
@@ -76,7 +76,14 @@
       </div>
       <!-- A value may be a token or a URL with credentials: hidden until asked. -->
       <div v-for="(row, index) in envRows" :key="index" class="row env-row">
-        <input v-model="row.key" type="text" placeholder="NAME" spellcheck="false" class="mono" />
+        <input
+          v-model="row.key"
+          type="text"
+          placeholder="NAME"
+          spellcheck="false"
+          class="mono"
+          :aria-label="`Name of variable ${index + 1}`"
+        />
         <input
           v-model="row.value"
           :type="row.shown ? 'text' : 'password'"
@@ -107,6 +114,7 @@
 import { onMounted, ref, watch } from "vue";
 import { api, errorMessage } from "#desktop/renderer/api";
 import { envFromRows, type EnvRow } from "#desktop/renderer/env-rows";
+import { formatBytes } from "#desktop/renderer/format";
 import { latest } from "#desktop/renderer/latest";
 import { store } from "#desktop/renderer/store";
 import type { AdmissionView } from "#desktop/shared/protocol";
@@ -134,12 +142,6 @@ watch(
     admission.value = undefined;
   },
 );
-
-function formatBytes(bytes: number): string {
-  if (bytes < 1024 * 1024) return `${Math.max(0, Math.round(bytes / 1024))} KB`;
-  if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-  return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`;
-}
 
 async function resolve(): Promise<void> {
   error.value = "";
@@ -218,11 +220,5 @@ onMounted(async () => {
 <style scoped>
 .env-row {
   margin-bottom: 8px;
-}
-
-.help {
-  font-size: 12px;
-  color: var(--text-faint);
-  margin-top: 8px;
 }
 </style>

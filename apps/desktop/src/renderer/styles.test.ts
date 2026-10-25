@@ -26,6 +26,15 @@ function contrast(a: string, b: string): number {
   return (light + 0.05) / (dark + 0.05);
 }
 
+test("a focused field keeps the keyboard focus ring, not only a border color", () => {
+  // The global :focus-visible outline reaches inputs unless a rule removes it.
+  expect(css).toMatch(/:focus-visible\s*\{[^}]*outline:\s*2px solid/);
+  for (const [, selector, body] of css.matchAll(
+    /([^{}]*:focus[^{}]*)\{([^}]*)\}/g,
+  ))
+    expect(body, selector?.trim()).not.toMatch(/outline:\s*(none|0)\b/);
+});
+
 test("every text color reads at WCAG AA on every background", () => {
   // One theme: a second :root (a light theme, say) needs checks of its own.
   expect(css.match(/:root\s*\{/g)).toHaveLength(1);

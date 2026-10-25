@@ -142,10 +142,6 @@ onUnmounted(() => {
   max-width: none;
 }
 
-.spacer {
-  flex: 1;
-}
-
 .run-head {
   margin-top: 10px;
   font-size: 12px;
@@ -178,7 +174,6 @@ onUnmounted(() => {
 }
 
 .help {
-  font-size: 12px;
-  color: var(--text-faint);
+  margin-top: 0;
 }
 </style>

@@ -15,8 +15,11 @@
         <tbody>
           <tr v-for="feature in features" :key="feature.name">
             <td><strong>{{ feature.name }}</strong><br /><span class="dim">{{ feature.detail }}</span></td>
-            <td><span class="badge" :class="feature.done ? 'green' : 'amber'">{{ feature.done ? "live" : "reference" }}</span></td>
-            <td><button class="small ghost" @click="navigate(feature.route)">{{ feature.route }}</button></td>
+            <td><span class="badge" :class="feature.route ? 'green' : 'amber'">{{ feature.route ? "live" : "terminal only" }}</span></td>
+            <td>
+              <button v-if="feature.route" class="small ghost" @click="navigate(feature.route)">{{ feature.route }}</button>
+              <span v-else class="dim">—</span>
+            </td>
           </tr>
         </tbody>
       </table>
@@ -112,25 +115,9 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
 import { api, errorMessage } from "#desktop/renderer/api";
-import { limitRows } from "#desktop/renderer/reference";
-import { navigate, type RouteName } from "#desktop/renderer/router";
+import { features, limitRows } from "#desktop/renderer/reference";
+import { navigate } from "#desktop/renderer/router";
 import type { ReferenceView } from "#desktop/shared/protocol";
-
-const features: { name: string; detail: string; done: boolean; route: RouteName }[] = [
-  { name: "Agent chat", detail: "streaming turns, thinking, receipts", done: true, route: "chat" },
-  { name: "Approvals", detail: "edit diff, argv, MCP args — approve/deny inline", done: true, route: "chat" },
-  { name: "Plan / build intents", detail: "read-only plan vs gated build", done: true, route: "chat" },
-  { name: "Sessions", detail: "SQLite create/list/resume/inspect", done: true, route: "sessions" },
-  { name: "Recovery", detail: "hazard review tokens, never auto-replay", done: true, route: "recovery" },
-  { name: "Workspace", detail: "fd-pinned bounded reads", done: true, route: "workspace" },
-  { name: "MCP", detail: "stdio/HTTP trust, status, tool catalog", done: true, route: "mcp" },
-  { name: "Provider admission", detail: "inventory, weight, context evidence", done: true, route: "providers" },
-  { name: "Chalupa profile", detail: "process-scoped remote config", done: true, route: "providers" },
-  { name: "Project checks", detail: "check, test, builds, git", done: true, route: "project" },
-  { name: "Contracts", detail: "Glyphrun loopback specs inventory", done: true, route: "project" },
-  { name: "Fullscreen TUI", detail: "terminal-only; command provided", done: false, route: "reference" },
-  { name: "Inline TUI", detail: "terminal-only; command provided", done: false, route: "reference" },
-];
 
 const docs = ref<{ file: string; title: string }[]>([]);
 const reference = ref<ReferenceView>();
@@ -165,11 +152,5 @@ onMounted(() => {
 .dim {
   color: var(--text-faint);
   font-size: 12px;
-}
-
-.help {
-  font-size: 12px;
-  color: var(--text-faint);
-  margin-top: 8px;
 }
 </style>

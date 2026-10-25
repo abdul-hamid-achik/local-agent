@@ -20,7 +20,13 @@
       </div>
     </div>
 
-    <div ref="transcriptEl" class="card transcript">
+    <div
+      ref="transcriptEl"
+      class="card transcript"
+      role="log"
+      aria-label="Conversation"
+      :aria-busy="state.running"
+    >
       <div v-if="state.messages.length === 0 && !state.liveText" class="empty">
         Send a prompt to start. Try <span class="kbd">/help</span> for chat commands.
       </div>
@@ -77,6 +83,7 @@
         <textarea
           v-model="draft"
           rows="3"
+          aria-label="Message"
           placeholder="Ask anything, or /help · /mode plan|build · /mcp"
           @keydown="onKey"
         />
