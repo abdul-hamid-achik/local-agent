@@ -1293,7 +1293,8 @@ test("esc while an approval is pending denies it", async () => {
   const { ui, client } = setup(withApproval);
   await ui.fire("send", "edit");
   await untilApproval(ui);
-  client.abort();
+  // The real Esc of a turn (the `cancel` its keymap binds), not `client.abort()`.
+  await ui.fire("cancel");
   await client.idle();
   expect(store(ui).approval.open).toBe(false);
   expect(isBusy(ui)).toBe(false);
@@ -2200,7 +2201,7 @@ test("servers still connecting: the status says so, a turn waits, failures reach
   expect(offered).toEqual([1]);
   expect(store(ui).status).toMatch(/^build · MCP 1 · 1 failed \(\/mcp\)/);
   await ui.fire("send", "/mcp");
-  expect(store(ui).status).toBe("MCP servers: 1 · 1 tools · 1 failed");
+  expect(store(ui).status).toBe("MCP servers: 1 · 1 tool · 1 failed");
   expect(store(ui).panel.lines.map((line) => line.t)).toEqual([
     "hub · unavailable",
     "  Connection closed",
@@ -2224,7 +2225,7 @@ test("an open /mcp panel is drawn again when the servers settle", async () => {
   settle([]);
   await Bun.sleep(10);
   expect(store(ui).panel.open).toBe(true);
-  expect(store(ui).status).toBe("MCP servers: 1 · 1 tools");
+  expect(store(ui).status).toBe("MCP servers: 1 · 1 tool");
   expect(store(ui).panel.lines.map((line) => line.t)).toEqual([
     "db · 1 tool",
     "  query",

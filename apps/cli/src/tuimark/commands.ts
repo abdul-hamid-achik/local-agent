@@ -345,7 +345,7 @@ export function runSlash(text: string, state: CommandState): CommandOutcome {
       status: state.mcp.connecting
         ? "MCP servers: connecting…"
         : state.mcp.servers || state.mcp.failed
-          ? `MCP servers: ${state.mcp.servers} · ${state.mcp.tools} tools${state.mcp.failed ? ` · ${state.mcp.failed} failed` : ""}`
+          ? `MCP servers: ${state.mcp.servers} · ${state.mcp.tools} tool${state.mcp.tools === 1 ? "" : "s"}${state.mcp.failed ? ` · ${state.mcp.failed} failed` : ""}`
           : "MCP servers: 0 · use --mcp-config to connect trusted servers",
       mcpPanel: true,
     };
