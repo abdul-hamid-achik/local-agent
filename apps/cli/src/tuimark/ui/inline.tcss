@@ -28,9 +28,37 @@
 screen.approving > #app > #liveregion { display: none; }
 
 /* Blank room a kit modal is laid out against: the region does not grow for
- * a modal, so the document grows it while the modal is open. The heights
- * match the kit's modals (k-palette is 16 rows, k-help sizes to content). */
+ * a modal, so the document grows it while the modal is open. Each height is
+ * its modal's in a tall terminal (k-palette is 16 rows; the help sizes to
+ * its commands and keys, and check.ts fails when the two drift). A shorter
+ * terminal gives the region all its rows, and the help's scroll takes what
+ * is left. */
 .la-space-palette { height: 16; }
-/* The help grew a commands section over the kit's keys list (the keys
- * scroll takes what is left, so the commands always fit). */
-.la-space-help { height: 19; }
+.la-space-help { height: 37; }
+
+/* A modal is centered on the region, so the region holds its spacer alone
+ * while one is open: anything else would sit under the modal's edges. A
+ * child added to #app joins both lists (check.ts dumps each modal over
+ * every card the region can hold). A <use> passes no id to its template's
+ * root, so the question card is matched by its class. */
+screen.helping > #app > .k-appbar,
+screen.helping > #app > #liveregion,
+screen.helping > #app > #details,
+screen.helping > #app > #panel,
+screen.helping > #app > #approve,
+screen.helping > #app > .la-question,
+screen.helping > #app > #slashpop,
+screen.helping > #app > #composer,
+screen.helping > #app > #status,
+screen.paletting > #app > .k-appbar,
+screen.paletting > #app > #liveregion,
+screen.paletting > #app > #details,
+screen.paletting > #app > #panel,
+screen.paletting > #app > #approve,
+screen.paletting > #app > .la-question,
+screen.paletting > #app > #slashpop,
+screen.paletting > #app > #composer,
+screen.paletting > #app > #status { display: none; }
+/* A terminal shorter than the spacer gets all its rows, and the screen
+ * cuts the blank rest of the spacer instead of warning that it does not fit. */
+screen.helping, screen.paletting { overflow: hidden; }

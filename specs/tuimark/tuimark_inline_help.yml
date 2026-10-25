@@ -1,0 +1,134 @@
+version: 1
+name: bun_tuimark_inline_help
+intent: |
+    in the opt-in Tuimark inline client (--ui tuimark --mode inline) the help
+    and the command palette take the live region alone while they are open:
+    the composer and the status are not drawn under them, a terminal shorter
+    than the help scrolls its commands and keys together, and once either
+    closes the composer is back with the focus. The reply printed before is
+    kept (pushed up into the scrollback as the region grows), and neither
+    modal is ever left on the screen or printed into the scrollback.
+target:
+    cmd: ["bun", "specs/tuimark/fixture.ts", "chat-inline"]
+    cwd: "${projectRoot}"
+terminal:
+    cols: 100
+    rows: 24
+    alternateScreen: forbid
+steps:
+    - wait:
+        screen:
+            contains: "Message the model"
+        timeoutMs: 15000
+    - type: "stream a reply"
+    - press: enter
+    - wait:
+        screen:
+            contains: "stream complete"
+        timeoutMs: 15000
+    - wait:
+        screen:
+            contains: "Message the model"
+        timeoutMs: 10000
+    - type: "/help"
+    - press: enter
+    - wait:
+        screen:
+            contains: "close help"
+        timeoutMs: 10000
+    - wait:
+        screen:
+            notContains: "Message the model"
+        timeoutMs: 10000
+    - snapshot: help
+    # 24 rows show the commands and a few keys: the last key is further down.
+    - wait:
+        screen:
+            notContains: "shift+tab mode"
+        timeoutMs: 10000
+    - press: pagedown
+    - press: pagedown
+    - wait:
+        screen:
+            contains: "shift+tab mode"
+        timeoutMs: 10000
+    - press: esc
+    - wait:
+        screen:
+            contains: "Message the model"
+        timeoutMs: 10000
+    - wait:
+        screen:
+            notContains: "close help"
+        timeoutMs: 10000
+    - snapshot: help_closed
+    # The double border is the focused composer, which takes the typing.
+    - type: "after help"
+    - wait:
+        screen:
+            contains: "║ after help"
+        timeoutMs: 10000
+    - press: ctrl+c
+    - wait:
+        screen:
+            notContains: "after help"
+        timeoutMs: 10000
+    - press: ctrl+p
+    - wait:
+        screen:
+            contains: "type a command"
+        timeoutMs: 10000
+    - wait:
+        screen:
+            notContains: "Message the model"
+        timeoutMs: 10000
+    - snapshot: palette
+    - press: esc
+    - wait:
+        screen:
+            contains: "Message the model"
+        timeoutMs: 10000
+    - wait:
+        screen:
+            notContains: "type a command"
+        timeoutMs: 10000
+    - type: "after palette"
+    - wait:
+        screen:
+            contains: "║ after palette"
+        timeoutMs: 10000
+    - press: ctrl+c
+    - wait:
+        screen:
+            notContains: "after palette"
+        timeoutMs: 10000
+    - press: ctrl+c
+    - wait:
+        process:
+            exitCode: 0
+        timeoutMs: 10000
+outcomes:
+    - id: tuimark_inline_help_keeps_reply
+      description: the reply printed before the help is still in the terminal, on screen or in its scrollback
+      verify:
+        screen:
+            includeScrollback: true
+            contains: "stream complete"
+    - id: tuimark_inline_help_prints_no_help
+      description: nothing of the help is left on the screen or printed into the scrollback
+      verify:
+        screen:
+            includeScrollback: true
+            notContains: "close help"
+    - id: tuimark_inline_help_prints_no_palette
+      description: nothing of the palette is left on the screen or printed into the scrollback
+      verify:
+        screen:
+            includeScrollback: true
+            notContains: "type a command"
+    - id: tuimark_inline_help_exits
+      description: the inline client exits cleanly
+      verify:
+        process:
+            exitCode: 0
+contractHash: sha256:600172d7a3bb113d51565a69be5688ab0f829b62e377c8248fb315b2ecfd2222

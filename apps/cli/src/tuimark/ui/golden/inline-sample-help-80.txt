@@ -1,5 +1,5 @@
-=== grid 80x24 ===
- Local Agent╭─ Help ───────────────────────────────────────────────╮██▋░░░░░░░░ 
+=== grid 80x30 ===
+            ╭─ Help ───────────────────────────────────────────────╮            
             │  ? close help                                        │            
             │  Commands                                            │            
             │  /mode plan|build|chat plan reads only · build can…  │            
@@ -19,7 +19,13 @@
             │  /mcp show connected MCP servers and their tools     │            
             │  /goal [OBJECTIVE|stop] run turns toward an object…  │            
             │  Keys                                                │            
-╭───────────│  enter send · shift/alt+enter new line               │───────────╮
-│ Message th│  shift-drag select text (mouse reporting is on)      │           │
-╰───────────│  y allow                                             │───────────╯
- build · las╰──────────────────────────────────────────────────────╯            
+            │  enter send · shift/alt+enter new line               │            
+            │  shift-drag select text (mouse reporting is on)      │            
+            │  y allow                                             │            
+            │  a session                                           │            
+            │  ! always                                            │            
+            │  n deny                                              │            
+            │  pgup/pgdn scroll                                    │            
+            │  home/end top/end                                    │            
+            │  ^P commands                                         │            
+            ╰──────────────────────────────────────────────────────╯            

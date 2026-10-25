@@ -1,5 +1,5 @@
-=== grid 120x24 ===
- Local Agent           build  Ol╭─ Help ───────────────────────────────────────────────╮c3d  ctx 9.6k/32k  ███▋░░░░░░░░ 
+=== grid 120x30 ===
+                                ╭─ Help ───────────────────────────────────────────────╮                                
                                 │  ? close help                                        │                                
                                 │  Commands                                            │                                
                                 │  /mode plan|build|chat plan reads only · build can…  │                                
@@ -19,7 +19,13 @@
                                 │  /mcp show connected MCP servers and their tools     │                                
                                 │  /goal [OBJECTIVE|stop] run turns toward an object…  │                                
                                 │  Keys                                                │                                
-╭───────────────────────────────│  enter send · shift/alt+enter new line               │───────────────────────────────╮
-│ Message the model             │  shift-drag select text (mouse reporting is on)      │                               │
-╰───────────────────────────────│  y allow                                             │───────────────────────────────╯
- build · last 1m 06s · 32 tok/s ╰──────────────────────────────────────────────────────╯                                
+                                │  enter send · shift/alt+enter new line               │                                
+                                │  shift-drag select text (mouse reporting is on)      │                                
+                                │  y allow                                             │                                
+                                │  a session                                           │                                
+                                │  ! always                                            │                                
+                                │  n deny                                              │                                
+                                │  pgup/pgdn scroll                                    │                                
+                                │  home/end top/end                                    │                                
+                                │  ^P commands                                         │                                
+                                ╰──────────────────────────────────────────────────────╯                                

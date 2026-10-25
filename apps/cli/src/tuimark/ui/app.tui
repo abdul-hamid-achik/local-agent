@@ -352,23 +352,25 @@
     <!-- The help overlay. The kit's k-help lists keys only and takes no
          slot, so the overlay is written here with its classes: the slash
          commands (help.cmds, from the one catalog in ../commands.ts),
-         then every labeled key. The kit's .k-help rows (q, ?) and
-         on:escape close it. The composer's own enter keys are plain rows:
-         no keymap row can name them (the composer takes them first). -->
+         then every labeled key, in one scroll, so a short terminal
+         scrolls the commands too instead of cutting them. The kit's
+         .k-help rows (q, ?) and on:escape close it. The composer's own
+         enter keys are plain rows: no keymap row can name them (the
+         composer takes them first). -->
     <modal id="help_dialog" class="k-help" open="help.open" title="Help" on:escape="help_close">
       <row class="k-help-close">
         <text class="k-help-key">?</text>
         <text class="k-help-label">close help</text>
       </row>
-      <text class="la-help-head la-help-first">Commands</text>
-      <col class="la-helpcmds" each="help.cmds as c" key="c.id">
-        <row class="la-helpcmd">
-          <text class="la-helpcmd-key">{c.cmd}</text>
-          <text class="la-helpcmd-desc">{c.desc}</text>
-        </row>
-      </col>
-      <text class="la-help-head">Keys</text>
-      <scroll id="help_keys" class="k-help-scroll" focusable="true">
+      <scroll id="help_body" class="k-help-scroll" focusable="true">
+        <text class="la-help-head la-help-first">Commands</text>
+        <col class="la-helpcmds" each="help.cmds as c" key="c.id">
+          <row class="la-helpcmd">
+            <text class="la-helpcmd-key">{c.cmd}</text>
+            <text class="la-helpcmd-desc">{c.desc}</text>
+          </row>
+        </col>
+        <text class="la-help-head">Keys</text>
         <row class="la-helpcmd">
           <text class="la-helpcmd-key">enter</text>
           <text class="la-helpcmd-desc">send · shift/alt+enter new line</text>

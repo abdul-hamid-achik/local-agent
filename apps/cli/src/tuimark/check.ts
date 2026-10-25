@@ -257,6 +257,101 @@ for (const [name, make] of Object.entries(INLINE_SAMPLES)) {
   );
 }
 
+// A tall terminal: while the help or the palette is open the inline region
+// is that modal and nothing else, with the modal's content all inside it.
+// So the spacer in inline.tcss is the modal's height, and the help's
+// commands and keys fit unscrolled; a new command or key fails here until
+// the spacer grows with it. Each modal is dumped from its sample and over
+// each card the region can hold (a streaming reply, an approval, a
+// question, the details, a panel, the slash popup), one at a time, since
+// an approval would hide the live reply itself: a card that is not hidden
+// shows at the modal's edges and grows the region.
+{
+  const idle: Record<string, unknown> = {
+    ...INLINE_SAMPLES["inline-sample"](),
+  };
+  const help = INLINE_SAMPLES["inline-sample-help"]();
+  const palette = INLINE_SAMPLES["inline-sample-palette"]();
+  const modals = [
+    ["inline-sample-help", "help_dialog", { help: help.help }],
+    [
+      "inline-sample-palette",
+      "palette__dialog",
+      { palette: palette.palette, found: palette.found },
+    ],
+  ] as const;
+  const scratchCards = await mkdtemp(join(tmpdir(), "la-tuimark-cards-"));
+  const cases: [string, string, string][] = modals.map(([sample, modal]) => [
+    sample,
+    modal,
+    `samples/${sample}.json`,
+  ]);
+  for (const card of [
+    "inline-sample-streaming",
+    "inline-sample-approval",
+    "inline-sample-question",
+    "inline-sample-details",
+    "inline-sample-panel",
+    "inline-sample-slash",
+  ] as const) {
+    // A card's sample is a whole state: only what it changes from the idle
+    // one is the card.
+    const changed = Object.fromEntries(
+      Object.entries(INLINE_SAMPLES[card]()).filter(
+        ([key, value]) => JSON.stringify(value) !== JSON.stringify(idle[key]),
+      ),
+    );
+    for (const [sample, modal, open] of modals) {
+      const file = join(scratchCards, `${sample}-over-${card}.json`);
+      await writeFile(
+        file,
+        JSON.stringify({ ...idle, ...changed, help: idle.help, ...open }),
+      );
+      cases.push([`${sample} over ${card}`, modal, file]);
+    }
+  }
+  for (const [label, modal, data] of cases)
+    for (const cols of [40, 80, 120]) {
+      const json = parsed(
+        tuimark([
+          "dump",
+          "inline.tui",
+          "--data",
+          data,
+          "--cols",
+          String(cols),
+          "--rows",
+          "80",
+          "--inline",
+          "--format",
+          "json",
+        ]).out,
+      ) as {
+        errors: unknown[];
+        rows: number;
+        nodes: { id?: string; tag: string; y: number; h: number }[];
+      };
+      const at = json.nodes.findIndex((node) => node.id === modal);
+      const box = json.nodes[at];
+      // The open modal is the screen's last laid-out child (a closed modal
+      // is not in the dump), so the nodes after it are its own.
+      const after = json.nodes.slice(at + 1);
+      const bottom = Math.max(...after.map((node) => node.y + node.h));
+      const where = `dump ${label} at ${cols}x80`;
+      if (json.errors.length > 0 || !box)
+        failures.push(
+          `${where}: ${JSON.stringify(json.errors)}${box ? "" : ` no #${modal}`}`,
+        );
+      else if (after.some((node) => node.tag === "modal"))
+        failures.push(`${where}: another modal is laid out after #${modal}`);
+      else if (box.y !== 0 || box.h !== json.rows || bottom > box.h - 1)
+        failures.push(
+          `${where}: #${modal} is ${box.h} rows at ${box.y} with content to ${bottom}, in a region of ${json.rows}: the region must be the modal alone (inline.tcss hides the rest; its spacer is the modal's height)`,
+        );
+    }
+  await rm(scratchCards, { recursive: true, force: true });
+}
+
 // Narrow and short terminals: 40/60 columns at 24 rows and 80 columns at 10
 // rows, for the idle and approval samples of both documents. Each is a golden
 // plus the facts that must survive the squeeze: at 40 columns the first hint
@@ -804,6 +899,24 @@ const plays: Expect[] = [
   },
   { sample: "sample-help", input: "q", actions: ["help_close"] },
   { sample: "sample-help", input: "esc", actions: ["help_close"] },
+  // A short terminal scrolls the commands and the keys together: the last
+  // key is below at first, and two pages down the first command is above.
+  {
+    sample: "sample-help",
+    rows: 15,
+    input: "",
+    actions: [],
+    screen: ["? close help", "/mode plan|build"],
+    notScreen: ["shift+tab mode"],
+  },
+  {
+    sample: "sample-help",
+    rows: 15,
+    input: "pgdn pgdn",
+    actions: [],
+    screen: ["? close help", "shift+tab mode"],
+    notScreen: ["/mode plan|build"],
+  },
   // The slash popup: every edit of the composer reaches the parent (that
   // is what opens and filters it), and while it is open its keys are its
   // own — up and down are not the history, esc is not cancel, and the
@@ -1229,6 +1342,7 @@ const plays: Expect[] = [
     rows: 30,
     input: "esc",
     actions: ["palette_close"],
+    notScreen: ["Local Agent", "Message the model", "build · last"],
   },
   {
     sample: "inline-sample-help",
@@ -1244,7 +1358,62 @@ const plays: Expect[] = [
       "enter send",
       "shift/alt+enter new line",
     ],
+    // The region is the help alone: nothing shows at its edges.
+    notScreen: ["Local Agent", "Message the model", "build · last"],
   },
+  // A short terminal scrolls the commands and the keys together: the last
+  // key is below at first, and two pages down the first command is above.
+  {
+    sample: "inline-sample-help",
+    doc: "inline.tui",
+    inline: true,
+    rows: 15,
+    input: "",
+    actions: [],
+    screen: ["? close help", "/mode plan|build"],
+    notScreen: ["shift+tab mode"],
+  },
+  {
+    sample: "inline-sample-help",
+    doc: "inline.tui",
+    inline: true,
+    rows: 15,
+    input: "pgdn pgdn",
+    actions: [],
+    screen: ["? close help", "shift+tab mode"],
+    notScreen: ["/mode plan|build"],
+  },
+  // The composer is back, and focused, once the help or the palette closes.
+  ...(
+    [
+      // The help takes no typing; the palette's query takes it.
+      ["inline-sample-help", "help.open", "help_close", []],
+      [
+        "inline-sample-palette",
+        "palette.open",
+        "palette_close",
+        ["palette_query"],
+      ],
+    ] as const
+  ).map(([sample, path, close, typing]) => ({
+    sample,
+    doc: "inline.tui",
+    inline: true,
+    rows: 30,
+    input: "",
+    // A key typed while the modal is open is not the draft's; the set
+    // stands in for the controller, which answers the close event so.
+    steps: [
+      { key: "x" },
+      { key: "esc" },
+      { set: { path, value: false } },
+      { key: "h" },
+      { key: "i" },
+    ],
+    actions: [...typing, close, "typed", "typed"],
+    value: "hi",
+    screen: ["Local Agent", "build · last"],
+  })),
   {
     sample: "inline-sample-help",
     doc: "inline.tui",

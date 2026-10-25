@@ -18,7 +18,11 @@
 
   The palette and the help stay the kit's modals. A modal does not grow the
   region, so an empty spacer column grows it while either is open and the
-  modal is laid out against the taller region.
+  modal is laid out against the taller region. A modal is centered on the
+  region, so while one is open the screen carries class "helping" or
+  "paletting" and the region holds the spacer alone: the modal covers the
+  rows it would otherwise share with the appbar, the composer and the
+  status.
 
   Needs tuimark 0.5.1: inline mode, commit, <textarea>, the append write,
   data-bound href/src.
@@ -243,7 +247,7 @@
     </box>
   </template>
 
-  <screen id="main" focus="#composer" class:approving="approval.open" class:grant-session="approval.session_ok" class:grant-always="approval.always_ok" class:slashpop="slash.open" class:asking="question.open" class:viewing="details.open" class:paneling="panel.open" class:picking="panel.picking">
+  <screen id="main" focus="#composer" class:approving="approval.open" class:grant-session="approval.session_ok" class:grant-always="approval.always_ok" class:slashpop="slash.open" class:asking="question.open" class:viewing="details.open" class:paneling="panel.open" class:picking="panel.picking" class:helping="help.open" class:paletting="palette.open">
     <col id="app">
       <use template="k-appbar" brand="Local Agent" title="">
         <!-- By priority, so a narrow terminal clips the least important:
@@ -381,22 +385,22 @@
     <!-- The help overlay, verbatim from app.tui: the kit's k-help lists
          keys only and takes no slot, so the slash commands (help.cmds,
          from the one catalog) come first, then every labeled key, then
-         the composer's own enter keys as plain rows. The kit's .k-help
-         rows (q, ?) and on:escape close it. -->
+         the composer's own enter keys as plain rows, all in one scroll.
+         The kit's .k-help rows (q, ?) and on:escape close it. -->
     <modal id="help_dialog" class="k-help" open="help.open" title="Help" on:escape="help_close">
       <row class="k-help-close">
         <text class="k-help-key">?</text>
         <text class="k-help-label">close help</text>
       </row>
-      <text class="la-help-head la-help-first">Commands</text>
-      <col class="la-helpcmds" each="help.cmds as c" key="c.id">
-        <row class="la-helpcmd">
-          <text class="la-helpcmd-key">{c.cmd}</text>
-          <text class="la-helpcmd-desc">{c.desc}</text>
-        </row>
-      </col>
-      <text class="la-help-head">Keys</text>
-      <scroll id="help_keys" class="k-help-scroll" focusable="true">
+      <scroll id="help_body" class="k-help-scroll" focusable="true">
+        <text class="la-help-head la-help-first">Commands</text>
+        <col class="la-helpcmds" each="help.cmds as c" key="c.id">
+          <row class="la-helpcmd">
+            <text class="la-helpcmd-key">{c.cmd}</text>
+            <text class="la-helpcmd-desc">{c.desc}</text>
+          </row>
+        </col>
+        <text class="la-help-head">Keys</text>
         <row class="la-helpcmd">
           <text class="la-helpcmd-key">enter</text>
           <text class="la-helpcmd-desc">send · shift/alt+enter new line</text>
