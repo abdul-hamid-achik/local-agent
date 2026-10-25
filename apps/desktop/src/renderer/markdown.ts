@@ -19,6 +19,7 @@ export function renderMarkdown(source: string): string {
   const lines = source.replaceAll("\r\n", "\n").split("\n");
   const out: string[] = [];
   let inCode = false;
+  let codeFence = "";
   let codeLang = "";
   let codeBuf: string[] = [];
   let listOpen = false;
@@ -40,18 +41,29 @@ export function renderMarkdown(source: string): string {
   };
 
   for (const line of lines) {
-    const fence = line.match(/^```(\w*)\s*$/);
-    if (fence) {
-      if (inCode) closeCode();
-      else {
-        closeList();
-        inCode = true;
-        codeLang = fence[1] ?? "";
-      }
+    // As CommonMark has it: three or more backticks or tildes open a block,
+    // and the first word after them names its language. Only a bare fence
+    // of the same kind and at least as long closes it, so a longer fence
+    // holds a shorter one; an open block runs to the end.
+    const fence = line.match(/^ {0,3}(`{3,}|~{3,})(.*)$/);
+    const marks = fence?.[1] ?? "";
+    const info = fence?.[2] ?? "";
+    if (inCode) {
+      if (
+        marks[0] === codeFence[0] &&
+        marks.length >= codeFence.length &&
+        !info.trim()
+      )
+        closeCode();
+      else codeBuf.push(line);
       continue;
     }
-    if (inCode) {
-      codeBuf.push(line);
+    // Backticks after a backtick fence make the line inline code instead.
+    if (fence && !(marks[0] === "`" && info.includes("`"))) {
+      closeList();
+      inCode = true;
+      codeFence = marks;
+      codeLang = info.trim().split(/\s+/)[0] ?? "";
       continue;
     }
     const heading = line.match(/^(#{1,4})\s+(.+)$/);

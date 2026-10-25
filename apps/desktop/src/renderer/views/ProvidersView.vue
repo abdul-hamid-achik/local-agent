@@ -74,13 +74,29 @@
         <code>LOCAL_AGENT_LOCAL_ONLY=false</code> from the sidecar environment. Saved
         here, applied by restarting the sidecar. Chalupa owns placement and tunnels.
       </div>
+      <!-- A value may be a token or a URL with credentials: hidden until asked. -->
       <div v-for="(row, index) in envRows" :key="index" class="row env-row">
         <input v-model="row.key" type="text" placeholder="NAME" spellcheck="false" class="mono" />
-        <input v-model="row.value" type="text" placeholder="value" spellcheck="false" class="mono" />
+        <input
+          v-model="row.value"
+          :type="row.shown ? 'text' : 'password'"
+          placeholder="value"
+          spellcheck="false"
+          autocomplete="off"
+          class="mono"
+          :aria-label="`Value of ${row.key.trim() || 'new variable'}`"
+        />
+        <button
+          class="small ghost"
+          :aria-label="`${row.shown ? 'Hide' : 'Show'} value of ${row.key.trim() || 'new variable'}`"
+          @click="row.shown = !row.shown"
+        >
+          {{ row.shown ? "Hide" : "Show" }}
+        </button>
         <button class="small ghost" @click="envRows.splice(index, 1)">Remove</button>
       </div>
       <div class="row" style="margin-top: 10px">
-        <button class="small" @click="envRows.push({ key: '', value: '' })">Add variable</button>
+        <button class="small" @click="envRows.push({ key: '', value: '', shown: false })">Add variable</button>
         <button class="small primary" @click="saveEnv">Save &amp; restart sidecar</button>
       </div>
     </div>
@@ -97,7 +113,7 @@ import type { AdmissionView } from "#desktop/shared/protocol";
 // The admission card belongs to the model it ran for.
 const admission = ref<{ model: string; result: AdmissionView } | undefined>();
 const models = ref<{ endpoint: string; models: { name: string; size: number }[] } | undefined>();
-const envRows = ref<{ key: string; value: string }[]>([]);
+const envRows = ref<{ key: string; value: string; shown: boolean }[]>([]);
 const error = ref("");
 const notice = ref("");
 // Each answer applies only if it is still the newest of its kind, and a model
@@ -190,7 +206,7 @@ async function saveEnv(): Promise<void> {
 onMounted(async () => {
   try {
     const env = await api.getProviderEnv();
-    envRows.value = Object.entries(env).map(([key, value]) => ({ key, value }));
+    envRows.value = Object.entries(env).map(([key, value]) => ({ key, value, shown: false }));
   } catch {
     envRows.value = [];
   }

@@ -7,7 +7,8 @@
   --border-soft: #212b3b;
   --text: #e6edf3;
   --text-dim: #9aa7b8;
-  --text-faint: #6b7688;
+  /* Every text color holds 4.5:1 on every background (styles.test.ts). */
+  --text-faint: #8a94a6;
   --accent: #58a6ff;
   --accent-soft: rgba(88, 166, 255, 0.14);
   --green: #3fb950;
