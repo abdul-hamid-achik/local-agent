@@ -533,6 +533,69 @@ body {
   }
 }
 
+/* The configuration page's theme gallery: a radio per theme, worn as a chip
+   with the theme's own background as its swatch, over the screen in it. */
+.la-theme-gallery {
+  margin: 20px 0;
+}
+
+.la-theme-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0 0 12px;
+  padding: 0;
+  border: 0;
+}
+
+.la-theme-choice {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  border: 1px solid var(--vp-c-divider);
+  border-radius: 999px;
+  color: var(--vp-c-text-2);
+  font-family: var(--vp-font-family-mono);
+  font-size: 12px;
+  line-height: 20px;
+  cursor: pointer;
+}
+
+.la-theme-choice:hover {
+  border-color: var(--vp-c-text-3);
+  color: var(--vp-c-text-1);
+}
+
+.la-theme-choice:has(input:checked) {
+  border-color: var(--vp-c-brand-1);
+  color: var(--vp-c-text-1);
+  box-shadow: inset 0 0 0 1px var(--vp-c-brand-1);
+}
+
+.la-theme-choice:has(input:focus-visible) {
+  outline: 2px solid var(--vp-c-brand-1);
+  outline-offset: 2px;
+}
+
+.la-theme-swatch {
+  width: 10px;
+  height: 10px;
+  border: 1px solid var(--vp-c-divider);
+  border-radius: 50%;
+}
+
+.la-theme-window {
+  border-color: var(--vp-c-divider);
+}
+
+.la-theme-gallery figcaption {
+  margin-top: 8px;
+  color: var(--vp-c-text-2);
+  font-size: 13px;
+  text-align: right;
+}
+
 .la-terminal-figure figcaption {
   margin-top: 13px;
   color: var(--la-faint);

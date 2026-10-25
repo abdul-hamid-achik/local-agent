@@ -4,6 +4,10 @@ description: Configure the Local Agent Bun CLI with flags and environment variab
 outline: deep
 ---
 
+<script setup>
+import ThemeGallery from './.vitepress/theme/ThemeGallery.vue'
+</script>
+
 # Configuration
 
 There is no configuration file. Configuration is command-line flags plus
@@ -59,7 +63,13 @@ See [Providers](/providers).
 ## Themes
 
 `--theme` accepts `dark`, `light`, `auto`, or a named theme. Themes apply to
-the tuimark client only. Eighteen named themes are bundled:
+the tuimark client only. `auto` picks `dark` or `light` from the terminal's
+background. Here is the same screen of the released client in `dark`,
+`light` and every named theme:
+
+<ThemeGallery />
+
+Eighteen named themes are bundled:
 
 | Family | Themes |
 | --- | --- |
