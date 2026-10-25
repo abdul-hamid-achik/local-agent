@@ -14,6 +14,11 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { SAMPLES } from "#cli/tuimark/fixtures";
 import { resolvePinned } from "#cli/tuimark/launch";
+import {
+  type Run as Runs,
+  type StyledDump,
+  styledRuns,
+} from "#cli/tuimark/runs";
 import { namedThemes, themedDocument } from "#cli/tuimark/themes";
 
 // import.meta.url, not import.meta.path: vitest imports this module too.
@@ -88,19 +93,7 @@ export const galleryThemes = (): string[] => [
 ];
 
 /** A run's attributes, as bits: what the page draws besides its colors. */
-const FLAGS: Record<string, number> = {
-  bold: 1,
-  dim: 2,
-  italic: 4,
-  underline: 8,
-};
-
-type Dump = {
-  errors: unknown[];
-  grid: string[];
-  styles: { x: number; w: number; fg?: string; bg?: string; a?: string[] }[][];
-};
-type Run = [text: string, fg: number, bg: number, flags: number];
+type Run = Runs<number>;
 
 /** A color table: each color's index, added the first time it is seen. */
 function palette(): { colors: string[]; color: (value?: string) => number } {
@@ -154,33 +147,10 @@ async function frame(
   );
   if (run.exitCode !== 0)
     throw new Error(`tuimark dump ${name}: ${run.stderr.toString()}`);
-  const dump = JSON.parse(run.stdout.toString()) as Dump;
+  const dump = JSON.parse(run.stdout.toString()) as StyledDump;
   if (dump.errors.length > 0)
     throw new Error(`tuimark dump ${name}: ${JSON.stringify(dump.errors)}`);
-  // A run is [text, fg, bg, flags]; the runs of a row are contiguous from its
-  // first cell, and a cell is one code point (the samples have no wide
-  // characters), so the text is sliced by code point, not by UTF-16 unit.
-  return dump.grid.map((text, y) => {
-    const cells = Array.from(text);
-    let at = 0;
-    return (dump.styles[y] ?? []).map((run): Run => {
-      if (run.x !== at)
-        throw new Error(
-          `${name} row ${y}: a run starts at ${run.x}, not ${at}`,
-        );
-      at = run.x + run.w;
-      const flags = (run.a ?? []).reduce(
-        (bits, a) => bits | (FLAGS[a] ?? 0),
-        0,
-      );
-      return [
-        cells.slice(run.x, run.x + run.w).join(""),
-        color(run.fg),
-        color(run.bg),
-        flags,
-      ];
-    });
-  });
+  return styledRuns(dump, name, color);
 }
 
 /** The background most of a frame's cells have: its screen's own. */

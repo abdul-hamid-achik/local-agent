@@ -27,6 +27,7 @@ import {
   WRAPPED_LINE,
 } from "#cli/tuimark/fixtures";
 import { resolvePinned } from "#cli/tuimark/launch";
+import { type StyledDump, styledRuns } from "#cli/tuimark/runs";
 import { namedThemes, themedDocument } from "#cli/tuimark/themes";
 
 const ui = join(dirname(import.meta.path), "ui");
@@ -780,42 +781,6 @@ for (const name of namedThemes(join(ui, "themes"))) {
 // site-screens.ts writes into themes.json: [text, fg, bg, flags], flags
 // bold 1, dim 2, italic 4, underline 8, with the colors spelled out so a
 // change to one token reads as a change to its rows.
-const FLAGS: Record<string, number> = {
-  bold: 1,
-  dim: 2,
-  italic: 4,
-  underline: 8,
-};
-type StyledDump = {
-  errors: unknown[];
-  grid: string[];
-  styles: { x: number; w: number; fg?: string; bg?: string; a?: string[] }[][];
-};
-function styledRuns(dump: StyledDump, label: string): string {
-  const lines = dump.grid.map((text, y) => {
-    const cells = Array.from(text);
-    let at = 0;
-    const runs = (dump.styles[y] ?? []).map((run) => {
-      if (run.x !== at)
-        failures.push(`${label} row ${y}: a run starts at ${run.x}, not ${at}`);
-      at = run.x + run.w;
-      const flags = (run.a ?? []).reduce(
-        (bits, a) => bits | (FLAGS[a] ?? 0),
-        0,
-      );
-      return [
-        cells.slice(run.x, run.x + run.w).join(""),
-        run.fg ?? "",
-        run.bg ?? "",
-        flags,
-      ];
-    });
-    if (at !== cells.length)
-      failures.push(`${label} row ${y}: runs end at ${at} of ${cells.length}`);
-    return JSON.stringify(runs);
-  });
-  return `${lines.join("\n")}\n`;
-}
 for (const name of ["dark", "light", ...namedThemes(join(ui, "themes"))]) {
   const builtin = name === "dark" || name === "light";
   for (const [doc, sample, inline, golden] of [
@@ -852,11 +817,14 @@ for (const name of ["dark", "light", ...namedThemes(join(ui, "themes"))]) {
       const json = parsed(run.out) as StyledDump;
       if (json.errors.length > 0)
         failures.push(`${label}: ${JSON.stringify(json.errors)}`);
+      const rows = styledRuns(json, label, (value = "") => value);
       await matches(
         join(ui, "golden", golden),
-        styledRuns(json, label),
+        `${rows.map((runs) => JSON.stringify(runs)).join("\n")}\n`,
         "golden",
       );
+    } catch (error) {
+      failures.push(`${label}: ${(error as Error).message}`);
     } finally {
       if (!builtin) await rm(dirname(themed), { recursive: true, force: true });
     }
