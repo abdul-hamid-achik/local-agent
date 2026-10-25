@@ -3,10 +3,11 @@ version: 1
 artifactRoot: .glyphrun/runs
 snapshotRoot: .glyphrun/snapshots
 
-# Preserve every artifact from one full task glyphrun batch so a late failure
-# cannot prune the diagnostics for an earlier scenario in the same run.
+# Preserve every artifact from one full verification (CI runs both batches,
+# 6 Bun and 24 Tuimark specs) so a later spec cannot prune the run of an
+# earlier failure before CI uploads it.
 retention:
-  keepRuns: 20
+  keepRuns: 32
 
 terminal:
   cols: 120

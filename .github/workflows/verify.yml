@@ -46,6 +46,27 @@ jobs:
           done
       - run: bun run test:integration
       - run: bun run test:integration:tuimark
+      # A PTY spec that fails only here keeps its run (frames, screens,
+      # events) for a week, so the failure is read instead of guessed. Only
+      # the runs that did not pass, or never wrote run.json: each is several
+      # megabytes.
+      - name: Collect the Glyphrun runs that did not pass
+        if: failure()
+        run: |
+          mkdir -p "$RUNNER_TEMP/glyphrun-failed"
+          for dir in .glyphrun/runs/*/; do
+            [ -d "$dir" ] || continue
+            jq -e '.status == "passed"' "${dir}run.json" > /dev/null 2>&1 ||
+              cp -R "${dir%/}" "$RUNNER_TEMP/glyphrun-failed/"
+          done
+      - name: Keep the Glyphrun runs that did not pass
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: glyphrun-${{ matrix.os }}
+          path: ${{ runner.temp }}/glyphrun-failed/
+          retention-days: 7
+          if-no-files-found: ignore
 
   site:
     name: VitePress site verification
