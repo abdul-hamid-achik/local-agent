@@ -180,7 +180,7 @@ test("thinking streams into its own block, appended as it comes, and is gone onc
     };
   });
   await ui.fire("send", "go");
-  await new Promise((r) => setTimeout(r, 40));
+  await until(() => runsText(store(ui).thinking.runs).endsWith("four\nfi"));
   const during = store(ui);
   expect(during.thinking.on).toBe(true);
   // The runs are appended as they arrive; the markup shows the end of them in a
@@ -189,9 +189,8 @@ test("thinking streams into its own block, appended as it comes, and is gone onc
   expect(ui.batches.flat().some((w) => w.op === "append")).toBe(true);
   expect(during.live.active).toBe(false);
   toAnswer();
-  await new Promise((r) => setTimeout(r, 20));
+  await until(() => store(ui).live.active);
   expect(store(ui).thinking.on).toBe(false);
-  expect(store(ui).live.active).toBe(true);
   await client.idle();
   const s = store(ui);
   expect(s.thinking).toEqual({ on: false, runs: [] });
@@ -235,7 +234,7 @@ test("the live message is flushed while streaming, with one write in flight at a
     };
   });
   await ui.fire("send", "go");
-  await new Promise((r) => setTimeout(r, 40));
+  await until(() => liveText(store(ui)).includes("partial reply"));
   expect(store(ui).live).toMatchObject({ active: true, is_asst: true });
   expect(liveText(store(ui)).trim()).toBe("partial reply");
   release();
@@ -558,6 +557,37 @@ async function until(ok: () => boolean) {
 async function untilApproval(ui: FakeHost) {
   await until(() => store(ui).status === APPROVAL_STATUS);
   expect(store(ui).approval.open).toBe(true);
+}
+
+/**
+ * Holds the approval dialog's arm timer: it fires when the test calls `arm()`,
+ * never on the clock, so no key can race it. `release()` puts the real timer back.
+ */
+function holdArmTimer() {
+  const armMs = 80_000;
+  const held: (() => void)[] = [];
+  let fired = 0;
+  const real = globalThis.setTimeout;
+  globalThis.setTimeout = ((
+    fn: () => void,
+    ms?: number,
+    ...rest: unknown[]
+  ) => {
+    if (ms !== armMs) return real(fn, ms, ...rest);
+    held.push(fn);
+    return 0;
+  }) as unknown as typeof setTimeout;
+  return {
+    armMs,
+    /** Arms the next dialog that has opened (waits for its timer to be set). */
+    async arm() {
+      await until(() => held.length > fired);
+      held[fired++]?.();
+    },
+    release() {
+      globalThis.setTimeout = real;
+    },
+  };
 }
 
 test("approval: the dialog opens with the tool card, and allow resolves the promise", async () => {
@@ -999,7 +1029,7 @@ test("a cancelled turn says Cancelled, takes the prompt back and restores the dr
     );
   });
   await ui.fire("send", "slow one");
-  await new Promise((r) => setTimeout(r, 10));
+  await until(() => liveText(store(ui)).includes("thinking"));
   await ui.fire("cancel");
   await client.idle();
   expect(store(ui).status).toBe("Cancelled");
@@ -1028,7 +1058,7 @@ test("fullscreen: a cancelled or failed reply keeps what had arrived", async () 
     );
   });
   await ui.fire("send", "slow one");
-  await new Promise((r) => setTimeout(r, 15));
+  await until(() => liveText(store(ui)).includes("half an answer"));
   await ui.fire("cancel");
   await client.idle();
   expect(store(ui).status).toBe("Cancelled");
@@ -1072,8 +1102,11 @@ test("fullscreen: a stopped reply past the view's bounds does not promise the re
     expect(reply).not.toContain("shown when it is finished");
     expect(reply).toContain("the turn stopped before it finished");
   };
+  // The generator resumes after `long` once the controller has taken all of it.
+  let streamed = false;
   const cancelled = setup(async function* ({ options }) {
     yield* long();
+    streamed = true;
     await new Promise((_, reject) =>
       options.signal.addEventListener("abort", () =>
         reject(new Error("aborted")),
@@ -1081,7 +1114,7 @@ test("fullscreen: a stopped reply past the view's bounds does not promise the re
     );
   });
   await cancelled.ui.fire("send", "long one");
-  await new Promise((r) => setTimeout(r, 15));
+  await until(() => streamed);
   await cancelled.ui.fire("cancel");
   await cancelled.client.idle();
   expect(store(cancelled.ui).status).toBe("Cancelled");
@@ -1110,6 +1143,29 @@ test("esc while an approval is pending denies it", async () => {
   expect(decisions).toEqual([false]);
 });
 
+test("esc with an approval open and a send queued denies it and gives the send back", async () => {
+  // Like the runtime's loop, the turn stops on the aborted signal once the deny is in.
+  const { ui, client, seen } = setup(async function* (ctx) {
+    yield* withApproval(ctx);
+    ctx.options.signal.throwIfAborted();
+  });
+  await ui.fire("send", "edit");
+  await untilApproval(ui);
+  await ui.fire("send", "queued one");
+  // The real Esc of a turn, not the dialog's own cancel.
+  await ui.fire("cancel");
+  await client.idle();
+  expect(decisions).toEqual([false]);
+  expect(store(ui).approval.open).toBe(false);
+  expect(store(ui).status).toBe(
+    "Cancelled · queued message back in the composer",
+  );
+  // Back in the composer, not run as a second turn.
+  expect(store(ui).draft).toBe("queued one");
+  expect(seen).toHaveLength(1);
+  expect(isBusy(ui)).toBe(false);
+});
+
 test("ctrl+c (quit) with the dialog open denies it and cancels the turn; the next press quits", async () => {
   const { ui, client } = setup(withApproval);
   await ui.fire("send", "edit");
@@ -1131,27 +1187,33 @@ test("the process signal with the dialog open resolves the approval to deny", as
 });
 
 test("a confirm before the dialog is armed is ignored; deny always works", async () => {
-  const { ui, client } = setup(withApproval, { armMs: 80 });
-  await ui.fire("send", "edit");
-  await until(() => store(ui).approval.open);
-  expect(store(ui).status).toBe(APPROVAL_WAIT_STATUS);
-  await ui.fire("dialog_confirm");
-  expect(store(ui).approval.open).toBe(true);
-  expect(decisions).toEqual([]);
-  // The swallowed `y` is not silent: the status says to press it again.
-  expect(store(ui).status).toBe(APPROVAL_UNARMED_STATUS);
-  await until(() => store(ui).status === APPROVAL_STATUS);
-  await ui.fire("dialog_confirm");
-  expect(decisions).toEqual([true]);
-  await client.idle();
+  const timer = holdArmTimer();
+  try {
+    const { ui, client } = setup(withApproval, { armMs: timer.armMs });
+    await ui.fire("send", "edit");
+    await until(() => store(ui).approval.open);
+    expect(store(ui).status).toBe(APPROVAL_WAIT_STATUS);
+    await ui.fire("dialog_confirm");
+    expect(store(ui).approval.open).toBe(true);
+    expect(decisions).toEqual([]);
+    // The swallowed `y` is not silent: the status says to press it again.
+    expect(store(ui).status).toBe(APPROVAL_UNARMED_STATUS);
+    await timer.arm();
+    await until(() => store(ui).status === APPROVAL_STATUS);
+    await ui.fire("dialog_confirm");
+    expect(decisions).toEqual([true]);
+    await client.idle();
 
-  // The same turn again: deny works at once, before the arm delay.
-  await ui.fire("send", "edit again");
-  await until(() => store(ui).approval.open);
-  expect(store(ui).status).toBe(APPROVAL_WAIT_STATUS);
-  await ui.fire("dialog_cancel");
-  expect(decisions).toEqual([true, false]);
-  await client.idle();
+    // The same turn again: deny works at once, before the arm delay.
+    await ui.fire("send", "edit again");
+    await until(() => store(ui).approval.open);
+    expect(store(ui).status).toBe(APPROVAL_WAIT_STATUS);
+    await ui.fire("dialog_cancel");
+    expect(decisions).toEqual([true, false]);
+    await client.idle();
+  } finally {
+    timer.release();
+  }
 });
 
 test("an approval is armed by default 300 ms after it opens", () => {
@@ -1252,6 +1314,34 @@ test("a refused write is shown on the status line, once, and remembered in a bou
   }
   expect(client.writeErrors.length).toBe(20);
   failing = false;
+});
+
+test("a transport that throws is shown on the status line too, and the turn still ends", async () => {
+  const { ui, client } = setup(reply("hi"));
+  const original = ui.batch.bind(ui);
+  ui.batch = async (writes) => {
+    if (writes.some((w) => w.path === "messages"))
+      throw new Error("pipe closed");
+    return original(writes);
+  };
+  await ui.fire("send", "hi");
+  await client.idle();
+  expect(store(ui).status).toContain("UI update failed: pipe closed");
+  expect(client.writeErrors).toContain("pipe closed");
+  expect(isBusy(ui)).toBe(false);
+});
+
+test("inline: a commit that throws is shown on the status line, and the turn still ends", async () => {
+  const { ui, client } = setup(reply("alpha beta"), inline);
+  ui.commit = async () => {
+    throw new Error("pipe closed");
+  };
+  await ui.fire("send", "hi");
+  await client.idle();
+  // The idle status comes after the notice, so it is in the log, not on screen.
+  expect(ui.statusLog()).toContain("UI update failed: pipe closed");
+  expect(client.writeErrors).toContain("pipe closed");
+  expect(isBusy(ui)).toBe(false);
 });
 
 test("a multi-line error is one line on the status row and whole in its notice", async () => {
@@ -1964,13 +2054,16 @@ test("a reply streams as appends: the live message is written whole once, then o
     "```ts\nconst x = 1;\n```\n\n",
     "The end.",
   ];
+  // Taken inside the turn, asserted after it: an expect in the generator
+  // would only turn into a failed turn the later checks still pass.
+  let shown = "";
   const { ui, client } = setup(async function* () {
     for (const text of pieces) {
       yield { type: "text", text };
       await new Promise((r) => setTimeout(r, 12));
     }
-    await new Promise((r) => setTimeout(r, 40));
-    expect(liveText(store(ui))).toContain("The end.");
+    await until(() => liveText(store(ui)).includes("The end."));
+    shown = liveText(store(ui));
     yield {
       type: "message",
       message: { role: "assistant", content: pieces.join("") },
@@ -1978,6 +2071,8 @@ test("a reply streams as appends: the live message is written whole once, then o
   });
   await ui.fire("send", "go");
   await client.idle();
+  expect(shown).toContain("The end.");
+  expect(store(ui).messages.some((m: MessageView) => m.is_error)).toBe(false);
   const writes = ui.batches.flat();
   // The live message is set whole once; the other sets of `live` are the idle value.
   expect(
@@ -2018,7 +2113,8 @@ test("a refused append is made good: the next write sends the live message again
     return undefined;
   };
   await ui.fire("send", "go");
-  await new Promise((r) => setTimeout(r, 150));
+  // The ten words are in, and both refusals have happened, before it is checked.
+  await until(() => refused === 2 && liveText(store(ui)).trim() === text);
   expect(refused).toBe(2);
   // What the screen would show is the whole reply, not a hole where the refused text went.
   expect(liveText(store(ui)).trim()).toBe(text);
@@ -2267,7 +2363,7 @@ test("inline: esc commits the partial reply that had arrived", async () => {
     );
   }, inline);
   await ui.fire("send", "slow one");
-  await new Promise((r) => setTimeout(r, 15));
+  await until(() => liveText(store(ui)).includes("half an answer"));
   await ui.fire("cancel");
   await client.idle();
   expect(store(ui).status).toBe("Cancelled");
@@ -2331,7 +2427,7 @@ test("inline: quit commits the partial reply before answering quit", async () =>
     );
   }, inline);
   await ui.fire("send", "go");
-  await new Promise((r) => setTimeout(r, 15));
+  await until(() => liveText(store(ui)).includes("still writing"));
   // The first press cancels; the second, while the turn winds down, quits.
   expect(await ui.fire("quit_request")).toBeUndefined();
   expect(await ui.fire("quit_request")).toBe("quit");
@@ -2601,15 +2697,22 @@ test("inline: the popup is region state and is never committed", async () => {
   const { ui, client } = setup(reply("hello"), { presentation: "inline" });
   await ui.fire("typed", "/m");
   expect(store(ui).slash.open).toBe(true);
+  const rows = store(ui).slash.rows.map((row) => row.cmd);
+  expect(rows).toEqual(expect.arrayContaining(["/mode", "/model", "/mouse"]));
   expect(ui.commits).toEqual([]);
   await ui.fire("slash_complete", "/m");
   expect(store(ui).draft).toBe("/mode ");
   expect(ui.commits).toEqual([]);
   await ui.fire("send", "hi");
   await client.idle();
-  // The turn committed its views; none of them is popup state.
+  // The turn committed its views; none of them is popup state: no row of it
+  // was printed, and the popup was written closed, not committed.
   expect(ui.commits.length).toBeGreaterThan(0);
-  expect(JSON.stringify(ui.commits)).not.toContain("tab complete");
+  const committed = JSON.stringify(ui.commits);
+  for (const cmd of rows) expect(committed).not.toContain(cmd);
+  const slashWrites = ui.batches.flat().filter((w) => w.path === "slash");
+  expect(slashWrites.at(0)?.value).toMatchObject({ open: true });
+  expect(slashWrites.at(-1)?.value).toEqual({ open: false, rows: [] });
   expect(store(ui).slash.open).toBe(false);
 });
 
@@ -2980,21 +3083,27 @@ test("grants: a truncated preview refuses `a` (dialog stays, `y` still works, no
 });
 
 test("grants: an unarmed `a` is swallowed with feedback, like `y`", async () => {
-  const { ui, client } = setup(turnsAsking([[editProposal()]]), {
-    armMs: 80,
-  });
-  await ui.fire("send", "one");
-  await until(() => store(ui).approval.open);
-  expect(store(ui).status).toBe(APPROVAL_WAIT_STATUS);
-  await ui.fire("dialog_session");
-  expect(store(ui).approval.open).toBe(true);
-  expect(store(ui).status).toBe(APPROVAL_UNARMED_SESSION_STATUS);
-  expect(decisions).toEqual([]);
-  await until(() => store(ui).status === APPROVAL_STATUS);
-  await ui.fire("dialog_session");
-  await client.idle();
-  expect(decisions).toEqual([true]);
-  expect(store(ui).header.grants).toBe("auto: files");
+  const timer = holdArmTimer();
+  try {
+    const { ui, client } = setup(turnsAsking([[editProposal()]]), {
+      armMs: timer.armMs,
+    });
+    await ui.fire("send", "one");
+    await until(() => store(ui).approval.open);
+    expect(store(ui).status).toBe(APPROVAL_WAIT_STATUS);
+    await ui.fire("dialog_session");
+    expect(store(ui).approval.open).toBe(true);
+    expect(store(ui).status).toBe(APPROVAL_UNARMED_SESSION_STATUS);
+    expect(decisions).toEqual([]);
+    await timer.arm();
+    await until(() => store(ui).status === APPROVAL_STATUS);
+    await ui.fire("dialog_session");
+    await client.idle();
+    expect(decisions).toEqual([true]);
+    expect(store(ui).header.grants).toBe("auto: files");
+  } finally {
+    timer.release();
+  }
 });
 
 test("inline grants: a command grant skips the second dialog and commits are unchanged", async () => {
@@ -4362,6 +4471,7 @@ test("F1: a send during a gated session load never starts a turn (fullscreen)", 
   const second = fakeSession("bbb222", [
     { role: "user", content: "BBB saved prompt" },
   ]);
+  let loading = false;
   let releaseLoad: () => void = () => {};
   const loadGate = new Promise<void>((r) => {
     releaseLoad = r;
@@ -4372,6 +4482,7 @@ test("F1: a send during a gated session load never starts a turn (fullscreen)", 
       { handle: "bbb222", messages: 1 },
     ],
     load: async () => {
+      loading = true;
       await loadGate;
       return second;
     },
@@ -4383,7 +4494,7 @@ test("F1: a send during a gated session load never starts a turn (fullscreen)", 
   await ui.fire("send", "/sessions");
   await ui.fire("panel_next");
   const switching = ui.fire("panel_run");
-  await new Promise((r) => setTimeout(r, 20));
+  await until(() => loading);
   await ui.fire("send", "hello during load");
   expect(seen).toHaveLength(0);
   releaseLoad();
@@ -4402,6 +4513,7 @@ test("F1: a send during a gated session load never starts a turn (inline compose
   const second = fakeSession("bbb222", [
     { role: "user", content: "BBB saved prompt" },
   ]);
+  let loading = false;
   let releaseLoad: () => void = () => {};
   const loadGate = new Promise<void>((r) => {
     releaseLoad = r;
@@ -4412,6 +4524,7 @@ test("F1: a send during a gated session load never starts a turn (inline compose
       { handle: "bbb222", messages: 1 },
     ],
     load: async () => {
+      loading = true;
       await loadGate;
       return second;
     },
@@ -4424,13 +4537,22 @@ test("F1: a send during a gated session load never starts a turn (inline compose
   await ui.fire("send", "/sessions");
   await ui.fire("panel_next");
   const switching = ui.fire("panel_run");
-  await new Promise((r) => setTimeout(r, 20));
+  await until(() => loading);
   await ui.fire("send", "hello during load");
   expect(seen).toHaveLength(0);
   releaseLoad();
   await switching;
   expect(store(ui).header.session).toBe("session bbb222");
+  await ui.fire("send", "after switch");
   await client.idle();
+  // The held send is gone: not in the model's history, not in the scrollback.
+  expect(seen).toHaveLength(1);
+  expect(seen[0]?.messages).toEqual([
+    "user:BBB saved prompt",
+    "user:after switch",
+  ]);
+  expect(JSON.stringify(ui.commits)).not.toContain("hello during load");
+  expect(printed(ui)).toContain("You: after switch");
 });
 
 test("F7: a dismissed slash popup reopens for a fresh draft after a send", async () => {
@@ -4612,7 +4734,7 @@ test("F5: concurrent quit requests resolve only after the partial reply prints o
   }, inline);
   ui.ackMs = 30;
   await ui.fire("send", "go");
-  await new Promise((r) => setTimeout(r, 60));
+  await until(() => liveText(store(ui)).includes("partial words here"));
   // The first press only cancels the turn.
   expect(await ui.fire("quit_request")).toBeUndefined();
   const atResolve: string[][] = [];
