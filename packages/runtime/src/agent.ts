@@ -36,6 +36,7 @@ import {
   type Intent,
   projectInstructions,
 } from "#runtime/instructions";
+import { LIMITS } from "#runtime/limits";
 import {
   gatewayTarget,
   type McpConnection,
@@ -181,7 +182,7 @@ const pathProperty = (extra = "") => ({
 });
 
 const FETCH_TIMEOUT_MS = 15_000;
-const FETCH_MAX_BYTES = 512 * 1024;
+const FETCH_MAX_BYTES = LIMITS.fetchBytes;
 // Docs URLs redirect constantly (http→https, trailing-slash moves); following
 // them is friendlier than the MCP policy of refusing redirects, but a manual
 // loop keeps the hop count bounded.
@@ -903,7 +904,7 @@ function decodeEntities(text: string): string {
   );
 }
 
-const IMAGE_MAX_BYTES = 5 * 1024 * 1024;
+const IMAGE_MAX_BYTES = LIMITS.imageBytes;
 const PNG_SIGNATURE = Buffer.from([
   0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
 ]);
@@ -1347,6 +1348,61 @@ const READ_ONLY_TOOLS = new Set([
   "ask_user",
   "goal_status",
 ]);
+/** What a host's runs can offer: ask_user only where the host can ask,
+ * goal_status only while a goal runs (see AgentOptions.ask and .goal). */
+type Host = Readonly<{ ask: boolean; goal: boolean }>;
+
+function offeredBuiltins(host: Host): Tool[] {
+  return tools.filter(
+    (tool) =>
+      (tool.function.name !== "ask_user" || host.ask) &&
+      (tool.function.name !== "goal_status" || host.goal),
+  );
+}
+
+/** Each builtin in one line for a person; the descriptions are the model's. */
+const SUMMARIES: Readonly<Record<string, string>> = {
+  read: "Read a UTF-8 text file in the workspace, in parts when it is long.",
+  read_image:
+    "Attach a PNG, JPEG, WebP or GIF image from the workspace; needs a vision model.",
+  list: "List a directory, skipping .git and node_modules.",
+  search:
+    "Find a literal string or a regular expression in the workspace's text files.",
+  fetch: "GET one http(s) URL and return it as readable text.",
+  web_search:
+    "Search the web through SearXNG when it is configured, otherwise DuckDuckGo Lite.",
+  task: "Hand one read-only investigation to a subagent with its own context.",
+  edit: "Replace one exact occurrence in an existing file.",
+  write: "Create a file, or replace a whole one.",
+  run_command:
+    "Run one program from an argv list, with no shell and a timeout.",
+  todo_write: "Replace the run's todo list.",
+  ask_user: "Ask the user one question and wait for the answer.",
+  goal_status: "Report where the running goal stands.",
+};
+
+/** A builtin tool as a client's reference view lists it. */
+export type ToolReference = Readonly<{
+  name: string;
+  summary: string;
+  /** Plan offers it, and build runs it with no approval; a tool that is not
+   * read-only has an effect, which build puts to the host's approval (a
+   * permission rule, a flag or a card). */
+  readOnly: boolean;
+}>;
+
+/** The builtin tools a host's runs offer, in the order the model sees them. */
+export function toolReference(host: Host): ToolReference[] {
+  return offeredBuiltins(host).map((tool) => {
+    const name = tool.function.name ?? "";
+    return {
+      name,
+      summary: SUMMARIES[name] ?? "",
+      readOnly: READ_ONLY_TOOLS.has(name),
+    };
+  });
+}
+
 /** Inspection tools whose repeats are compared: the same call again, with
  * the same result as one the model can still see, is answered with a note
  * instead of a second copy. */
@@ -1914,13 +1970,10 @@ async function* agentTurn(
     ...options.fetchPolicy,
   });
   const mcpTools = new Map<string, McpConnection>();
-  // ask_user only where the host can ask, goal_status only while a goal
-  // runs (see AgentOptions.ask and .goal).
-  const builtins = tools.filter(
-    (tool) =>
-      (tool.function.name !== "ask_user" || options.ask) &&
-      (tool.function.name !== "goal_status" || options.goal),
-  );
+  const builtins = offeredBuiltins({
+    ask: options.ask !== undefined,
+    goal: options.goal !== undefined,
+  });
   const availableTools = [...builtins];
   for (const connection of options.mcp ?? []) {
     for (const tool of connection.tools) {

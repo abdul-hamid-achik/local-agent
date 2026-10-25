@@ -6,6 +6,7 @@ import {
   ProviderSchema,
   providerStreamIdleTimeoutMs,
 } from "#runtime/config";
+import { LIMITS } from "#runtime/limits";
 import { tunnelLost, withRetries } from "#runtime/retry";
 
 export {
@@ -27,6 +28,8 @@ export {
   type SessionContext,
   StepLimitError,
   sessionProblem,
+  type ToolReference,
+  toolReference,
 } from "#runtime/agent";
 export { commandLine, secretPathNotes, shellWord } from "#runtime/command";
 export {
@@ -48,6 +51,7 @@ export {
   planContextAdmitted,
   planContextSize,
 } from "#runtime/context";
+export { LIMITS } from "#runtime/limits";
 export {
   connectMcp,
   connectMcpServers,
@@ -132,7 +136,10 @@ export const MessageSchema = z.object({
   thinking: z.string().max(MAX_MESSAGE_CHARS).optional(),
   /** Base64 images (no data URI prefix), Ollama's vision convention; they ride the message that produced them. */
   images: z.array(z.string().max(7_000_000)).max(4).optional(),
-  tool_calls: z.array(ToolCallSchema).max(32).optional(),
+  tool_calls: z
+    .array(ToolCallSchema)
+    .max(LIMITS.toolCallsPerResponse)
+    .optional(),
   tool_name: z.string().max(128).optional(),
   tool_call_id: z.string().min(1).max(1024).optional(),
 });
@@ -474,9 +481,9 @@ async function* openAILocalChat(
     for (const [index, call] of [...pendingCalls.entries()].sort(
       (a, b) => a[0] - b[0],
     )) {
-      if (++callCount > 32)
+      if (++callCount > LIMITS.toolCallsPerResponse)
         throw new Error("Model response exceeds tool call limit");
-      if (`${call.name}${call.args}`.length > 100_000)
+      if (`${call.name}${call.args}`.length > LIMITS.toolCallChars)
         throw new Error("Tool arguments exceed size limit");
       let arguments_: unknown;
       try {
@@ -509,7 +516,7 @@ async function* openAILocalChat(
   for await (const part of parseOpenAISSE(response.body)) {
     signal.throwIfAborted();
     outputSize += JSON.stringify(part).length;
-    if (outputSize > 1_000_000)
+    if (outputSize > LIMITS.responseChars)
       throw new Error("Model response exceeds size limit");
     if (part.error !== undefined) {
       const detail =
@@ -624,7 +631,7 @@ export async function* chat(
     for await (const part of stream) {
       signal.throwIfAborted();
       outputSize += JSON.stringify(part.message ?? {}).length;
-      if (outputSize > 1_000_000)
+      if (outputSize > LIMITS.responseChars)
         throw new Error("Model response exceeds size limit");
       if (part.message?.thinking)
         yield RunEventSchema.parse({
@@ -637,9 +644,9 @@ export async function* chat(
           text: part.message.content,
         });
       for (const rawCall of part.message?.tool_calls ?? []) {
-        if (++callCount > 32)
+        if (++callCount > LIMITS.toolCallsPerResponse)
           throw new Error("Model response exceeds tool call limit");
-        if (JSON.stringify(rawCall).length > 100_000)
+        if (JSON.stringify(rawCall).length > LIMITS.toolCallChars)
           throw new Error("Tool arguments exceed size limit");
         yield RunEventSchema.parse({ type: "tool_call", call: rawCall });
       }

@@ -1,5 +1,7 @@
 /** Framed JSON-RPC between Electron main and the Bun sidecar (NDJSON stdio). */
 
+import type { LIMITS, ToolReference } from "@local-agent/runtime";
+
 export type RpcRequest = {
   id: number;
   method: string;
@@ -47,7 +49,14 @@ export const SidecarMethods = {
   projectCancel: "project.cancel",
   specsList: "specs.list",
   docsList: "docs.list",
+  reference: "reference",
 } as const;
+
+/** The Reference view's tools and bounds, as the runtime itself has them. */
+export type ReferenceView = {
+  tools: ToolReference[];
+  limits: typeof LIMITS;
+};
 
 export type ProviderView = {
   type: "ollama" | "ollama_remote" | "openai_local";

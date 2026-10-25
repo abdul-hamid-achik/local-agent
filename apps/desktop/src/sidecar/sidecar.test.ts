@@ -10,7 +10,7 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { appendRule } from "@local-agent/runtime";
+import { appendRule, LIMITS, toolReference } from "@local-agent/runtime";
 import { expect, test } from "vitest";
 
 // The desktop sidecar consults the workspace's permission file like every
@@ -783,6 +783,83 @@ test("everything the console writes goes to stderr, so stdout stays frames", asy
     "write",
   ])
     expect(err).toContain(word);
+});
+
+// The Reference view draws its tools and bounds from this answer, so it
+// must list what this host's runs really offer: a build turn's tools, and a
+// plan turn's as the read-only ones.
+test("reference lists the tools a desktop run offers, and the runtime's bounds", async () => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), "la-sidecar-")));
+  const offered: string[][] = [];
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    async fetch(request) {
+      const path = new URL(request.url).pathname;
+      if (path === "/api/tags")
+        return Response.json({ models: [{ name: "fixture", size: 1000 }] });
+      if (path === "/api/show")
+        return Response.json({
+          capabilities: ["completion", "tools"],
+          model_info: { "fixture.context_length": 16384 },
+        });
+      const body = (await request.json()) as {
+        tools: { function: { name: string } }[];
+      };
+      offered.push(body.tools.map((tool) => tool.function.name));
+      return new Response(
+        `${JSON.stringify({ message: { role: "assistant", content: "Done" }, done: true })}\n`,
+      );
+    },
+  });
+  const side = sidecarChild({
+    OLLAMA_HOST: server.url.origin,
+    DESKTOP_REPO_ROOT: root,
+  });
+  try {
+    for (const [runId, intent] of [
+      ["r1", "build"],
+      ["r2", "plan"],
+    ]) {
+      side.send({
+        id: runId === "r1" ? 1 : 2,
+        method: "agent.start",
+        params: {
+          runId,
+          workspace: root,
+          intent,
+          model: "fixture",
+          messages: [{ role: "user", content: "go" }],
+        },
+      });
+      await side.frame(
+        (frame) =>
+          frame.stream === runId &&
+          (frame.event as { type: string }).type === "run_done",
+      );
+    }
+    side.send({ id: 7, method: "reference" });
+    const frame = (await side.frame((frame) => frame.id === 7)) as {
+      ok: boolean;
+      result: { tools: { name: string; readOnly: boolean }[] };
+    };
+    expect(frame.ok).toBe(true);
+    expect(frame.result.tools.map((tool) => tool.name)).toEqual(offered[0]);
+    expect(
+      frame.result.tools
+        .filter((tool) => tool.readOnly)
+        .map((tool) => tool.name),
+    ).toEqual(offered[1]);
+    expect(frame.result).toEqual({
+      tools: toolReference({ ask: false, goal: false }),
+      limits: LIMITS,
+    });
+  } finally {
+    side.child.kill();
+    await side.child.exited;
+    await server.stop(true);
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("a request with an id but no method is answered, not dropped", async () => {

@@ -14,6 +14,7 @@ import {
   commandLine,
   connectMcpServers,
   inspectRecovery,
+  LIMITS,
   type McpConnection,
   type Provider,
   planContext,
@@ -24,6 +25,7 @@ import {
   SessionStore,
   secretPathNotes,
   shellWord,
+  toolReference,
   Workspace,
   workspaceRules,
 } from "@local-agent/runtime";
@@ -35,6 +37,7 @@ import {
   type ProjectCommandName,
   ProjectCommands,
   type ProviderView,
+  type ReferenceView,
   type RpcRequest,
   type RpcResponse,
   SidecarMethods,
@@ -665,6 +668,14 @@ async function handleSpecsList() {
   return { specs };
 }
 
+/**
+ * The Reference view's tools and bounds, from the runtime. This host's runs
+ * give runAgent neither ask nor goal, so ask_user and goal_status are left out.
+ */
+function handleReference(): ReferenceView {
+  return { tools: toolReference({ ask: false, goal: false }), limits: LIMITS };
+}
+
 async function handleDocsList() {
   const dir = join(repoRoot, "docs");
   const names = (await readdir(dir))
@@ -752,6 +763,9 @@ async function dispatch(request: RpcRequest): Promise<void> {
       break;
     case SidecarMethods.docsList:
       result = await handleDocsList();
+      break;
+    case SidecarMethods.reference:
+      result = handleReference();
       break;
     default:
       throw new Error(`Unknown method: ${method}`);

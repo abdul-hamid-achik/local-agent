@@ -1,6 +1,7 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { lstat, readlink, realpath, stat } from "node:fs/promises";
 import { isAbsolute, relative, resolve, sep } from "node:path";
+import { LIMITS } from "#runtime/limits";
 import {
   type CommandSandbox,
   sandboxedCommand,
@@ -8,10 +9,10 @@ import {
 } from "#runtime/sandbox";
 import { isSecretPath, pathTokens, secretPathsIn } from "#runtime/workspace";
 
-const MAX_OUTPUT_BYTES = 1 << 20;
+const MAX_OUTPUT_BYTES = LIMITS.commandOutputBytes;
 const MAX_TIMEOUT_MS = 2_147_483_647;
-const MAX_ARG_COUNT = 256;
-const MAX_ARG_BYTES = 128 * 1024;
+const MAX_ARG_COUNT = LIMITS.commandArgs;
+const MAX_ARG_BYTES = LIMITS.commandArgBytes;
 const KILL_GRACE_MS = 250;
 const DRAIN_GRACE_MS = 500;
 const TERMINATION_DEADLINE_MS = KILL_GRACE_MS + DRAIN_GRACE_MS;

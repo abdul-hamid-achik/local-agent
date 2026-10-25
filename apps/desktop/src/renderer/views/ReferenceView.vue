@@ -51,39 +51,31 @@
       </div>
     </div>
 
-    <div class="grid-2">
-      <div class="card">
-        <h2>Tool catalog</h2>
-        <table class="data">
-          <tbody>
-            <tr><td class="mono">read</td><td>Bounded UTF-8 read, plan-safe</td></tr>
-            <tr><td class="mono">read_image</td><td>Attach a workspace image for vision models, plan-safe</td></tr>
-            <tr><td class="mono">edit</td><td>One exact occurrence, approval-gated, diffed</td></tr>
-            <tr><td class="mono">run_command</td><td>argv vector, no shell, timeout, approval-gated</td></tr>
-            <tr><td class="mono">fetch</td><td>GET a URL as readable text, plan-safe</td></tr>
-            <tr><td class="mono">web_search</td><td>Local SearXNG results, plan-safe</td></tr>
-            <tr><td class="mono">SERVER__TOOL</td><td>MCP tools, independently approved</td></tr>
-          </tbody>
-        </table>
-        <div class="help">
-          Serial loop: a complete provider response precedes every host action.
-        </div>
-      </div>
-      <div class="card">
-        <h2>Intent matrix</h2>
-        <table class="data">
-          <thead><tr><th /><th>plan</th><th>build</th></tr></thead>
-          <tbody>
-            <tr><td>read</td><td>allow</td><td>allow</td></tr>
-            <tr><td>edit</td><td>deny</td><td>ask</td></tr>
-            <tr><td>run_command</td><td>deny</td><td>ask</td></tr>
-            <tr><td>mcp (any)</td><td>deny</td><td>ask</td></tr>
-          </tbody>
-        </table>
-        <div class="help">
-          Headless flags mirror this: <code>--approve-edits</code>,
-          <code>--approve-commands</code>, <code>--approve-mcp</code>.
-        </div>
+    <div class="card">
+      <h2>Tools — what each intent offers, from the runtime</h2>
+      <table class="data">
+        <thead><tr><th>Tool</th><th>What it does</th><th>plan</th><th>build</th></tr></thead>
+        <tbody>
+          <tr v-for="tool in reference?.tools ?? []" :key="tool.name">
+            <td class="mono">{{ tool.name }}</td>
+            <td>{{ tool.summary }}</td>
+            <td>{{ tool.readOnly ? "allow" : "deny" }}</td>
+            <td>{{ tool.readOnly ? "allow" : "ask" }}</td>
+          </tr>
+          <tr>
+            <td class="mono">SERVER__TOOL</td>
+            <td>A tool of a configured MCP server.</td>
+            <td>deny</td>
+            <td>ask</td>
+          </tr>
+        </tbody>
+      </table>
+      <div class="help">
+        Serial loop: a complete provider response precedes every host action.
+        A build ask is answered by a rule in the workspace's permission file
+        when one matches, otherwise by the approval card here (or, in the CLI's
+        headless mode, by <code>--approve-edits</code>,
+        <code>--approve-commands</code> and <code>--approve-mcp</code>).
       </div>
     </div>
 
@@ -91,13 +83,10 @@
       <h2>Bounds &amp; limits</h2>
       <table class="data">
         <tbody>
-          <tr><td class="mono">file read</td><td>8 MB, valid UTF-8, no NUL/hard links</td></tr>
-          <tr><td class="mono">MCP config</td><td>1 MB, max 16 servers, no pagination</td></tr>
-          <tr><td class="mono">MCP text</td><td>16 KB projection per call</td></tr>
-          <tr><td class="mono">MCP tools</td><td>max 128 per server</td></tr>
-          <tr><td class="mono">model output</td><td>1 MB, max 32 tool calls per response</td></tr>
-          <tr><td class="mono">stream idle</td><td>5 min default, negotiated for remote</td></tr>
-          <tr><td class="mono">command</td><td>256 args, 128 KB argv, user permissions</td></tr>
+          <tr v-for="[name, bound] in limits" :key="name">
+            <td class="mono">{{ name }}</td>
+            <td>{{ bound }}</td>
+          </tr>
         </tbody>
       </table>
     </div>
@@ -121,9 +110,11 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref } from "vue";
+import { computed, onMounted, ref } from "vue";
 import { api, errorMessage } from "#desktop/renderer/api";
+import { limitRows } from "#desktop/renderer/reference";
 import { navigate, type RouteName } from "#desktop/renderer/router";
+import type { ReferenceView } from "#desktop/shared/protocol";
 
 const features: { name: string; detail: string; done: boolean; route: RouteName }[] = [
   { name: "Agent chat", detail: "streaming turns, thinking, receipts", done: true, route: "chat" },
@@ -142,6 +133,10 @@ const features: { name: string; detail: string; done: boolean; route: RouteName 
 ];
 
 const docs = ref<{ file: string; title: string }[]>([]);
+const reference = ref<ReferenceView>();
+const limits = computed(() =>
+  reference.value ? limitRows(reference.value.limits) : [],
+);
 const error = ref("");
 
 function openPublished(file: string): void {
@@ -152,12 +147,17 @@ function openPublished(file: string): void {
   });
 }
 
-onMounted(async () => {
-  try {
-    docs.value = (await api.docsList()).docs;
-  } catch (error_) {
+// Each table loads on its own: one failing leaves the other.
+onMounted(() => {
+  const failed = (error_: unknown) => {
     error.value = errorMessage(error_);
-  }
+  };
+  api.docsList().then((list) => {
+    docs.value = list.docs;
+  }, failed);
+  api.reference().then((value) => {
+    reference.value = value;
+  }, failed);
 });
 </script>
 

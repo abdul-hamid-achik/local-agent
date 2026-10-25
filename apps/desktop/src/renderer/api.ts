@@ -8,6 +8,7 @@ import type {
   ProjectStreamEvent,
   ProviderView,
   RecoveryView,
+  ReferenceView,
   SessionView,
   StreamEnvelope,
   WorkspaceEntry,
@@ -154,6 +155,7 @@ export const api = {
     ),
   docsList: () =>
     rpc<{ docs: { file: string; title: string }[] }>(SidecarMethods.docsList),
+  reference: () => rpc<ReferenceView>(SidecarMethods.reference),
 
   // Async so a missing bridge rejects, as rpc() does, instead of throwing
   // before a promise exists.

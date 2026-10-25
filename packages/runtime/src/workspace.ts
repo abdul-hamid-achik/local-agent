@@ -22,6 +22,7 @@ import {
   sep,
 } from "node:path";
 import { createTwoFilesPatch, structuredPatch } from "diff";
+import { LIMITS } from "#runtime/limits";
 import { userConfigDir } from "#runtime/paths";
 import {
   DIRECTORY_FLAGS,
@@ -34,7 +35,7 @@ import {
   withParentCreating,
 } from "#runtime/workspace_native";
 
-const MAX_FILE_BYTES = 8 * 1024 * 1024;
+const MAX_FILE_BYTES = LIMITS.fileBytes;
 
 /**
  * An approved edit or write that failed before the file was replaced: the

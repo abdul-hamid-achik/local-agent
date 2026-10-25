@@ -1,5 +1,6 @@
 import { isIP } from "node:net";
 import { z } from "zod";
+import { LIMITS } from "#runtime/limits";
 
 /**
  * The model used with the local Ollama provider when neither `--model` nor
@@ -8,7 +9,7 @@ import { z } from "zod";
  */
 export const DEFAULT_OLLAMA_MODEL = "qwen3.5:4b-q4_K_M";
 
-const defaultStreamIdleTimeoutMs = 300_000;
+const defaultStreamIdleTimeoutMs = LIMITS.streamIdleMs;
 const maxStreamIdleTimeoutMs = 2_147_483_647;
 
 const durationMilliseconds = (value: string) => {

@@ -10,6 +10,7 @@ import {
   readLines,
   runAgent,
   toolOutputLimit,
+  toolReference,
 } from "#runtime/agent";
 import { resolveProvider } from "#runtime/config";
 import { sandboxUnavailable } from "#runtime/sandbox";
@@ -157,6 +158,75 @@ test("plan intent offers the read-only tools and denies writes", async () => {
     expect(run.results.map((result) => result.status)).toEqual(["denied"]);
     expect(run.proposals).toEqual([]);
     expect(await Bun.file(join(run.root, "a.txt")).exists()).toBe(false);
+  } finally {
+    await run.cleanup();
+  }
+});
+
+test("the tool reference is what runs offer: build every tool, plan the read-only ones", async () => {
+  const reference = toolReference({ ask: false, goal: false });
+  const build = await session([], "build", () => true);
+  const plan = await session([], "plan", () => true);
+  try {
+    const offered = (run: typeof build) => run.bodies[0]?.tools ?? [];
+    expect(reference.map((tool) => tool.name)).toEqual(
+      offered(build).map((tool) => tool.function.name),
+    );
+    expect(
+      reference.filter((tool) => tool.readOnly).map((tool) => tool.name),
+    ).toEqual(offered(plan).map((tool) => tool.function.name));
+  } finally {
+    await build.cleanup();
+    await plan.cleanup();
+  }
+});
+
+test("every builtin has a one-line summary for the reference", () => {
+  const reference = toolReference({ ask: true, goal: true });
+  expect(reference).toHaveLength(13);
+  for (const tool of reference)
+    expect(tool.summary, tool.name).toMatch(/^[A-Z][^\n]{9,99}\.$/u);
+});
+
+test("the tool reference offers ask_user and goal_status only where the host does", () => {
+  const names = (ask: boolean, goal: boolean) =>
+    toolReference({ ask, goal }).map((tool) => tool.name);
+  expect(names(false, false)).not.toContain("ask_user");
+  expect(names(false, false)).not.toContain("goal_status");
+  expect(names(true, false)).toContain("ask_user");
+  expect(names(true, false)).not.toContain("goal_status");
+  expect(names(false, true)).toContain("goal_status");
+  expect(
+    toolReference({ ask: true, goal: true }).filter((tool) =>
+      ["ask_user", "goal_status"].includes(tool.name),
+    ),
+  ).toEqual([
+    expect.objectContaining({ name: "ask_user", readOnly: true }),
+    expect.objectContaining({ name: "goal_status", readOnly: true }),
+  ]);
+});
+
+test("build asks before every tool the reference says has an effect", async () => {
+  // A new tool with an effect needs a sample call here.
+  const samples: Record<string, Record<string, unknown>> = {
+    edit: { path: "src/stats.ts", old_string: "1", new_string: "2" },
+    write: { path: "a.txt", content: "x" },
+    run_command: { argv: ["true"] },
+  };
+  const effects = toolReference({ ask: false, goal: false })
+    .filter((tool) => !tool.readOnly)
+    .map((tool) => tool.name);
+  expect(effects).toEqual(Object.keys(samples));
+  const run = await session(
+    effects.map((name) => ({ name, arguments: samples[name] ?? {} })),
+    "build",
+    () => false,
+  );
+  try {
+    expect(run.proposals).toHaveLength(effects.length);
+    expect(run.results.map((result) => result.status)).toEqual(
+      effects.map(() => "denied"),
+    );
   } finally {
     await run.cleanup();
   }

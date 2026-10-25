@@ -12,10 +12,11 @@ import {
   StdioClientTransport,
 } from "@modelcontextprotocol/client/stdio";
 import { z } from "zod";
+import { LIMITS } from "#runtime/limits";
 import { userConfigDir } from "#runtime/paths";
 
-const MAX_TOOLS = 128;
-const MAX_TEXT = 16_384;
+const MAX_TOOLS = LIMITS.mcpToolsPerServer;
+const MAX_TEXT = LIMITS.mcpTextChars;
 /** Connecting and listing tools: a gateway fans out to its servers first. */
 const CONNECT_TIMEOUT_MS = 15_000;
 /** One tool call, unless the server's entry sets `timeoutMs`. */
@@ -452,7 +453,7 @@ export function defaultMcpConfigPath(
   return join(userConfigDir(env), "mcp.json");
 }
 
-const MAX_CONFIG_BYTES = 1_000_000;
+const MAX_CONFIG_BYTES = LIMITS.mcpConfigBytes;
 
 /**
  * An MCP config file: a JSON array of at most 16 servers with distinct
@@ -477,7 +478,9 @@ export async function readMcpConfig(path: string): Promise<McpServerConfig[]> {
     throw new Error("MCP config exceeds 1 MB");
   // A BOM is not part of the JSON (Bun.file().json() skipped it too).
   const json = text.startsWith("\ufeff") ? text.slice(1) : text;
-  const configs = McpServerConfigSchema.array().max(16).parse(JSON.parse(json));
+  const configs = McpServerConfigSchema.array()
+    .max(LIMITS.mcpServers)
+    .parse(JSON.parse(json));
   if (new Set(configs.map((config) => config.name)).size !== configs.length)
     throw new Error("Duplicate MCP server names");
   return configs;
