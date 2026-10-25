@@ -212,9 +212,9 @@ test("the file name carries the format's extension", () => {
   );
 });
 
-test("the file name carries the local timestamp, zero-padded", () => {
-  expect(exportFileName(new Date(2026, 9, 22, 9, 5, 3))).toBe(
-    "local-agent-transcript-20261022-090503.md",
+test("every field of the file name's timestamp is zero-padded, the month and day too", () => {
+  expect(exportFileName(new Date(2026, 0, 2, 3, 4, 5))).toBe(
+    "local-agent-transcript-20260102-030405.md",
   );
 });
 

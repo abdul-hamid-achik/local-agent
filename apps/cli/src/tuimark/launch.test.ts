@@ -31,7 +31,12 @@ test("a missing app.tui is reported with the folder that was searched", async ()
 
 // ---------------------------------------------------------- the real entry point
 
-import type { AgentEvent, Provider, Workspace } from "@local-agent/runtime";
+import type {
+  AgentEvent,
+  AgentOptions,
+  Provider,
+  Workspace,
+} from "@local-agent/runtime";
 import type { Host, HostExit, Ready } from "@thelacanians/tuimark";
 import {
   binaryVersion,
@@ -57,6 +62,7 @@ function fakeSpawn(
   control: { exit?: (reason: HostExit | Error) => void } = {},
 ) {
   const spawnedOnce = Promise.withResolvers<void>();
+  const attachedOnce = Promise.withResolvers<void>();
   const calls = {
     closed: 0,
     batches: [] as unknown[][],
@@ -86,6 +92,7 @@ function fakeSpawn(
       exited,
       on(action: string, handler: (ev: unknown) => unknown) {
         calls.handlers.set(action, handler);
+        attachedOnce.resolve();
         return host;
       },
       async batch(writes: unknown[]) {
@@ -105,7 +112,14 @@ function fakeSpawn(
     };
     return host as unknown as Host;
   }) as unknown as typeof import("@thelacanians/tuimark").spawnHost;
-  return { spawn, calls, spawned: spawnedOnce.promise };
+  // `spawned`: the launcher called spawn. `attached`: the client then
+  // registered its handlers, so the host can be driven and can exit.
+  return {
+    spawn,
+    calls,
+    spawned: spawnedOnce.promise,
+    attached: attachedOnce.promise,
+  };
 }
 
 function fakeStdout(isTTY: boolean) {
@@ -136,16 +150,36 @@ const launch = (
     deps,
   );
 
+/** Waits on a condition the code under test brings about (it fails after 1 s). */
+async function until(ok: () => boolean) {
+  for (let i = 0; i < 200 && !ok(); i++)
+    await new Promise((r) => setTimeout(r, 5));
+  if (!ok()) throw new Error(`until: still false after 1 s: ${ok}`);
+}
+
 test("the pinned release is the minimum, not the pre-release the SDK is packed as", () => {
   expect(PINNED_TUIMARK).toBe("0.5.1");
   expect(PINNED_TUIMARK).toBe(MIN_TUIMARK);
 });
 
+test("the pinned release is the exact SDK version the CLI depends on", async () => {
+  // The SDK trusts its embedded checksums only when the version it is asked
+  // for is its own; any other falls back to the release's own checksums.txt.
+  const manifest = JSON.parse(
+    await readFile(new URL("../../package.json", import.meta.url), "utf8"),
+  ) as { dependencies: Record<string, string> };
+  expect(manifest.dependencies["@thelacanians/tuimark"]).toBe(PINNED_TUIMARK);
+});
+
 test("versions compare as a minimum, not as equality", () => {
   expect(MIN_TUIMARK).toBe("0.5.1");
   expect(versionAtLeast("0.5.1", "0.5.1")).toBe(true);
+  // A pre-release suffix is ignored on purpose: the SDK is packed as
+  // "0.5.1-pre" and still runs this client, while a pre-release of the
+  // version below the minimum does not.
   expect(versionAtLeast("0.5.1-pre", "0.5.1")).toBe(true);
-  expect(versionAtLeast("0.5.1", "0.5.1")).toBe(true);
+  expect(versionAtLeast("v0.5.2-dev.3", "0.5.1")).toBe(true);
+  expect(versionAtLeast("0.5.0-rc.1", "0.5.1")).toBe(false);
   expect(versionAtLeast("0.6.0-dev", "0.5.1")).toBe(true);
   expect(versionAtLeast("1.0.0", "0.5.1")).toBe(true);
   expect(versionAtLeast("0.4.6", "0.5.1")).toBe(false);
@@ -233,7 +267,7 @@ test("the inline presentation spawns inline.tui with inline: true", async () => 
     new AbortController().signal,
     "inline",
   );
-  await new Promise((r) => setTimeout(r, 10));
+  await host.attached;
   expect(host.calls.spawned).toHaveLength(1);
   expect(host.calls.spawned[0]?.file).toMatch(/inline\.tui$/);
   expect(host.calls.spawned[0]?.options).toMatchObject({ inline: true });
@@ -255,7 +289,7 @@ test("the inline presentation spawns inline.tui with inline: true", async () => 
     resolve: async () => "/b",
     stdout: fakeStdout(true),
   });
-  await new Promise((r) => setTimeout(r, 10));
+  await host2.attached;
   expect(host2.calls.spawned[0]?.file).toMatch(/app\.tui$/);
   expect(host2.calls.spawned[0]?.options).toMatchObject({ inline: false });
   control2.exit?.({ reason: "quit", code: 0 });
@@ -272,7 +306,7 @@ test("a host that dies resets the terminal, only when stdout is a terminal", asy
       resolve: async () => "/b",
       stdout,
     });
-    await new Promise((r) => setTimeout(r, 10));
+    await host.attached;
     control.exit?.(
       new Error('tuimark host exited without an "exit" message (code 137)'),
     );
@@ -286,7 +320,7 @@ test("an error exit reported by the host resets the terminal too; a quit does no
   const host = fakeSpawn({}, control);
   const stdout = fakeStdout(true);
   const done = launch({ spawn: host.spawn, resolve: async () => "/b", stdout });
-  await new Promise((r) => setTimeout(r, 10));
+  await host.attached;
   control.exit?.({ reason: "error", error: "boom", code: 1 });
   await expect(done).rejects.toThrow("boom");
   expect(stdout.written).toEqual([TERMINAL_RESET]);
@@ -299,7 +333,7 @@ test("an error exit reported by the host resets the terminal too; a quit does no
     resolve: async () => "/b",
     stdout: stdout2,
   });
-  await new Promise((r) => setTimeout(r, 10));
+  await host2.attached;
   control2.exit?.({ reason: "quit", code: 0 });
   await done2;
   expect(stdout2.written).toEqual([]);
@@ -312,7 +346,7 @@ test("the process signal closes the host and the launcher returns", async () => 
     { spawn: host.spawn, resolve: async () => "/b", stdout: fakeStdout(true) },
     abort.signal,
   );
-  await new Promise((r) => setTimeout(r, 10));
+  await host.attached;
   abort.abort();
   await done;
   expect(host.calls.closed).toBe(1);
@@ -322,10 +356,8 @@ test("the turn is awaited before the launcher returns when the host dies mid-tur
   const control: { exit?: (reason: HostExit | Error) => void } = {};
   const host = fakeSpawn({}, control);
   let turnEnded = false;
-  let release: () => void = () => {};
-  const finished = new Promise<void>((r) => {
-    release = r;
-  });
+  const aborted = Promise.withResolvers<void>();
+  const leaseReleased = Promise.withResolvers<void>();
   const abort = new AbortController();
   const script = async function* (
     _p: Provider,
@@ -336,9 +368,9 @@ test("the turn is awaited before the launcher returns when the host dies mid-tur
     await new Promise((resolve) =>
       options.signal.addEventListener("abort", resolve),
     );
-    await new Promise((r) => setTimeout(r, 30)); // the runtime releasing its lease
+    aborted.resolve();
+    await leaseReleased.promise; // the runtime releasing its lease
     turnEnded = true;
-    release();
   };
   const done = launch(
     {
@@ -349,7 +381,11 @@ test("the turn is awaited before the launcher returns when the host dies mid-tur
     },
     abort.signal,
   );
-  await new Promise((r) => setTimeout(r, 10));
+  let returned = false;
+  void done.then(() => {
+    returned = true;
+  });
+  await host.attached;
   const send = host.calls.handlers.get("send");
   await send?.({
     seq: 1,
@@ -359,9 +395,81 @@ test("the turn is awaited before the launcher returns when the host dies mid-tur
     value: "go",
   });
   control.exit?.({ reason: "quit", code: 0 });
+  // The host is gone and the turn knows it, but the lease is still held: the
+  // launcher must be waiting for it, not returning.
+  await aborted.promise;
+  await new Promise((r) => setImmediate(r));
+  expect(returned).toBe(false);
+  leaseReleased.resolve();
   await done;
   expect(turnEnded).toBe(true);
-  await finished;
+});
+
+test("a terminal resize that fails is reported on the status line, and the session goes on", async () => {
+  const control: { exit?: (reason: HostExit | Error) => void } = {};
+  const host = fakeSpawn({}, control);
+  let broken = false;
+  let resize: () => void = () => {};
+  const stdout = {
+    isTTY: true,
+    write: () => true,
+    // The client reads the width when it wraps an open preview again.
+    get columns(): number {
+      if (broken) throw new Error("no terminal size");
+      return 100;
+    },
+    on(_event: "resize", listener: () => void) {
+      resize = listener;
+    },
+    off() {},
+  };
+  const approval = async function* (
+    _p: Provider,
+    _m: unknown,
+    options: AgentOptions,
+  ): AsyncGenerator<AgentEvent> {
+    yield { type: "tool_requested", id: "e1", name: "edit" };
+    await options.approve(
+      {
+        kind: "edit",
+        path: "a.txt",
+        before: "",
+        after: "",
+        diff: "-x\n+y",
+        identity: "i",
+      },
+      options.signal,
+    );
+  };
+  const done = launch({
+    spawn: host.spawn,
+    resolve: async () => "/b",
+    stdout,
+    run: approval,
+  });
+  await host.attached;
+  await host.calls.handlers.get("send")?.({
+    seq: 1,
+    action: "send",
+    source: "composer",
+    keys: {},
+    value: "edit it",
+  });
+  const written = () =>
+    host.calls.batches.flat() as { path: string; value: unknown }[];
+  await until(() => written().some((w) => w.path === "approval"));
+  broken = true;
+  resize();
+  await until(() =>
+    written().some(
+      (w) =>
+        w.path === "status" &&
+        w.value === "Action resize failed: no terminal size",
+    ),
+  );
+  broken = false;
+  control.exit?.({ reason: "quit", code: 0 });
+  await done;
 });
 
 test("findBinary returns the path, or the reason there is none, and never throws", async () => {
@@ -778,7 +886,7 @@ test("inline resets the terminal without leaving an alternate screen it never en
     new AbortController().signal,
     "inline",
   );
-  await new Promise((r) => setTimeout(r, 10));
+  await host.attached;
   control.exit?.({ reason: "error", error: "boom", code: 1 });
   await expect(done).rejects.toThrow("boom");
   expect(stdout.written).toEqual([INLINE_TERMINAL_RESET]);
@@ -832,8 +940,7 @@ test("a handler that throws goes to onError: a status line, and the session goes
     resolve: async () => "/b",
     stdout: fakeStdout(true),
   });
-  await host.spawned;
-  await new Promise((r) => setTimeout(r, 10));
+  await host.attached;
   const options = host.calls.spawned[0]?.options as {
     onError?: (event: { action: string }, error: unknown) => unknown;
   };

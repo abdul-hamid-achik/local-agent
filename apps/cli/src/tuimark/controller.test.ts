@@ -1,4 +1,11 @@
-import { mkdir, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type {
@@ -20,11 +27,14 @@ import type {
 } from "@local-agent/runtime";
 import {
   ConversationFullError,
+  loadPermissionFile,
   MAX_MESSAGE_CHARS,
   MLX_WARNING,
+  type PermissionRule,
   StepLimitError,
+  trustRules,
 } from "@local-agent/runtime";
-import { expect, test } from "vitest";
+import { expect, onTestFinished, test } from "vitest";
 import {
   type Block,
   DETAILS_MAX_CHARS,
@@ -55,6 +65,7 @@ import {
   APPROVAL_WAIT_STATUS,
   NO_DETAILS_STATUS,
   PROVIDER_NO_ANSWER_STATUS,
+  previewWidth,
   QUESTION_CHOOSE_STATUS,
   QUESTION_EMPTY_STATUS,
   QUESTION_NO_MATCH_STATUS,
@@ -111,6 +122,13 @@ function setup(
   return { ui, client, aborts, seen };
 }
 
+/** A scratch workspace root, removed when the test ends. */
+async function scratchDir(prefix: string): Promise<string> {
+  const dir = await mkdtemp(join(tmpdir(), prefix));
+  onTestFinished(() => rm(dir, { recursive: true, force: true }));
+  return dir;
+}
+
 const reply = (text: string): Script =>
   async function* () {
     for (const word of text.split(" "))
@@ -134,6 +152,15 @@ const liveText = (s: Store) =>
 /** The text of one transcript view, block by block. */
 const viewText = (view: MessageView) =>
   view.blocks.map((block) => runsText(block.runs)).join("\n");
+
+/**
+ * Types a palette query: the host's input owns the bound field, so the test
+ * writes it as the keys would; the client's own filter then picks the row.
+ */
+async function typePalette(ui: FakeHost, query: string) {
+  store(ui).palette.query = query;
+  await ui.fire("palette_query", query);
+}
 
 // ------------------------------------------------------------------------ tests
 
@@ -692,8 +719,7 @@ async function untilApproval(ui: FakeHost, status = APPROVAL_STATUS) {
  * Holds the approval dialog's arm timer: it fires when the test calls `arm()`,
  * never on the clock, so no key can race it. `release()` puts the real timer back.
  */
-function holdArmTimer() {
-  const armMs = 80_000;
+function holdArmTimer(armMs = 80_000) {
   const held: (() => void)[] = [];
   let fired = 0;
   const real = globalThis.setTimeout;
@@ -1346,8 +1372,23 @@ test("a confirm before the dialog is armed is ignored; deny always works", async
   }
 });
 
-test("an approval is armed by default 300 ms after it opens", () => {
-  expect(APPROVAL_ARM_MS).toBe(300);
+test("an approval with no armMs option arms itself after APPROVAL_ARM_MS", async () => {
+  // Nothing but the default delay is held: the timer set for the dialog must
+  // be the one the constant names.
+  const timer = holdArmTimer(APPROVAL_ARM_MS);
+  try {
+    const { ui, client } = setup(withApproval, { armMs: undefined });
+    await ui.fire("send", "edit");
+    await until(() => store(ui).approval.open);
+    expect(store(ui).status).toBe(APPROVAL_WAIT_STATUS);
+    await timer.arm();
+    await until(() => store(ui).status === APPROVAL_STATUS);
+    await ui.fire("dialog_confirm");
+    expect(decisions).toEqual([true]);
+    await client.idle();
+  } finally {
+    timer.release();
+  }
 });
 
 test("resizing wraps an open approval preview again", async () => {
@@ -1368,6 +1409,13 @@ test("resizing wraps an open approval preview again", async () => {
   cols = 40;
   await client.resize();
   expect(store(ui).approval.lines.length).toBeGreaterThan(wide);
+  // The rows are filled to the new width (the last one holds the rest) and
+  // the 150 characters are all still there.
+  const rows = store(ui).approval.lines.map((line) => line.t);
+  const width = previewWidth(40);
+  for (const row of rows.slice(0, -1)) expect(row).toHaveLength(width);
+  expect(rows.at(-1)?.length).toBeLessThanOrEqual(width);
+  expect(rows.join("").replaceAll(/[^x]/g, "")).toBe("x".repeat(150));
   expect(store(ui).approval.open).toBe(true);
   client.abort();
   await client.idle();
@@ -1425,7 +1473,7 @@ test("idle() waits for a turn that is aborted while its first write is in flight
   expect(isBusy(ui)).toBe(false);
 });
 
-test("a refused write is shown on the status line, once, and remembered in a bounded list", async () => {
+test("a refused write is shown on the status line and remembered in a bounded list", async () => {
   const { ui, client } = setup(reply("hi"));
   const original = ui.batch.bind(ui);
   let failing = true;
@@ -1444,6 +1492,46 @@ test("a refused write is shown on the status line, once, and remembered in a bou
   }
   expect(client.writeErrors.length).toBe(20);
   failing = false;
+});
+
+test("a run of refused writes says so once on the status line", async () => {
+  const { ui, client } = setup(reply("hi"));
+  const original = ui.batch.bind(ui);
+  // Every write is refused except the notice itself, so no success in between
+  // re-arms it: one notice however many writes fail.
+  ui.batch = async (writes) => {
+    if (writes.every((w) => w.path === "status")) return original(writes);
+    return { type: "ack" as const, id: "x", ok: false, error: "too big" };
+  };
+  const notices = () =>
+    ui.batches
+      .flat()
+      .filter(
+        (w) =>
+          w.path === "status" &&
+          typeof w.value === "string" &&
+          w.value.includes("UI update failed"),
+      );
+  await ui.fire("send", "hi");
+  await client.idle();
+  expect(client.writeErrors.length).toBeGreaterThan(1);
+  expect(notices()).toHaveLength(1);
+  expect(store(ui).status).toContain("UI update failed: too big");
+});
+
+test("inline: refused commits are remembered in the same bounded list", async () => {
+  const { ui, client } = setup(reply("hi"), inline);
+  ui.commit = async () => ({
+    type: "ack" as const,
+    id: "x",
+    ok: false,
+    error: "refused",
+  });
+  for (let turn = 0; turn < 12; turn++) {
+    await ui.fire("send", `again ${turn}`);
+    await client.idle();
+  }
+  expect(client.writeErrors.length).toBe(20);
 });
 
 test("a transport that throws is shown on the status line too, and the turn still ends", async () => {
@@ -1509,12 +1597,12 @@ test("/help from the palette works while a turn runs, other commands say Busy", 
   );
   await ui.fire("send", "go");
   await ui.fire("palette_open");
-  store(ui).palette.query = "help";
-  store(ui).palette.cur = "help";
+  await typePalette(ui, "help");
+  expect(store(ui).palette.cur).toBe("help");
   await ui.fire("palette_run");
   expect(store(ui).help.open).toBe(true);
-  store(ui).palette.query = "mode plan";
-  store(ui).palette.cur = "mode-plan";
+  await typePalette(ui, "mode plan");
+  expect(store(ui).palette.cur).toBe("mode-plan");
   await ui.fire("palette_run");
   expect(store(ui).status).toBe("Busy · wait for the current turn to finish");
   release();
@@ -2041,12 +2129,11 @@ test("the palette filters, cancels and runs a command", async () => {
   await ui.fire("palette_open");
   expect(store(ui).palette.open).toBe(true);
   expect(store(ui).found.items.length).toBeGreaterThan(2);
-  await ui.fire("palette_query", "build");
-  store(ui).palette.query = "build";
+  await typePalette(ui, "build");
   expect(store(ui).found.items.map((i: PaletteItem) => i.id)).toEqual([
     "mode-build",
   ]);
-  store(ui).palette.cur = "mode-build";
+  expect(store(ui).palette.cur).toBe("mode-build");
   await ui.fire("palette_run");
   expect(store(ui).palette.open).toBe(false);
   expect(store(ui).status).toBe("Mode changed to build");
@@ -2380,14 +2467,17 @@ test("inline: /details N opens the output a printed card names", async () => {
 
 test("inline: the prompt is committed on send and the reply as its blocks close, with no messages writes", async () => {
   const full = "para one\n\npara two\n\npara three starts\n\npara four";
+  let host: FakeHost | undefined;
   const { ui, client } = setup(async function* () {
     yield { type: "thinking", text: "secret reasoning" };
     yield { type: "text", text: "para one\n\npara two\n\npara three st" };
-    await new Promise((r) => setTimeout(r, 25));
+    // The first reply commit is in print before the rest arrives.
+    await until(() => (host ? printed(host).length >= 2 : false));
     yield { type: "text", text: "arts\n\npara four" };
     yield { type: "done", inputTokens: 10, outputTokens: 10 };
     yield { type: "message", message: { role: "assistant", content: full } };
   }, inline);
+  host = ui;
   await ui.fire("send", "write it");
   // The prompt is already in print before the reply starts.
   expect(printed(ui)).toEqual(["You: write it"]);
@@ -2396,7 +2486,10 @@ test("inline: the prompt is committed on send and the reply as its blocks close,
   expect(out[0]).toBe("You: write it");
   // The first reply commit carries the label, later ones are plain blocks.
   expect(out[1]).toMatch(/^Assistant: para one/);
-  if (out.length > 2) expect(out[2]).not.toMatch(/^Assistant:/);
+  // The first block went out alone; the blocks that closed after it are the
+  // one plain commit left, so the check below always has something to see.
+  expect(out).toHaveLength(3);
+  expect(out[2]).not.toMatch(/^Assistant:/);
   // Together the reply commits are the whole reply, once, in order.
   const replyText = out
     .slice(1)
@@ -2668,12 +2761,14 @@ test("/mouse writes mouse_on; inline refuses without writing it", async () => {
   await ui.fire("send", "/mouse on");
   expect(store(ui).mouse_on).toBe(true);
 
-  const inline = setup(reply("unused"), { presentation: "inline" });
-  await inline.ui.fire("send", "/mouse on");
-  expect(store(inline.ui).status).toBe("Mouse is not available in inline mode");
-  expect(store(inline.ui).mouse_on).toBe(false);
+  const inlineCtx = setup(reply("unused"), { presentation: "inline" });
+  await inlineCtx.ui.fire("send", "/mouse on");
+  expect(store(inlineCtx.ui).status).toBe(
+    "Mouse is not available in inline mode",
+  );
+  expect(store(inlineCtx.ui).mouse_on).toBe(false);
   expect(
-    inline.ui.batches.flat().some((w) => w.path === "mouse_on" && w.value),
+    inlineCtx.ui.batches.flat().some((w) => w.path === "mouse_on" && w.value),
   ).toBe(false);
 });
 
@@ -2952,8 +3047,9 @@ test("the palette's Quit row is the two-stage ctrl+c", async () => {
   const { ui } = setup(reply("x"));
   await ui.fire("palette_open");
   store(ui).draft = "half written";
-  store(ui).palette.query = "quit";
-  store(ui).palette.cur = "quit";
+  await typePalette(ui, "quit");
+  // Typing "quit" filters the list down to the Quit row and rests on it.
+  expect(store(ui).palette.cur).toBe("quit");
   // A draft exists: the first stage clears it instead of quitting.
   expect(await ui.fire("palette_run")).toBeUndefined();
   expect(store(ui).palette.open).toBe(false);
@@ -2961,8 +3057,7 @@ test("the palette's Quit row is the two-stage ctrl+c", async () => {
   expect(store(ui).status).toBe("Draft cleared · ctrl+c again to quit");
   // An empty composer quits.
   await ui.fire("palette_open");
-  store(ui).palette.query = "quit";
-  store(ui).palette.cur = "quit";
+  await typePalette(ui, "quit");
   expect(await ui.fire("palette_run")).toBe("quit");
 });
 
@@ -2981,23 +3076,23 @@ test("the palette loads earlier messages fullscreen and never lists it inline", 
   expect(store(ui).found.items.map((i: PaletteItem) => i.id)).toContain(
     "load-earlier",
   );
-  store(ui).palette.query = "earlier";
-  store(ui).palette.cur = "load-earlier";
+  await typePalette(ui, "earlier");
+  expect(store(ui).palette.cur).toBe("load-earlier");
   await ui.fire("palette_run");
   expect(store(ui).messages).toHaveLength(300);
   expect(store(ui).earlier.n).toBe(150);
 
-  const inline = setup(reply("x"), { presentation: "inline" });
+  const inlineCtx = setup(reply("x"), { presentation: "inline" });
   expect(
-    store(inline.ui).found.items.map((i: PaletteItem) => i.id),
+    store(inlineCtx.ui).found.items.map((i: PaletteItem) => i.id),
   ).not.toContain("load-earlier");
-  await inline.ui.fire("palette_open");
+  await inlineCtx.ui.fire("palette_open");
   expect(
-    store(inline.ui).found.items.map((i: PaletteItem) => i.id),
+    store(inlineCtx.ui).found.items.map((i: PaletteItem) => i.id),
   ).not.toContain("load-earlier");
-  expect(store(inline.ui).found.items.map((i: PaletteItem) => i.id)).toContain(
-    "quit",
-  );
+  expect(
+    store(inlineCtx.ui).found.items.map((i: PaletteItem) => i.id),
+  ).toContain("quit");
 });
 
 // ------------------------------------------------------------ session grants
@@ -3060,7 +3155,8 @@ test("grants: `a` on an edit lets a later write through with a status flash and 
   expect(store(ui).approval.grant_hint).toBe(
     "a allow file changes this session",
   );
-  expect("grant_ok" in store(ui).approval).toBe(false);
+  expect(store(ui).approval.session_ok).toBe(true);
+  expect(store(ui).approval.always_ok).toBe(true);
   await ui.fire("dialog_session");
   await client.idle();
   expect(decisions).toEqual([true]);
@@ -3226,7 +3322,8 @@ test("grants: a truncated preview refuses `a` (dialog stays, `y` still works, no
   await ui.fire("send", "one");
   await until(() => store(ui).status === APPROVAL_TRUNCATED_STATUS);
   expect(store(ui).approval.truncated).toBe(true);
-  expect("grant_ok" in store(ui).approval).toBe(false);
+  expect(store(ui).approval.session_ok).toBe(false);
+  expect(store(ui).approval.always_ok).toBe(false);
   expect(store(ui).approval.grant_hint).toBe(
     "preview truncated: session grant unavailable",
   );
@@ -3654,12 +3751,11 @@ test("the palette's Details row opens the viewer", async () => {
   await ui.fire("send", "read it");
   await client.idle();
   await ui.fire("palette_open");
-  await ui.fire("palette_query", "details");
-  store(ui).palette.query = "details";
+  await typePalette(ui, "details");
   expect(store(ui).found.items.map((i: PaletteItem) => i.id)).toEqual([
     "details",
   ]);
-  store(ui).palette.cur = "details";
+  expect(store(ui).palette.cur).toBe("details");
   await ui.fire("palette_run");
   expect(store(ui).palette.open).toBe(false);
   expect(store(ui).details.open).toBe(true);
@@ -5314,7 +5410,7 @@ test("F9: the export suffix loop is bounded at 100 attempts", async () => {
 });
 
 test("F9: a real export file is created with mode 0o600", async () => {
-  const root = await mkdtemp(join(tmpdir(), "la-export-"));
+  const root = await scratchDir("la-export-");
   const at = new Date(2026, 9, 22, 9, 5, 3).getTime();
   const { ui, client } = setup(reply("mode reply"), {
     workspace: { root } as Workspace,
@@ -5330,12 +5426,6 @@ test("F9: a real export file is created with mode 0o600", async () => {
 
 // ------------------------------------------------------------ permission rules
 
-import {
-  loadPermissionFile,
-  type PermissionRule,
-  trustRules,
-} from "@local-agent/runtime";
-
 /** Writes the workspace's permissions file, creating the directory. */
 async function writeRules(
   root: string,
@@ -5349,7 +5439,7 @@ async function writeRules(
 }
 
 test("rules: allow auto-approves and deny refuses, each named in the status, no card", async () => {
-  const root = await mkdtemp(join(tmpdir(), "la-rules-"));
+  const root = await scratchDir("la-rules-");
   await writeRules(root, [
     { effect: "allow", tool: "edit", pattern: "a.txt" },
     { effect: "deny", tool: "run_command", pattern: "rm *" },
@@ -5388,7 +5478,7 @@ test("rules: allow auto-approves and deny refuses, each named in the status, no 
 });
 
 test("rules: `!` saves the proposed rule, grants the call, and later calls auto-allow", async () => {
-  const root = await mkdtemp(join(tmpdir(), "la-always-"));
+  const root = await scratchDir("la-always-");
   const { ui, client } = setup(
     turnsAsking([
       [commandProposal(["bun", "test", "a.test.ts"])],
@@ -5421,7 +5511,7 @@ test("rules: `!` saves the proposed rule, grants the call, and later calls auto-
 });
 
 test("rules: a cloned repository's allow rule never skips the card until trusted", async () => {
-  const root = await mkdtemp(join(tmpdir(), "la-planted-"));
+  const root = await scratchDir("la-planted-");
   await writeRules(root, [
     { effect: "allow", tool: "run_command", pattern: "*" },
   ]);
@@ -5467,7 +5557,7 @@ test("rules: a cloned repository's allow rule never skips the card until trusted
 });
 
 test("rules: the runtime's read hook sees the file's deny rules", async () => {
-  const root = await mkdtemp(join(tmpdir(), "la-denied-read-"));
+  const root = await scratchDir("la-denied-read-");
   await writeRules(root, [
     { effect: "deny", tool: "fetch", pattern: "domain:tracker.example" },
     { effect: "deny", tool: "web_search", pattern: "*" },
@@ -5494,7 +5584,7 @@ test("rules: the runtime's read hook sees the file's deny rules", async () => {
 });
 
 test("rules: a deny rule refuses an MCP call in chat intent too", async () => {
-  const root = await mkdtemp(join(tmpdir(), "la-chat-deny-"));
+  const root = await scratchDir("la-chat-deny-");
   await writeRules(root, [{ effect: "deny", tool: "mcp", pattern: "db__*" }]);
   const { ui, client } = setup(
     turnsAsking([[{ kind: "mcp", name: "db__query", argumentsJson: "{}" }]]),
@@ -5507,7 +5597,7 @@ test("rules: a deny rule refuses an MCP call in chat intent too", async () => {
 });
 
 test("rules: confirm trusts only the rules the review line could show", async () => {
-  const root = await mkdtemp(join(tmpdir(), "la-trust-many-"));
+  const root = await scratchDir("la-trust-many-");
   const many = Array.from({ length: 12 }, (_, i) => ({
     effect: "allow" as const,
     tool: "run_command" as const,
@@ -5531,7 +5621,7 @@ test("rules: confirm trusts only the rules the review line could show", async ()
 });
 
 test("rules: trust given from another process reaches the cached rules", async () => {
-  const root = await mkdtemp(join(tmpdir(), "la-trust-elsewhere-"));
+  const root = await scratchDir("la-trust-elsewhere-");
   await writeRules(root, [
     { effect: "allow", tool: "run_command", pattern: "*" },
   ]);
@@ -5552,7 +5642,7 @@ test("rules: trust given from another process reaches the cached rules", async (
 });
 
 test("rules: /permissions lists both origins and clear rules empties the file", async () => {
-  const root = await mkdtemp(join(tmpdir(), "la-list-"));
+  const root = await scratchDir("la-list-");
   const { ui, client } = setup(turnsAsking([[editProposal()]]), {
     workspace: { root } as Workspace,
   });
@@ -5685,7 +5775,7 @@ test("esc after a compaction takes back the prompt, not the compaction note", as
 });
 
 test("sandbox: on, every command runs confined without a card unless a deny or ask rule decides", async () => {
-  const root = await mkdtemp(join(tmpdir(), "la-sandbox-"));
+  const root = await scratchDir("la-sandbox-");
   await writeRules(root, [
     { effect: "ask", tool: "run_command", pattern: "git *" },
     { effect: "deny", tool: "run_command", pattern: "rm *" },
@@ -5830,7 +5920,7 @@ test("sandbox: a session grant made before runs its command confined once the sa
 });
 
 test("sandbox: a sandbox that stops being available makes the next command ask, an allow rule's too", async () => {
-  const root = await mkdtemp(join(tmpdir(), "la-sandbox-"));
+  const root = await scratchDir("la-sandbox-");
   await writeRules(root, [
     { effect: "allow", tool: "run_command", pattern: "bun test *" },
   ]);
@@ -5866,7 +5956,7 @@ test("sandbox: a sandbox that stops being available makes the next command ask, 
 });
 
 test("a command that names a secret path always gets its card: no allow rule, grant or sandbox spares it, and the card says why", async () => {
-  const root = await mkdtemp(join(tmpdir(), "la-secret-"));
+  const root = await scratchDir("la-secret-");
   await writeRules(root, [
     { effect: "allow", tool: "run_command", pattern: "cat *" },
   ]);
@@ -5910,7 +6000,7 @@ test("a command that names a secret path always gets its card: no allow rule, gr
 });
 
 test("a card that names a secret path offers no session grant and no always rule", async () => {
-  const root = await mkdtemp(join(tmpdir(), "la-secret-"));
+  const root = await scratchDir("la-secret-");
   const secret = {
     ...commandProposal(["cat", ".env"]),
     secretPaths: [".env"],
@@ -5939,7 +6029,7 @@ test("a card that names a secret path offers no session grant and no always rule
 });
 
 test("a card with too many path words to check says that, and offers no grant either", async () => {
-  const root = await mkdtemp(join(tmpdir(), "la-unchecked-"));
+  const root = await scratchDir("la-unchecked-");
   const unchecked = {
     ...commandProposal(["cat", "a.txt"]),
     secretPaths: ["65 path words, only 64 checked"],
@@ -6785,7 +6875,7 @@ test("ctrl+c mid-turn cancels it and gives the queue back; the next presses clea
 });
 
 test("a dialog closed while `!` loads the rules saves no rule and keeps its deny", async () => {
-  const root = await mkdtemp(join(tmpdir(), "la-always-race-"));
+  const root = await scratchDir("la-always-race-");
   const { ui, client } = setup(
     turnsAsking([[commandProposal(["bun", "test", "a.test.ts"])]]),
     { workspace: { root } as Workspace },

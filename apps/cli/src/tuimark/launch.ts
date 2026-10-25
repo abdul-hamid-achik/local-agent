@@ -433,7 +433,12 @@ export async function runTuimark(
     throw new Error(problem);
   }
   client.attach(host);
-  const onResize = () => void client.resize();
+  // Re-wrapping a preview is cosmetic: if it throws, the status line says so
+  // instead of an unhandled rejection ending the process.
+  const onResize = () =>
+    void client
+      .resize()
+      .catch((error: unknown) => client.handlerFailed("resize", error));
   stdout.on?.("resize", onResize);
   const stop = () => {
     client.abort();
