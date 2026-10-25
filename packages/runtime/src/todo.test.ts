@@ -91,7 +91,10 @@ test("todo_write renders markers and a summary line", async () => {
   }
 });
 
-test("todo_write replaces the previous list entirely", async () => {
+// todo_write keeps no state of its own: the list is the latest write in the
+// history (latestTodo, tested in compact.test.ts). What a call can show is that
+// it renders the list it was given and no earlier one.
+test("todo_write renders only the list it is given, never an earlier one with it", async () => {
   const run = await session([
     {
       name: "todo_write",
@@ -112,6 +115,10 @@ test("todo_write replaces the previous list entirely", async () => {
     expect(run.output(1)).toBe(
       "- [~] only task\n1 todos: 0 done, 1 in progress, 0 pending",
     );
+    expect(run.output(1)).not.toMatch(/first|second/u);
+    // The first call's output is its own list, whole.
+    expect(run.output(0)).toContain("first");
+    expect(run.output(0)).toContain("second");
   } finally {
     await run.cleanup();
   }

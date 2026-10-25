@@ -464,9 +464,14 @@ test("rejects a truncated stream without a completion event", async () => {
       done: false,
       value: { type: "text", text: "partial" },
     });
-    await expect(stream.next()).rejects.toThrow(
-      "Did not receive done or success response in stream.",
-    );
+    // The error comes from the ollama client (or, failing that, from chat
+    // itself): either way a stream without `done` fails and never reads as a
+    // finished reply. The wording is not ours, so only its subject is checked.
+    await expect(stream.next()).rejects.toThrow(/done|before completion/u);
+    await expect(stream.next()).resolves.toEqual({
+      done: true,
+      value: undefined,
+    });
   } finally {
     await server.stop(true);
   }
@@ -526,22 +531,35 @@ test("a lost Chalupa tunnel is named as one; a local Ollama's error is not", asy
 });
 
 test("rejects redirects rather than forwarding a prompt to another host", async () => {
+  // Where the redirect points: a server that counts what reaches it.
+  const hits: string[] = [];
+  const elsewhere = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    async fetch(request) {
+      hits.push(await request.text());
+      return new Response("{}");
+    },
+  });
   const server = Bun.serve({
     hostname: "127.0.0.1",
     port: 0,
     fetch() {
-      return Response.redirect("http://127.0.0.1:1/api/chat", 307);
+      return Response.redirect(`${elsewhere.url.origin}/api/chat`, 307);
     },
   });
   try {
     const stream = chat(
       resolveProvider({ OLLAMA_HOST: server.url.origin }, "fixture"),
-      [{ role: "user", content: "Hello" }],
+      [{ role: "user", content: "a prompt that stays here" }],
       AbortSignal.timeout(1000),
     );
-    await expect(stream.next()).rejects.toThrow();
+    await expect(stream.next()).rejects.toThrow(/redirect/iu);
+    // Neither the request nor its body reached the other host.
+    expect(hits).toEqual([]);
   } finally {
     await server.stop(true);
+    await elsewhere.stop(true);
   }
 });
 

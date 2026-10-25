@@ -368,6 +368,133 @@ describe("MCP adapter boundary", () => {
   });
 });
 
+/**
+ * A bare JSON-RPC server over HTTP that answers `tools/list` with whatever the
+ * test hands it, so a listing no real server would send can be tried.
+ */
+function listingServer(
+  list: (cursor?: string) => Record<string, unknown>,
+  call?: () => Response,
+) {
+  return Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    async fetch(request) {
+      if (request.method !== "POST") return new Response(null, { status: 405 });
+      const message = (await request.json()) as {
+        id?: number;
+        method: string;
+        params?: { protocolVersion?: string; cursor?: string };
+      };
+      if (message.id === undefined) return new Response(null, { status: 202 });
+      if (message.method === "tools/call" && call) return call();
+      const results: Record<string, unknown> = {
+        initialize: {
+          protocolVersion: message.params?.protocolVersion,
+          capabilities: { tools: {} },
+          serverInfo: { name: "listing", version: "1.0.0" },
+        },
+        "tools/list": list(message.params?.cursor),
+      };
+      return Response.json({
+        jsonrpc: "2.0",
+        id: message.id,
+        result: results[message.method] ?? {},
+      });
+    },
+  });
+}
+const listed = (name: string) => ({
+  name,
+  inputSchema: { type: "object", properties: {} },
+});
+
+describe("what a server may list, and a call that goes wrong", () => {
+  const connectTo = (server: { url: URL }) =>
+    connectMcp({
+      name: "listing",
+      transport: { kind: "http", url: `${server.url}mcp` },
+    });
+
+  test("a server that pages its tool list has every page read", async () => {
+    const server = listingServer((cursor) =>
+      cursor === "page-2"
+        ? { tools: [listed("two")] }
+        : { tools: [listed("one")], nextCursor: "page-2" },
+    );
+    try {
+      const adapter = await connectTo(server);
+      expect(adapter.tools.map((tool) => tool.name)).toEqual([
+        "listing__one",
+        "listing__two",
+      ]);
+      await adapter.close();
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test("a server with more tools than the bound is refused", async () => {
+    for (const [count, refused] of [
+      [LIMITS.mcpToolsPerServer, false],
+      [LIMITS.mcpToolsPerServer + 1, true],
+    ] as const) {
+      const server = listingServer(() => ({
+        tools: Array.from({ length: count }, (_, index) =>
+          listed(`tool${index}`),
+        ),
+      }));
+      try {
+        if (refused)
+          await expect(connectTo(server)).rejects.toThrow("too many tools");
+        else {
+          const adapter = await connectTo(server);
+          expect(adapter.tools).toHaveLength(count);
+          await adapter.close();
+        }
+      } finally {
+        server.stop(true);
+      }
+    }
+  });
+
+  test("a tool name the model could not be offered, or twice, is refused", async () => {
+    for (const [tools, message] of [
+      [[listed("has space")], "invalid"],
+      [[listed("x".repeat(130))], "invalid"],
+      [[listed("same"), listed("same")], "Duplicate MCP tool"],
+    ] as const) {
+      const server = listingServer(() => ({ tools }));
+      try {
+        await expect(connectTo(server)).rejects.toThrow(message);
+      } finally {
+        server.stop(true);
+      }
+    }
+  });
+
+  test("a call the server answers with an HTTP failure rejects instead of hanging", async () => {
+    const server = listingServer(
+      () => ({ tools: [listed("go")] }),
+      () => new Response("boom", { status: 500 }),
+    );
+    try {
+      const adapter = await connectTo(server);
+      try {
+        await expect(adapter.callTool("listing__go", {})).rejects.toThrow();
+        // A name the server never listed is refused before it is sent.
+        await expect(adapter.callTool("listing__other", {})).rejects.toThrow(
+          "Unknown MCP tool",
+        );
+      } finally {
+        await adapter.close();
+      }
+    } finally {
+      server.stop(true);
+    }
+  }, 15_000);
+});
+
 describe("modelSchema", () => {
   test("a tool that takes no arguments is offered an empty properties", () => {
     // mcphub's list_servers and stats: valid MCP, refused by llama.cpp's

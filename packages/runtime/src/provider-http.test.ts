@@ -933,3 +933,152 @@ describe("metadata reads and replayable bodies", () => {
     }
   });
 });
+
+describe("the SSE parser and the chat path on awkward streams", () => {
+  test("a multi-byte character cut at any byte between chunks arrives whole", async () => {
+    const wire = encoder.encode(
+      sse(delta({ content: "caf\u00e9 \u{1f6f6} \u4e2d" }), "[DONE]"),
+    );
+    for (let cut = 1; cut < wire.length; cut++) {
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(wire.slice(0, cut));
+          controller.enqueue(wire.slice(cut));
+          controller.close();
+        },
+      });
+      const seen: unknown[] = [];
+      for await (const part of parseOpenAISSE(body)) seen.push(part);
+      expect(seen, `cut at byte ${cut}`).toEqual([
+        { choices: [{ delta: { content: "caf\u00e9 \u{1f6f6} \u4e2d" } }] },
+      ]);
+    }
+  });
+
+  test("an event that is not JSON fails the stream instead of being skipped", async () => {
+    await expect(
+      parts([sse(delta({ content: "a" })), "data: {not json\n\n"]),
+    ).rejects.toThrow();
+  });
+
+  test("a stream that fails mid-reply ends the reply with that error, after what came before", async () => {
+    const server = serve(() =>
+      sseResponse(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(encoder.encode(sse(delta({ content: "par" }))));
+          },
+          // Only once the first chunk has been read: an error at once would
+          // discard it.
+          pull(controller) {
+            controller.error(new Error("connection reset"));
+          },
+        }),
+      ),
+    );
+    try {
+      const seen: RunEvent[] = [];
+      await expect(
+        (async () => {
+          for await (const event of chat(
+            localProvider(`${server.url.origin}/v1`),
+            [{ role: "user", content: "hi" }],
+            AbortSignal.timeout(4_000),
+          ))
+            seen.push(event);
+        })(),
+      ).rejects.toThrow();
+      expect(seen).toEqual([{ type: "text", text: "par" }]);
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test("tool arguments that are JSON but not an object are marked invalid", async () => {
+    for (const args of ["[1,2]", "7", '"text"', "null"]) {
+      const server = serve(() =>
+        sseResponse(
+          sse(
+            delta({
+              tool_calls: [
+                {
+                  index: 0,
+                  id: "c1",
+                  function: { name: "read", arguments: args },
+                },
+              ],
+            }),
+            "[DONE]",
+          ),
+        ),
+      );
+      try {
+        const call = (
+          await events(localProvider(`${server.url.origin}/v1`))
+        ).find((event) => event.type === "tool_call");
+        expect(call, args).toMatchObject({
+          call: { function: { arguments: { [INVALID_ARGUMENTS]: args } } },
+        });
+      } finally {
+        server.stop(true);
+      }
+    }
+  });
+
+  test("more tool calls than one reply may carry fail the reply", async () => {
+    const calls = (count: number) =>
+      Array.from({ length: count }, (_, index) => ({
+        index,
+        id: `c${index}`,
+        function: { name: "read", arguments: "{}" },
+      }));
+    for (const [count, fails] of [
+      [32, false],
+      [33, true],
+    ] as const) {
+      const server = serve(() =>
+        sseResponse(sse(delta({ tool_calls: calls(count) }), "[DONE]")),
+      );
+      try {
+        const run = events(localProvider(`${server.url.origin}/v1`));
+        if (fails) await expect(run).rejects.toThrow("tool call limit");
+        else
+          expect(
+            (await run).filter((event) => event.type === "tool_call"),
+          ).toHaveLength(count);
+      } finally {
+        server.stop(true);
+      }
+    }
+  });
+
+  test("the tools offered travel in the request as functions", async () => {
+    let body: { tools?: unknown } | undefined;
+    const server = serve(async (request) => {
+      body = (await request.json()) as { tools?: unknown };
+      return sseResponse(sse(delta({ content: "ok" }, "stop"), "[DONE]"));
+    });
+    try {
+      const tool = {
+        type: "function",
+        function: {
+          name: "read",
+          description: "Read a file",
+          parameters: { type: "object", properties: {} },
+        },
+      } as Tool;
+      await events(
+        localProvider(`${server.url.origin}/v1`),
+        AbortSignal.timeout(4_000),
+        [tool],
+      );
+      expect(body?.tools).toEqual([
+        { type: "function", function: tool.function },
+      ]);
+      await events(localProvider(`${server.url.origin}/v1`));
+      expect(body).not.toHaveProperty("tools");
+    } finally {
+      server.stop(true);
+    }
+  });
+});

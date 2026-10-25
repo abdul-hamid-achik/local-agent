@@ -7,6 +7,7 @@ import {
   carriedTodo,
   compactHistory,
   compactState,
+  latestTodo,
   promptChars,
   STATE_SOFT_BYTES,
   STATE_TARGET_BYTES,
@@ -548,6 +549,32 @@ test("the state also sheds the reasoning of earlier turns, which a request never
     reasoned.map((message) => message.content),
   );
   expect(result.elided).toBe(8 - left.length);
+});
+
+test("the todo list carried is the latest one written, and a failed write is not a list", () => {
+  const write = (status: string, output: string): Message => ({
+    role: "tool",
+    tool_name: "todo_write",
+    content: receipt(status, output),
+  });
+  const history: Message[] = [
+    { role: "user", content: "go" },
+    write(
+      "succeeded",
+      "- [~] first plan\n1 todos: 0 done, 1 in progress, 0 pending",
+    ),
+    write(
+      "succeeded",
+      "- [~] second plan\n1 todos: 0 done, 1 in progress, 0 pending",
+    ),
+    write("failed", "At most one todo may be in_progress"),
+  ];
+  expect(latestTodo(history)).toEqual({
+    index: 2,
+    text: "- [~] second plan\n1 todos: 0 done, 1 in progress, 0 pending",
+  });
+  expect(carriedTodo(history, 1_000)?.text).toContain("second plan");
+  expect(carriedTodo(history, 1_000)?.text).not.toContain("first plan");
 });
 
 test("a carried todo list keeps what is in progress and the first pending items, in order", () => {

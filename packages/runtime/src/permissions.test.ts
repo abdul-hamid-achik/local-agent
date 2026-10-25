@@ -355,8 +355,15 @@ test("rules match a gateway call by the tool it runs or any other name", () => {
   ).toBe("deny");
 });
 
-test("loadPermissionFile: missing and invalid files degrade to empty", async () => {
+test("loadPermissionFile: a missing file degrades to empty, without a warning", async () => {
   const root = await tempRoot();
+  expect(await loadPermissionFile(root)).toEqual({
+    version: 1,
+    rules: [],
+    untrusted: [],
+  });
+  // Nor does a workspace whose .local-agent is not a directory.
+  await writeFile(join(root, ".local-agent"), "not a directory");
   expect(await loadPermissionFile(root)).toEqual({
     version: 1,
     rules: [],

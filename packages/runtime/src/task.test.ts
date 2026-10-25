@@ -170,6 +170,31 @@ test("task runs a read-only subagent; its calls and final answer surface only in
     expect(task?.output).toBe(
       "subagent finished after 3 turns\n\nThe value is 1.",
     );
+    // The child's list and read never reach the parent's stream: every tool
+    // event, call and message in it is the one task call, and its answer.
+    expect(run.results.map((result) => result.name)).toEqual(["task"]);
+    const named = run.events.flatMap((event) =>
+      event.type === "tool_requested" ||
+      event.type === "tool_start" ||
+      event.type === "tool_result"
+        ? [event.name]
+        : event.type === "tool_call"
+          ? [event.call.function.name]
+          : event.type === "message"
+            ? (event.message.tool_calls ?? []).map((call) => call.function.name)
+            : [],
+    );
+    expect(named.length).toBeGreaterThan(0);
+    expect(new Set(named)).toEqual(new Set(["task"]));
+    // Nor does the child's answer, as a message of its own.
+    expect(
+      run.events.filter(
+        (event) =>
+          event.type === "message" &&
+          event.message.role === "assistant" &&
+          event.message.content.includes("The value is 1."),
+      ),
+    ).toEqual([]);
   } finally {
     await run.cleanup();
   }
@@ -265,8 +290,10 @@ test("aborting mid-subagent returns the partial result, labeled", async () => {
     expect(task?.output).toBe(
       "subagent finished after 1 turn (aborted; partial result)\n\n(no final answer)",
     );
-    // The aborted parent run itself does not finish normally.
-    expect(run.runError).toBeInstanceOf(Error);
+    // The aborted parent run itself does not finish normally: it ends with
+    // the signal's own reason, not with some other failure.
+    expect(controller.signal.aborted).toBe(true);
+    expect(run.runError).toBe(controller.signal.reason);
   } finally {
     await run.cleanup();
   }
