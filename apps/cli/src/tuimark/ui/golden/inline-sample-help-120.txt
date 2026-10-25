@@ -1,5 +1,5 @@
 === grid 120x24 ===
- Local Agent           Ollama / ╭─ Help ───────────────────────────────────────────────╮c3d  ctx 9.6k/32k  ███▋░░░░░░░░ 
+ Local Agent           build  Ol╭─ Help ───────────────────────────────────────────────╮c3d  ctx 9.6k/32k  ███▋░░░░░░░░ 
                                 │  ? close help                                        │                                
                                 │  Commands                                            │                                
                                 │  /mode plan|build|chat plan reads only · build can…  │                                

@@ -81,17 +81,46 @@ test("token counts read like the Vue sidebar", () => {
 
 test("the initial store has every path the document reads", () => {
   const store = initialStore({
-    provider: { type: "ollama_remote", model: "m", context_size: 8192 },
+    provider: {
+      type: "ollama_remote",
+      base_url: "http://127.0.0.1:11434",
+      model: "m",
+      context_size: 8192,
+    },
     intent: "plan",
     mcpServers: 2,
     transcript: new Transcript().snapshot(),
   });
   expect(store.header).toMatchObject({
     provider: "Chalupa / remote",
+    locality: "REMOTE",
+    remote: true,
     mode: "plan",
     session: "temporary",
   });
   expect(store.status).toContain("MCP 2");
+  // A server on loopback is local; a LAN server is not.
+  const at = (base_url: string) =>
+    initialStore({
+      provider: {
+        type: "openai_local",
+        base_url,
+        model: "m",
+        context_size: 8192,
+      },
+      intent: "plan",
+      mcpServers: 0,
+      transcript: new Transcript().snapshot(),
+    }).header;
+  expect(at("http://127.0.0.1:8080/v1")).toMatchObject({
+    locality: "LOCAL",
+    remote: false,
+  });
+  expect(at("http://192.168.1.20:8080/v1")).toMatchObject({
+    provider: "OpenAI-compatible / remote",
+    locality: "REMOTE",
+    remote: true,
+  });
   expect(Object.keys(store).sort()).toEqual(
     [
       "approval",
@@ -218,7 +247,12 @@ test("every committed sample is JSON the store can produce", () => {
     expect(Object.keys(sample).sort()).toEqual(
       Object.keys(
         initialStore({
-          provider: { type: "ollama", model: "m", context_size: 1 },
+          provider: {
+            type: "ollama",
+            base_url: "http://127.0.0.1:11434",
+            model: "m",
+            context_size: 1,
+          },
           intent: "build",
           mcpServers: 0,
           transcript: new Transcript().snapshot(),
@@ -363,7 +397,12 @@ test("rows keep the add and delete marks across a wrapped line", () => {
 
 test("empty is derived from the transcript and the mouse starts on in fullscreen", () => {
   const fresh = initialStore({
-    provider: { type: "ollama", model: "m", context_size: 8192 },
+    provider: {
+      type: "ollama",
+      base_url: "http://127.0.0.1:11434",
+      model: "m",
+      context_size: 8192,
+    },
     intent: "build",
     mcpServers: 0,
     workspace: "/home/me/project",
@@ -373,7 +412,12 @@ test("empty is derived from the transcript and the mouse starts on in fullscreen
   expect(fresh.mouse_on).toBe(true);
   expect(
     initialStore({
-      provider: { type: "ollama", model: "m", context_size: 8192 },
+      provider: {
+        type: "ollama",
+        base_url: "http://127.0.0.1:11434",
+        model: "m",
+        context_size: 8192,
+      },
       intent: "build",
       mcpServers: 0,
       workspace: "/home/me/project",
@@ -392,7 +436,12 @@ test("empty is derived from the transcript and the mouse starts on in fullscreen
     card: fresh.messages[0]?.card as never,
   } as never);
   const resumed = initialStore({
-    provider: { type: "ollama", model: "m", context_size: 8192 },
+    provider: {
+      type: "ollama",
+      base_url: "http://127.0.0.1:11434",
+      model: "m",
+      context_size: 8192,
+    },
     intent: "build",
     mcpServers: 0,
     transcript: transcript.snapshot(),
@@ -401,7 +450,12 @@ test("empty is derived from the transcript and the mouse starts on in fullscreen
   // The inline client passes an empty snapshot with a real history: the
   // explicit flag wins over the derivation.
   const inline = initialStore({
-    provider: { type: "ollama", model: "m", context_size: 8192 },
+    provider: {
+      type: "ollama",
+      base_url: "http://127.0.0.1:11434",
+      model: "m",
+      context_size: 8192,
+    },
     intent: "build",
     mcpServers: 0,
     empty: false,
@@ -799,12 +853,24 @@ test("statusLines states only the facts it is handed", () => {
   expect(chalupa).toContain("Provider: Chalupa / remote");
 });
 
-test("providerLabel names each provider type", () => {
-  expect(providerLabel({ type: "ollama" })).toBe("Ollama / loopback");
-  expect(providerLabel({ type: "ollama_remote" })).toBe("Chalupa / remote");
-  expect(providerLabel({ type: "openai_local" })).toBe(
-    "OpenAI-compatible / local",
+test("providerLabel names each provider type and where its prompts go", () => {
+  const loopback = "http://127.0.0.1:11434";
+  expect(providerLabel({ type: "ollama", base_url: loopback })).toBe(
+    "Ollama / loopback",
   );
+  // Chalupa's loopback URL is its tunnel.
+  expect(providerLabel({ type: "ollama_remote", base_url: loopback })).toBe(
+    "Chalupa / remote",
+  );
+  expect(
+    providerLabel({ type: "openai_local", base_url: `${loopback}/v1` }),
+  ).toBe("OpenAI-compatible / local");
+  expect(
+    providerLabel({
+      type: "openai_local",
+      base_url: "http://192.168.1.20:8080/v1",
+    }),
+  ).toBe("OpenAI-compatible / remote");
 });
 
 test("providerLines says what the endpoint answered, and nothing it did not", () => {
@@ -939,7 +1005,12 @@ test("a text panel wraps like the viewer and the closed panel is empty", () => {
 
 function storeInitForPanel() {
   return {
-    provider: { type: "ollama" as const, model: "m", context_size: 8192 },
+    provider: {
+      type: "ollama" as const,
+      base_url: "http://127.0.0.1:11434",
+      model: "m",
+      context_size: 8192,
+    },
     intent: "build" as const,
     mcpServers: 0,
     transcript: { messages: [], earlier: { n: 0 } },

@@ -8,6 +8,7 @@ import {
   type Provider,
   type ProviderProbe,
   placementWarning,
+  providerLocality,
   type Question,
   secretPathNotes,
 } from "@local-agent/runtime";
@@ -286,6 +287,13 @@ export function headState(phase: HeadPhase, seconds: number): HeadView {
 export interface Store {
   header: {
     provider: string;
+    /**
+     * Where the prompt goes, in the word the appbar keeps at every width
+     * (the provider label goes first): "LOCAL" or "REMOTE".
+     */
+    locality: "LOCAL" | "REMOTE";
+    /** The locality is REMOTE: it stands out. */
+    remote: boolean;
     model: string;
     mode: Intent;
     session: string;
@@ -470,11 +478,13 @@ export class CtxMeter {
   }
 }
 
-export function providerLabel(provider: Pick<Provider, "type">): string {
+export function providerLabel(
+  provider: Pick<Provider, "type" | "base_url">,
+): string {
   return provider.type === "ollama_remote"
     ? "Chalupa / remote"
     : provider.type === "openai_local"
-      ? "OpenAI-compatible / local"
+      ? `OpenAI-compatible / ${providerLocality(provider)}`
       : "Ollama / loopback";
 }
 
@@ -641,7 +651,7 @@ export function noApproval(): ApprovalState {
 }
 
 export interface StoreInit {
-  provider: Pick<Provider, "type" | "model" | "context_size">;
+  provider: Pick<Provider, "type" | "base_url" | "model" | "context_size">;
   intent: Intent;
   /** Public session handle, or undefined for a temporary session. */
   sessionId?: string;
@@ -671,9 +681,12 @@ export function workspaceBasename(root: string): string {
 
 export function initialStore(init: StoreInit): Store {
   const found = filterPalette("", init.inline);
+  const remote = providerLocality(init.provider) === "remote";
   return {
     header: {
       provider: providerLabel(init.provider),
+      locality: remote ? "REMOTE" : "LOCAL",
+      remote,
       model: clip(cleanText(init.provider.model), 40),
       mode: init.intent,
       session: init.sessionId ? `session ${init.sessionId}` : "temporary",

@@ -40,6 +40,7 @@ import { Transcript } from "#cli/tuimark/transcript";
 
 const provider = {
   type: "ollama" as const,
+  base_url: "http://127.0.0.1:11434",
   model: "qwen3-coder:30b",
   context_size: 32_768,
 };
@@ -647,6 +648,15 @@ export function grantsSample(): Store {
   return store;
 }
 
+/** A Chalupa session: the appbar says the prompt leaves this machine. */
+export function remoteSample(): Store {
+  const { store } = base();
+  store.header.provider = "Chalupa / remote";
+  store.header.locality = "REMOTE";
+  store.header.remote = true;
+  return store;
+}
+
 /** A tool output longer than its card: the card keeps eight lines of it. */
 export const DETAILS_OUTPUT = Array.from(
   { length: 20 },
@@ -812,6 +822,7 @@ export const SAMPLES = {
   "sample-sessions": sessionsSample,
   "sample-slash": slashSample,
   "sample-grants": grantsSample,
+  "sample-remote": remoteSample,
   "sample-draft": draftSample,
   "sample-draft-long": longDraftSample,
 } as const;

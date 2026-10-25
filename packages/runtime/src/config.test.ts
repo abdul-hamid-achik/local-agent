@@ -2,6 +2,7 @@ import { describe, expect, test } from "vitest";
 import {
   DEFAULT_OLLAMA_MODEL,
   ProviderSchema,
+  providerLocality,
   providerStreamIdleTimeoutMs,
   resolveProvider,
 } from "#runtime/config";
@@ -416,4 +417,29 @@ describe("openai_local provider configuration", () => {
       resolveProvider(local("http://127.0.0.1:8080/v1"), "other"),
     ).toThrow(/LOCAL_AGENT_PROVIDER_CONFIG/);
   });
+});
+
+test("a provider's locality: Chalupa is remote, loopback is local, any other host is remote", () => {
+  expect(
+    providerLocality({
+      type: "ollama_remote",
+      base_url: "http://127.0.0.1:11434",
+    }),
+  ).toBe("remote");
+  expect(
+    providerLocality({ type: "ollama", base_url: "http://localhost:11434" }),
+  ).toBe("local");
+  for (const base_url of [
+    "http://127.0.0.2:8080/v1",
+    "http://[::1]:8080/v1",
+    "http://localhost:8080/v1",
+  ])
+    expect(providerLocality({ type: "openai_local", base_url })).toBe("local");
+  for (const base_url of [
+    "http://192.168.1.20:8080/v1",
+    "https://models.example.com/v1",
+    "http://localhost.:8080/v1",
+    "not a url",
+  ])
+    expect(providerLocality({ type: "openai_local", base_url })).toBe("remote");
 });

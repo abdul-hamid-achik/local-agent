@@ -28,7 +28,7 @@ steps:
         timeoutMs: 15000
     - wait:
         screen:
-            contains: "fixture-model  goal 2/8"
+            contains: "goal 2/8  LOCAL  fixture-model"
         timeoutMs: 10000
     - snapshot: approval
     - wait:
@@ -54,7 +54,7 @@ steps:
         timeoutMs: 10000
     - wait:
         screen:
-            contains: "fixture-model  build"
+            contains: "build  LOCAL  fixture-model"
         timeoutMs: 10000
     - snapshot: done
     - type: "/goal slow goal"

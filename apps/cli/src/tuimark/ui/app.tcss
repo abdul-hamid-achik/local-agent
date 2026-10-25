@@ -29,9 +29,20 @@
 .la-mode { color: $warn; width: auto; }
 .la-sandbox { color: $ok; width: auto; }
 .la-goal { color: $accent; width: auto; }
-.la-provider, .la-session, .la-ctx, .la-grants { width: auto; }
+.la-provider, .la-locality, .la-session, .la-ctx, .la-grants { width: auto; }
+/* Where the prompt goes is in the appbar at every width: the provider
+ * label says it on a wide terminal, LOCAL or REMOTE in its place below
+ * 111 columns, and in the compact tier the model name gives way to it. */
+.la-locality { color: $muted; }
+.la-locality.remote { color: $accent; bold: true; }
+@media (min-cols: 111) {
+  .la-locality { display: none; }
+}
 @media (max-cols: 110) {
   .la-provider { display: none; }
+}
+@media (max-cols: 60) {
+  .la-model { display: none; }
 }
 /* The grants label is long: the session id and then the ctx bar (the
  * label keeps the numbers) give it room before the ctx label is cut. */
@@ -127,9 +138,10 @@ span.del { color: $danger; }
 #status { gap: 1; padding: 0 1; }
 .la-statustext { width: auto; padding: 0 2 0 0; }
 .la-hints { width: 1fr; justify: end; }
-/* Narrow terminals: the context meter goes first (model and mode stay), and
- * the status text is capped so at least the first hint (^P commands) fits.
- * Hints drop as a suffix: the first that does not fit takes the rest. */
+/* Narrow terminals: the context meter goes too (the mode and the locality
+ * stay), and the status text is capped so at least the first hint (^P
+ * commands) fits. Hints drop as a suffix: the first that does not fit
+ * takes the rest. */
 @media (max-cols: 60) {
   .la-ctx, .la-ctxbar, .la-grants { display: none; }
   .la-statustext { max-width: 50%; padding: 0; }

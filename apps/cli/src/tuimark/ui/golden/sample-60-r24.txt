@@ -1,5 +1,5 @@
 === grid 60x24 ===
- Local Agent             qwen3-coder:30b  build             
+ Local Agent                  build  LOCAL                  
 ┌──────────────────────────────────────────────────────────┐
 │      try { return await fetch(url); }                    │
 │      catch (e) { if (attempt === tries) throw e; }       │

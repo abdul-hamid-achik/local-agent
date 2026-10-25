@@ -1,5 +1,5 @@
 === grid 120x30 ===
- Local Agent           Ollama / loopback  qwen3-coder:30b  build            session a1b2c3d  ctx 9.6k/32k  ███▋░░░░░░░░ 
+ Local Agent           build  Ollama / loopback  qwen3-coder:30b            session a1b2c3d  ctx 9.6k/32k  ███▋░░░░░░░░ 
 ┌──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
 │ Assistant                                                                                                            │
 │ Sure. I will wrap the call in a bounded retry with backoff:                                                          │

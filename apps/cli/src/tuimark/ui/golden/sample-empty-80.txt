@@ -1,5 +1,5 @@
 === grid 80x30 ===
- Local Agent         qwen3-coder:30b  build          ctx 9.6k/32k  ███▋░░░░░░░░ 
+ Local Agent      build  LOCAL  qwen3-coder:30b      ctx 9.6k/32k  ███▋░░░░░░░░ 
 ┌──────────────────────────────────────────────────────────────────────────────┐
 │                                 Local Agent                                  │
 │                                                                              │

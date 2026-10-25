@@ -239,12 +239,15 @@
   <screen id="main" focus="#composer" class:slashpop="slash.open" class:asking="question.open">
     <col id="app">
       <use template="k-appbar" brand="Local Agent" title="">
-        <text class="la-muted la-provider">{header.provider}</text>
-        <text class="la-model">{header.model}</text>
-        <!-- A goal runs only in build: while it runs, its turn takes the mode's place. -->
+        <!-- By priority, so a narrow terminal clips the least important:
+             what may run (the mode, or a goal's turn, which runs only in
+             build; the sandbox), then where the prompt goes, then the model. -->
         <text if="!header.goal_on" class="la-mode">{header.mode}</text>
         <text if="header.goal_on" class="la-goal">{header.goal}</text>
         <text if="header.sandbox_on" class="la-sandbox">sandbox</text>
+        <text class="la-muted la-provider">{header.provider}</text>
+        <text class="la-locality" class:remote="header.remote">{header.locality}</text>
+        <text class="la-model">{header.model}</text>
         <spacer/>
         <text if="header.grants_on" class="la-muted la-grants">{header.grants}</text>
         <text class="la-muted la-session" class:crowded="header.grants_on">{header.session}</text>

@@ -1,5 +1,5 @@
 === grid 40x24 ===
- Local Agent    qwen3-coder:30b  build  
+ Local Agent        build  LOCAL        
 ┌──────────────────────────────────────┐
 │ ╭─ Edit ───────────────────────────╮ │
 │ │ ✓ succeeded · 0.4s               │ │

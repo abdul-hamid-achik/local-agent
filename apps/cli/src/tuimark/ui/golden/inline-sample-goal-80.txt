@@ -1,5 +1,5 @@
 === grid 80x8 ===
- Local Agent        qwen3-coder:30b  goal 2/8        ctx 9.6k/32k  ███▋░░░░░░░░ 
+ Local Agent    goal 2/8  LOCAL  qwen3-coder:30b     ctx 9.6k/32k  ███▋░░░░░░░░ 
 Assistant ⠋  41s                                                                
 Running the fetch tests next.                                                   
                                                                                 

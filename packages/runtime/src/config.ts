@@ -250,6 +250,24 @@ export const ProviderSchema = z
       });
   });
 export type Provider = z.infer<typeof ProviderSchema>;
+
+/**
+ * Where a provider's prompts go. Chalupa's are remote: its loopback URL is
+ * a tunnel, never proof the model runs here. Otherwise a server on
+ * loopback is local, and any other host (a LAN server) is remote.
+ */
+export function providerLocality(
+  provider: Pick<Provider, "type" | "base_url">,
+): "local" | "remote" {
+  if (provider.type === "ollama_remote") return "remote";
+  try {
+    return isLoopbackHost(new URL(provider.base_url).hostname)
+      ? "local"
+      : "remote";
+  } catch {
+    return "remote";
+  }
+}
 export type OpenAILocalProvider = Provider & { type: "openai_local" };
 
 /** Raw `--context` / `--think` values; the environment variables are the fallback. */

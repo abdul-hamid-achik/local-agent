@@ -1,5 +1,5 @@
 === grid 40x5 ===
- Local Agent    qwen3-coder:30b  build  
+ Local Agent        build  LOCAL        
 ╔══════════════════════════════════════╗
 ║ Message the model                    ║
 ╚══════════════════════════════════════╝

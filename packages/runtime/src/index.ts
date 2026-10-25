@@ -35,6 +35,7 @@ export {
   type Provider,
   type ProviderOptions,
   ProviderSchema,
+  providerLocality,
   providerStreamIdleTimeoutMs,
   resolveProvider,
 } from "#runtime/config";
