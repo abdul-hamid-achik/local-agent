@@ -148,7 +148,18 @@ const args = [
       ]
     : []),
 ];
-const child = Bun.spawn([process.execPath, ...args], {
+let stopping: Promise<never> | undefined;
+let child: Bun.Subprocess | undefined;
+/** Stops the client, checks the files and cleans up, then exits; once. */
+function shutdown(exitCode: number): Promise<never> {
+  stopping ??= stop(exitCode);
+  return stopping;
+}
+// Before the client starts: a signal in between still cleans up.
+process.on("SIGINT", () => void shutdown(130));
+process.on("SIGTERM", () => void shutdown(143));
+
+child = Bun.spawn([process.execPath, ...args], {
   stdin: "inherit",
   stdout: "inherit",
   stderr: "inherit",
@@ -163,12 +174,9 @@ const child = Bun.spawn([process.execPath, ...args], {
   },
 });
 
-let cleaned = false;
-async function shutdown(exitCode: number) {
-  if (cleaned) return;
-  cleaned = true;
-  if (child.exitCode === null) child.kill("SIGTERM");
-  await child.exited;
+async function stop(exitCode: number): Promise<never> {
+  if (child && child.exitCode === null) child.kill("SIGTERM");
+  await child?.exited;
   server.stop(true);
   // A file the run should have written and did not fails the spec with
   // exit code 1, and the temporary directories go either way.
@@ -188,6 +196,4 @@ async function shutdown(exitCode: number) {
   process.exit(exitCode);
 }
 
-process.once("SIGINT", () => void shutdown(130));
-process.once("SIGTERM", () => void shutdown(143));
 await shutdown(await child.exited);

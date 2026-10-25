@@ -369,10 +369,23 @@ const env = {
 const children: Bun.Subprocess[] = [];
 let sessionDirectory: string | undefined;
 
-let cleaned = false;
-async function shutdown(exitCode: number) {
-  if (cleaned) return;
-  cleaned = true;
+let stopping: Promise<never> | undefined;
+/**
+ * Stops every process, checks notes.txt, removes the directories and
+ * exits, once: a later call gets the same promise, which never settles,
+ * so whatever awaited it does not go on.
+ */
+function shutdown(exitCode: number): Promise<never> {
+  stopping ??= stop(exitCode);
+  return stopping;
+}
+
+/** The setup goes on only while the fixture is not shutting down. */
+async function going(): Promise<void> {
+  if (stopping) await stopping;
+}
+
+async function stop(exitCode: number): Promise<never> {
   for (const run of children) if (run.exitCode === null) run.kill("SIGTERM");
   await Promise.all(children.map((run) => run.exited));
   server.stop(true);
@@ -398,11 +411,12 @@ async function shutdown(exitCode: number) {
 
 // Before any process starts: a spec that times out during the headless
 // setup still stops it and removes the directories.
-process.once("SIGINT", () => void shutdown(130));
-process.once("SIGTERM", () => void shutdown(143));
+process.on("SIGINT", () => void shutdown(130));
+process.on("SIGTERM", () => void shutdown(143));
 
 /** A headless turn for the setup; a failure ends the fixture with 1. */
 async function headless(prompt: string, database: string): Promise<string> {
+  await going();
   const run = Bun.spawn(
     [process.execPath, ...baseArgs, "--mode", "headless", "-p", prompt, "--session-db", database],
     { stdout: "ignore", stderr: "pipe", env },
@@ -418,6 +432,7 @@ async function headless(prompt: string, database: string): Promise<string> {
 
 const extraArgs: string[] = [];
 if (mode === "session") {
+  await going();
   sessionDirectory = await mkdtemp(join(tmpdir(), "local-agent-tuimark-db-"));
   const database = join(sessionDirectory, "sessions.db");
   const log = await headless("stream the first reply", database);
@@ -429,6 +444,7 @@ if (mode === "session") {
   extraArgs.push("--session-db", database, "--resume", id ?? "");
 }
 if (mode === "sessions") {
+  await going();
   sessionDirectory = await mkdtemp(join(tmpdir(), "local-agent-tuimark-db-"));
   const database = join(sessionDirectory, "sessions.db");
   for (const prompt of ["stream the first reply", "stream the second reply"])
@@ -436,6 +452,7 @@ if (mode === "sessions") {
   extraArgs.push("--session-db", database);
 }
 
+await going();
 const child = Bun.spawn(
   [
     process.execPath,
