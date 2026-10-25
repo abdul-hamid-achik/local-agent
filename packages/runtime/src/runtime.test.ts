@@ -255,6 +255,8 @@ test("a stream line that is not JSON fails the reply instead of being skipped", 
       `{"message":{"role":"assistant","content":"a"},"done":false}\n{"done":tr`,
       '{"done":tr',
     ],
+    // Cut at 60 code points: the 60th, an emoji, stays whole.
+    [`${"x".repeat(59)}🛶 and more\n`, `${"x".repeat(59)}🛶`],
   ] as const) {
     const server = Bun.serve({
       hostname: "127.0.0.1",
@@ -279,7 +281,12 @@ test("a stream line that is not JSON fails the reply instead of being skipped", 
           ))
             events.push(event);
         })(),
-      ).rejects.toThrow(`Ollama sent a line that is not JSON: ${start}`);
+      ).rejects.toThrow(
+        new RegExp(
+          `Ollama sent a line that is not JSON: ${RegExp.escape(start)}$`,
+          "u",
+        ),
+      );
       expect(events).not.toContainEqual({ type: "text", text: "b" });
     } finally {
       await server.stop(true);

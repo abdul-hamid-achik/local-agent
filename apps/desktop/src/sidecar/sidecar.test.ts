@@ -211,20 +211,148 @@ test("a cancel is answered while a slow request is still waiting", async () => {
     side.send({ id: 1, method: "ollama.models", params: {} });
     side.send({ id: 2, method: "agent.cancel", params: { runId: "r1" } });
     side.send({ id: 3, method: "hello" });
+    // A start takes its turn too, though it fails at once (no such intent).
+    side.send({
+      id: 4,
+      method: "agent.start",
+      params: { runId: "r4", workspace: root, intent: "nope", messages: [] },
+    });
+    side.send({
+      id: 5,
+      method: "agent.decide",
+      params: { runId: "r1", token: "t", allowed: true },
+    });
     expect(await side.frame((frame) => frame.id === 2)).toMatchObject({
       ok: true,
       result: { cancelled: false },
     });
-    // The rest keep their order: hello waits for the inventory.
-    expect(side.frames.some((frame) => frame.id === 1 || frame.id === 3)).toBe(
-      false,
-    );
+    expect(await side.frame((frame) => frame.id === 5)).toMatchObject({
+      ok: true,
+      result: { decided: false },
+    });
+    // The rest keep their order: hello and the start wait for the
+    // inventory (a start that ran at once would have answered by now).
+    await Bun.sleep(100);
+    expect(
+      side.frames.some((frame) => [1, 3, 4].includes(frame.id as number)),
+    ).toBe(false);
     release();
-    expect(await side.frame((frame) => frame.id === 3)).toMatchObject({
+    expect(await side.frame((frame) => frame.id === 4)).toMatchObject({
+      ok: false,
+    });
+    expect(side.frames.map((frame) => frame.id)).toEqual([2, 5, 1, 3, 4]);
+    expect(side.frames[2]).toMatchObject({ ok: true });
+  } finally {
+    release();
+    side.child.kill();
+    await side.child.exited;
+    await server.stop(true);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a running turn does not hold the requests after its start", async () => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), "la-sidecar-")));
+  let release = () => {};
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    idleTimeout: 0,
+    async fetch(request) {
+      const path = new URL(request.url).pathname;
+      if (path === "/api/tags")
+        return Response.json({ models: [{ name: "fixture", size: 1000 }] });
+      if (path === "/api/show")
+        return Response.json({
+          capabilities: ["completion", "tools"],
+          model_info: { "fixture.context_length": 16384 },
+        });
+      await held;
+      return new Response(
+        `${JSON.stringify({ message: { role: "assistant", content: "done" }, done: true })}\n`,
+      );
+    },
+  });
+  const side = sidecarChild({
+    DESKTOP_REPO_ROOT: root,
+    OLLAMA_HOST: server.url.origin,
+  });
+  try {
+    side.send({
+      id: 1,
+      method: "agent.start",
+      params: {
+        runId: "r1",
+        workspace: root,
+        intent: "build",
+        model: "fixture",
+        messages: [{ role: "user", content: "go" }],
+      },
+    });
+    expect(await side.frame((frame) => frame.id === 1)).toMatchObject({
       ok: true,
     });
-    expect(side.frames.map((frame) => frame.id)).toEqual([2, 1, 3]);
-    expect(side.frames[1]).toMatchObject({ ok: true });
+    side.send({ id: 2, method: "hello" });
+    expect(await side.frame((frame) => frame.id === 2)).toMatchObject({
+      ok: true,
+    });
+    expect(
+      side.frames.some(
+        (frame) =>
+          frame.stream === "r1" &&
+          String((frame.event as { type: string }).type).startsWith("run_"),
+      ),
+    ).toBe(false);
+    release();
+    await side.frame(
+      (frame) =>
+        frame.stream === "r1" &&
+        (frame.event as { type: string }).type === "run_done",
+    );
+  } finally {
+    release();
+    side.child.kill();
+    await side.child.exited;
+    await server.stop(true);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("past 64 waiting requests the sidecar stops reading until they are answered", async () => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), "la-sidecar-")));
+  let release = () => {};
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    async fetch() {
+      await held;
+      return Response.json({ models: [] });
+    },
+  });
+  const side = sidecarChild({
+    DESKTOP_REPO_ROOT: root,
+    OLLAMA_HOST: server.url.origin,
+  });
+  try {
+    side.send({ id: 1, method: "ollama.models", params: {} });
+    for (let id = 2; id <= 64; id++) side.send({ id, method: "hello" });
+    // The 65th request is not read: not even a cancel is answered.
+    side.send({ id: 65, method: "agent.cancel", params: { runId: "r1" } });
+    await Bun.sleep(100);
+    expect(side.frames).toEqual([]);
+    release();
+    expect(await side.frame((frame) => frame.id === 65)).toMatchObject({
+      ok: true,
+    });
+    expect(side.frames.map((frame) => frame.id)).toEqual(
+      Array.from({ length: 65 }, (_, at) => at + 1),
+    );
   } finally {
     release();
     side.child.kill();

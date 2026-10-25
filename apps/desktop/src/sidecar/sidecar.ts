@@ -725,12 +725,20 @@ const CONTROLS = new Set<string>([
   SidecarMethods.projectCancel,
 ]);
 
+/** Requests waiting their turn before the reader stops taking more. */
+const MAX_QUEUED = 64;
+
 async function main(): Promise<void> {
   const reader = Bun.stdin.stream().getReader();
   const decoder = new TextDecoder();
   let buffer = "";
-  // Other requests are answered in order, each after the one before it.
+  // Requests take effect in the order they came, each after the one before
+  // it. A run starts in its turn but does not hold the line (its stream
+  // owns its answer), and a run's controls are answered at once: a decide
+  // or a cancel is served while a run, or a slow request (mcp.status
+  // connects every server), is in flight.
   let ordered = Promise.resolve();
+  let queued = 0;
   for (;;) {
     const chunk = await reader.read();
     if (chunk.done) break;
@@ -756,18 +764,20 @@ async function main(): Promise<void> {
       }
       const answer = () =>
         dispatch(request).catch((error: unknown) => fail(request.id, error));
-      if (
-        request.method === SidecarMethods.agentStart ||
-        request.method === SidecarMethods.projectRun ||
-        CONTROLS.has(request.method)
-      ) {
-        // Streaming handlers run concurrently and own their response frame,
-        // and a decide or a cancel is served while a run, or a slow request
-        // (an MCP status connects every server), is in flight.
+      if (CONTROLS.has(request.method)) {
         void answer();
         continue;
       }
-      ordered = ordered.then(answer);
+      const streaming =
+        request.method === SidecarMethods.agentStart ||
+        request.method === SidecarMethods.projectRun;
+      queued++;
+      ordered = ordered.then(() => {
+        queued--;
+        if (!streaming) return answer();
+        void answer();
+      });
+      if (queued >= MAX_QUEUED) await ordered;
     }
   }
 }

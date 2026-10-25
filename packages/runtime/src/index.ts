@@ -268,11 +268,12 @@ function checkedNdjson(response: Response): Response {
     try {
       JSON.parse(line);
     } catch {
-      const start = Bun.stripANSI(line)
+      const flat = Bun.stripANSI(line)
         // biome-ignore lint/suspicious/noControlCharactersInRegex: remove control characters from what the server sent
         .replace(/[\s\u0000-\u001f\u007f-\u009f]+/g, " ")
-        .trim()
-        .slice(0, 60);
+        .trim();
+      // By code point: a cut never leaves half of a surrogate pair.
+      const start = Array.from(flat).slice(0, 60).join("");
       throw new Error(`Ollama sent a line that is not JSON: ${start}`);
     }
   };
