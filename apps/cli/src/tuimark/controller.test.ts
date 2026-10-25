@@ -4334,8 +4334,8 @@ test("a windowed request leaves a notice when more is left out, not on every tur
     .messages.filter((m: MessageView) => m.is_notice)
     .map(viewText);
   expect(notices).toEqual([
-    "Context window full: the model now sees the newest 60 messages. The oldest 40 stay in the session but are not sent; /sessions new starts over.",
-    "Context window full: the model now sees the newest 60 messages. The oldest 80 stay in the session but are not sent; /sessions new starts over.",
+    "Context window full: the model now sees the newest 60 messages. The oldest 40 messages stay in the session but are not sent; /sessions new starts over.",
+    "Context window full: the model now sees the newest 60 messages. The oldest 80 messages stay in the session but are not sent; /sessions new starts over.",
   ]);
 });
 

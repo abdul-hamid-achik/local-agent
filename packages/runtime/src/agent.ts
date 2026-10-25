@@ -2505,6 +2505,13 @@ async function* agentTurn(
                 `fetch: ${finalUrl} is not a PNG, JPEG, WebP or GIF image (the content is checked, not the content type)`,
               );
             const { width, height } = kind.dimensions(bytes);
+            if (
+              !Number.isSafeInteger(width) ||
+              !Number.isSafeInteger(height) ||
+              !width ||
+              !height
+            )
+              throw new Error(`fetch: ${finalUrl} has no usable dimensions`);
             if (width * height > IMAGE_MAX_PIXELS)
               throw new Error(
                 `fetch: ${finalUrl} is ${width}x${height}, too many pixels (at most ${IMAGE_MAX_PIXELS})`,

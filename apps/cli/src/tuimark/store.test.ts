@@ -40,6 +40,7 @@ import {
   statusLines,
   TRUNCATED_BODY,
   tokens,
+  windowedNotice,
   workspaceBasename,
   wrapLine,
 } from "#cli/tuimark/store";
@@ -84,6 +85,15 @@ test("token counts read like the Vue sidebar", () => {
   expect(contextLabel(9_830, 32_768)).toBe("9.6k/32k");
   expect(contextPct(16_384, 32_768)).toBe(50);
   expect(contextPct(99_999, 32_768)).toBe(100);
+});
+
+test("the window notice counts one message in the singular", () => {
+  expect(windowedNotice({ left: 1, sent: 1 })).toBe(
+    "Context window full: the model now sees the newest message. The oldest message stays in the session but is not sent; /sessions new starts over.",
+  );
+  expect(windowedNotice({ left: 40, sent: 60 })).toBe(
+    "Context window full: the model now sees the newest 60 messages. The oldest 40 messages stay in the session but are not sent; /sessions new starts over.",
+  );
 });
 
 test("the initial store has every path the document reads", () => {

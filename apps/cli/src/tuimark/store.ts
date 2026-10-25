@@ -441,7 +441,8 @@ export function compactedNotice(
 
 /** The notice when requests start leaving more of the oldest messages out. */
 export function windowedNotice(event: { left: number; sent: number }): string {
-  return `Context window full: the model now sees the newest ${event.sent} messages. The oldest ${event.left} stay in the session but are not sent; /sessions new starts over.`;
+  const some = (n: number) => (n === 1 ? "message" : `${n} messages`);
+  return `Context window full: the model now sees the newest ${some(event.sent)}. The oldest ${some(event.left)} ${event.left === 1 ? "stays" : "stay"} in the session but ${event.left === 1 ? "is" : "are"} not sent; /sessions new starts over.`;
 }
 
 export function contextLabel(used: number, size: number): string {

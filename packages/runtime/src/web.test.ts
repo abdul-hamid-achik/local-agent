@@ -896,6 +896,29 @@ test("fetch appends a bounded extracted footer of top links and images", async (
   }
 });
 
+test("fetch refuses a downloaded image that claims no pixels", async () => {
+  const flat = Buffer.alloc(24);
+  TINY_PNG.copy(flat, 0, 0, 24);
+  flat.writeUInt32BE(0, 16);
+  flat.writeUInt32BE(0, 20);
+  stubFetch((url) =>
+    url === "http://img.example/flat.png"
+      ? new Response(flat, { headers: { "content-type": "image/png" } })
+      : undefined,
+  );
+  const run = await session([
+    { name: "fetch", arguments: { url: "http://img.example/flat.png" } },
+  ]);
+  try {
+    expect(run.results.map((result) => result.status)).toEqual(["failed"]);
+    expect(run.output(0)).toMatch(/flat\.png has no usable dimensions/);
+    expect(run.toolMessages[0]?.images).toBeUndefined();
+  } finally {
+    restoreFetch();
+    await run.cleanup();
+  }
+});
+
 test("fetch refuses a downloaded image whose pixel count is a decompression bomb", async () => {
   const bomb = Buffer.alloc(24);
   TINY_PNG.copy(bomb, 0, 0, 24);
