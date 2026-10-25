@@ -35,6 +35,10 @@ Chalupa side: the client rejects a `--model` that differs from the profile,
 and rejects `--context` outright — Chalupa negotiates the context itself.
 `--think` still applies.
 
+When the profile carries `keep_alive` (a duration such as `30m`), the
+client sends it with every chat, so the model stays loaded between turns for
+as long as Chalupa asks; without it the server's own default applies.
+
 Without `--session-db` the conversation lives only in the process and ends
 with the launch. Arguments after `--` reach the client, so
 `chalupa launch local-agent -- --session-db ~/.local-agent/sessions.db`

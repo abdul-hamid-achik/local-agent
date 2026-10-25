@@ -61,7 +61,7 @@ others. A server that fails to connect does not stop the run:
 - the Tuimark client opens without waiting. The status line says
   `MCP connecting…`, and failures appear there and in `/mcp`. A message you
   send before the servers are ready waits for them, because their tools are
-  part of what the model is offered. Esc cancels the wait.
+  part of what the model is offered. `esc` cancels the wait.
 
 A STDIO server that does not start is reported with the last line it wrote to
 stderr, after the reason, on one line with escape sequences and control

@@ -111,12 +111,12 @@ run exactly as written with your permissions — there is no shell.
 
 Every tool call leaves a card in the transcript. The card names the tool
 (Read, Edit, Command, or `MCP · server · tool` for an MCP call), marks how
-it ended (`✓` succeeded, `✗` denied or failed, `!` when the outcome is
-unknown or unverified, as for an MCP call's result), and says how long it
-ran. A successful edit shows the lines it changed, a newly created file
-shows its lines. A card that cuts its output names it
-(`… 12 more lines · /details 3 for full output`): `/details 3` opens that
-output in full, and `/details` alone the last one.
+it ended (`✓` succeeded, or applied for an edit or a write, `✗` denied or
+failed, `!` when the outcome is unknown or unverified, as for an MCP call's
+result), and says how long it ran. A successful edit shows the lines it
+changed, a newly created file shows its lines. A card that cuts its output
+names it (`… 12 more lines · /details 3 for full output`): `/details 3`
+opens that output in full, and `/details` alone the last one.
 
 While a turn runs, the reply being written has a head that says what the
 turn is doing and for how long: `Assistant ⠋ thinking · 12s`. The head reads

@@ -135,9 +135,10 @@ a child and draws the whole screen from `apps/cli/src/tuimark/ui/app.tui`.
   default; `/mouse off` gives the terminal its native selection back. Inline
   has no mouse.
   Each tool card is titled by its tool (Read, Edit, Command, `MCP · server ·
-  tool`), marks how the call ended (`✓` succeeded, `✗` denied or failed, `!`
-  outcome unknown or unverified) and says how long it ran; a successful edit
-  shows the lines it changed and a created file its lines. While a turn
+  tool`), marks how the call ended (`✓` succeeded, or applied for an edit
+  or a write, `✗` denied or failed, `!` outcome unknown or unverified) and
+  says how long it ran; a successful edit shows the lines it changed and a
+  created file its lines. While a turn
   runs, the assistant's live message has a head, `Assistant ⠋ thinking ·
   12s`: waiting for the model (or connecting MCP servers), thinking, or only
   the elapsed time while the reply streams. A running tool's card has its own
