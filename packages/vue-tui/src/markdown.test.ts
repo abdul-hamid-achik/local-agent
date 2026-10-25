@@ -1,7 +1,13 @@
+import { createTestRenderer } from "@opentui/core/testing";
 import { expect, test } from "vitest";
 import { createRenderer, h, ref } from "vue";
-import { Box, createNodeOps, Markdown, SyntaxStyle } from "vue-termui";
-import { createTestRenderer } from "#tui/testing";
+import {
+  Box,
+  createNodeOps,
+  Markdown,
+  rendererInjectionKey,
+  SyntaxStyle,
+} from "vue-termui";
 
 test("upstream Markdown wraps without a fixed height", async () => {
   const terminal = await createTestRenderer({ width: 40, height: 24 });
@@ -22,6 +28,7 @@ test("upstream Markdown wraps without a fixed height", async () => {
         }),
       ),
   });
+  app.provide(rendererInjectionKey, terminal.renderer);
   app.mount(terminal.renderer.root);
   try {
     await terminal.waitForFrame((frame) => frame.includes("world"));

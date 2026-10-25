@@ -17,6 +17,11 @@ const lastDecision = ref("");
 const exit = useExit();
 const { width, height } = useTerminalSize();
 
+// Composer emits every submit, empty ones included; the owner decides.
+function submit(value: string) {
+  if (value.trim()) approval.value = true;
+}
+
 onKeyDown((key) => {
   if (key.ctrl && key.name === "c") {
     key.preventDefault();
@@ -42,7 +47,7 @@ onKeyDown((key) => {
         v-else
         v-model="draft"
         :busy="false"
-        @submit="approval = true"
+        @submit="submit"
         @cancel="draft = ''"
       />
     </template>

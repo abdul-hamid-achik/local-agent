@@ -1,4 +1,4 @@
-import { defineComponent, h, ref } from "vue";
+import { defineComponent, h, ref, watch } from "vue";
 import { Box, ScrollBox, Text } from "vue-termui";
 
 export const Approval = defineComponent({
@@ -10,7 +10,15 @@ export const Approval = defineComponent({
   },
   emits: { decision: (approved: boolean) => typeof approved === "boolean" },
   setup(props, { emit }) {
+    // One decision per prompt: a repeated key must not decide twice, and a
+    // new prompt on the same instance must be decidable again.
     const decided = ref(false);
+    watch(
+      () => [props.title, props.preview],
+      () => {
+        decided.value = false;
+      },
+    );
     const decide = (approved: boolean) => {
       if (decided.value) return;
       decided.value = true;

@@ -20,11 +20,19 @@ Use camelCase native layout options, including in SFC templates:
 
 `Composer` provides a bounded multiline draft editor. Enter submits, Shift+Enter
 inserts a newline, and pasted newlines stay in the draft. Its `height` prop is
-the terminal-cell viewport (3 by default); long drafts scroll inside the native
-Textarea. Programmatic `modelValue` changes replace the native buffer, so a
+the outer height in terminal cells, border included (3 by default, which leaves
+one editor row; the inline footer budgets for it). The editor shows
+`height - 2` rows and long drafts scroll inside the native Textarea.
+`submit` is emitted for any draft, including an empty one; the owner decides
+what to ignore. `cancel` (Escape) is emitted by a focused editor: a Composer
+that is busy when it mounts is not focusable, so its owner handles Escape with
+`onKeyDown`. Programmatic `modelValue` changes replace the native buffer, so a
 successful submit can clear it without remounting the component. `Approval`
 renders the complete preview in a bounded ScrollBox and keeps its deny-first
-keyboard footer visible.
+keyboard footer visible. It emits one decision per prompt: the next `title` or
+`preview` re-arms it, and an identical prompt needs a new `key`. The preview is
+never truncated (a hidden line could be a line the user approved unseen), so
+the owner bounds its size.
 
 Sizes are terminal cells or supported relative dimensions, not browser CSS.
 Numeric props need bindings (`:height="3"`). Layout options pass through to
@@ -39,7 +47,7 @@ to native scrollback. Inline content already committed to history is immutable.
 native rendering, so headless clients can use it independently.
 
 Run `bun run tui:dev` at the repository root to edit a model-free `.vue`
-playground. `bun run typecheck` checks TS 7 source and runs the isolated Vue
+playground (fullscreen; `TUI_PLAYGROUND_MODE=inline` previews the inline footer). `bun run typecheck` checks TS 7 source and runs the isolated Vue
 template checker; `bun run test` runs Vitest; `bun run test:integration` runs
 the application's Glyphrun contracts. `bun run tui:build` builds the playground.
 

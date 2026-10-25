@@ -35,7 +35,7 @@ async function mount(component: ReturnType<typeof defineComponent>) {
 }
 
 describe("Composer", () => {
-  test("submits on Enter and keeps multiline paste in the draft", async () => {
+  test("submits the typed draft on Enter and keeps it until the owner clears it", async () => {
     const draft = ref("");
     const submitted = ref<string[]>([]);
     const Root = defineComponent({
@@ -52,11 +52,32 @@ describe("Composer", () => {
     terminal.mockInput.pressEnter();
     await nextTick();
     expect(submitted.value).toEqual(["hello"]);
-
-    await terminal.mockInput.pasteBracketedText("one\ntwo");
-    await nextTick();
-    expect(draft.value).toContain("one\ntwo");
+    expect(draft.value).toBe("hello");
   });
+
+  test.each([
+    ["LF", "one\ntwo", "hello one\ntwo"],
+    ["CRLF", "one\r\ntwo", "hello one\ntwo"],
+    ["multibyte", "uno 🛶\ndós ñ", "hello uno 🛶\ndós ñ"],
+  ])(
+    "a %s paste lands once, after the existing draft",
+    async (_name, pasted, expected) => {
+      const draft = ref("");
+      const Root = defineComponent({
+        setup: () => () =>
+          h(Composer, {
+            modelValue: draft.value,
+            "onUpdate:modelValue": (value: string) => (draft.value = value),
+          }),
+      });
+      const terminal = await mount(Root);
+
+      await terminal.mockInput.typeText("hello ");
+      await terminal.mockInput.pasteBracketedText(pasted);
+      await nextTick();
+      expect(draft.value).toBe(expected);
+    },
+  );
 
   test("Shift+Enter inserts a newline and Escape cancels", async () => {
     const draft = ref("");
@@ -81,21 +102,87 @@ describe("Composer", () => {
   });
 });
 
-test("Composer does not submit while busy", async () => {
+test("Composer does not submit once a turn starts, even with the editor focused", async () => {
+  const draft = ref("");
+  const busy = ref(false);
+  const submitted: string[] = [];
+  const cancelled = ref(0);
+  const Root = defineComponent({
+    setup: () => () =>
+      h(Composer, {
+        modelValue: draft.value,
+        busy: busy.value,
+        "onUpdate:modelValue": (value: string) => (draft.value = value),
+        onSubmit: (value: string) => submitted.push(value),
+        onCancel: () => cancelled.value++,
+      }),
+  });
+  const terminal = await mount(Root);
+
+  await terminal.mockInput.typeText("draft");
+  busy.value = true;
+  await nextTick();
+  await terminal.flush();
+  terminal.mockInput.pressEnter();
+  terminal.mockInput.pressEscape();
+  await nextTick();
+  expect(submitted).toEqual([]);
+  // The editor keeps the focus it had when the turn started, so Escape still
+  // reaches onCancel: a turn can be cancelled from the Composer itself.
+  expect(cancelled.value).toBe(1);
+
+  busy.value = false;
+  await nextTick();
+  await terminal.flush();
+  terminal.mockInput.pressEnter();
+  await nextTick();
+  expect(submitted).toEqual(["draft"]);
+});
+
+test("a Composer that starts busy ignores Enter and Escape", async () => {
   const submitted = ref(0);
+  const cancelled = ref(0);
   const Root = defineComponent({
     setup: () => () =>
       h(Composer, {
         modelValue: "draft",
         busy: true,
         onSubmit: () => submitted.value++,
+        onCancel: () => cancelled.value++,
       }),
   });
   const terminal = await mount(Root);
   terminal.mockInput.pressEnter();
+  terminal.mockInput.pressEscape();
   await nextTick();
   expect(submitted.value).toBe(0);
+  // Mounted busy, the editor never takes focus: Escape is the owner's to
+  // handle with onKeyDown, onCancel is only emitted by a focused editor.
+  expect(cancelled.value).toBe(0);
 });
+
+test.each([
+  [undefined, 1],
+  [5, 3],
+])(
+  "height %s is the outer height: the border leaves %i editor rows",
+  async (height, rows) => {
+    const draft = Array.from(
+      { length: 10 },
+      (_, index) => `line ${index + 1}`,
+    ).join("\n");
+    const terminal = await mount(
+      defineComponent({
+        setup: () => () => h(Composer, { modelValue: draft, height }),
+      }),
+    );
+    const visible = terminal
+      .captureCharFrame()
+      .split("\n")
+      .filter((row) => /line \d+/.test(row));
+    expect(visible).toHaveLength(rows);
+  },
+);
 
 test("programmatic model changes replace the native draft", async () => {
   const draft = ref("before");

@@ -27,6 +27,8 @@ export const Composer = defineComponent({
   props: {
     modelValue: { type: String, required: true },
     busy: { type: Boolean, default: false },
+    // Outer height in terminal cells, border included: the editor gets
+    // height - 2 rows, so the default of 3 shows one line of the draft.
     height: { type: Number, default: 3 },
   },
   emits: {

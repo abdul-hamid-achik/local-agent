@@ -93,9 +93,9 @@
         "vue": "3.5.44",
       },
       "peerDependencies": {
-        "@vitejs/plugin-vue": "^6.0.8",
-        "vite": "^8.3.5",
-        "vue": "^3.5.44",
+        "@vitejs/plugin-vue": "6.0.8",
+        "vite": "8.3.5",
+        "vue": "3.5.44",
       },
       "optionalPeers": [
         "@vitejs/plugin-vue",

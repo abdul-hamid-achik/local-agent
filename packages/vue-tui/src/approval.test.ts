@@ -1,6 +1,6 @@
 import { createTestRenderer } from "@opentui/core/testing";
 import { afterEach, expect, test } from "vitest";
-import { createRenderer, defineComponent, h, nextTick } from "vue";
+import { createRenderer, defineComponent, h, nextTick, ref } from "vue";
 import { createNodeOps, rendererInjectionKey } from "vue-termui";
 import { Approval } from "./approval";
 
@@ -13,10 +13,18 @@ afterEach(() => {
   }
 });
 
-async function mount(onDecision: (value: boolean) => void, preview = "") {
+async function mount(
+  onDecision: (value: boolean) => void,
+  preview: string | { value: string } = "",
+) {
   const terminal = await createTestRenderer({ width: 80, height: 12 });
   const Root = defineComponent({
-    setup: () => () => h(Approval, { preview, maxLines: 3, onDecision }),
+    setup: () => () =>
+      h(Approval, {
+        preview: typeof preview === "string" ? preview : preview.value,
+        maxLines: 3,
+        onDecision,
+      }),
   });
   const app = createRenderer(createNodeOps(terminal.renderer)).createApp(Root);
   app.provide(rendererInjectionKey, terminal.renderer);
@@ -55,4 +63,22 @@ test("y approves and the full preview scrolls inside a bounded viewport", async 
   terminal.mockInput.pressKey("y");
   await nextTick();
   expect(decisions).toEqual([true]);
+});
+
+test("a new prompt on the same instance can be decided again", async () => {
+  const decisions: boolean[] = [];
+  const preview = ref("first change");
+  const terminal = await mount((value) => decisions.push(value), preview);
+  terminal.mockInput.pressKey("y");
+  await nextTick();
+  terminal.mockInput.pressKey("n");
+  await nextTick();
+  expect(decisions).toEqual([true]);
+
+  preview.value = "second change";
+  await nextTick();
+  await terminal.flush();
+  terminal.mockInput.pressKey("n");
+  await nextTick();
+  expect(decisions).toEqual([true, false]);
 });
