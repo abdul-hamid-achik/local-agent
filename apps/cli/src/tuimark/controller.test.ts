@@ -4481,7 +4481,7 @@ test("a session switch is refused while a turn runs, and grants survive it", asy
   await ui.fire("panel_next");
   await ui.fire("panel_run");
   expect(store(ui).status).toBe(
-    "Resumed session bbb222 · 1 messages · grants kept: files",
+    "Resumed session bbb222 · 1 message · grants kept: files",
   );
   // The grant is the process's, not the saved session's: still listed.
   await ui.fire("send", "/permissions");
@@ -4505,7 +4505,7 @@ test("inline: a switch commits the loaded history and enter loads instead of sen
   const commits = ui.commits.length;
   // Enter inline is the composer's send; under the picker it loads.
   await ui.fire("send", "");
-  expect(store(ui).status).toBe("Resumed session bbb222 · 1 messages");
+  expect(store(ui).status).toBe("Resumed session bbb222 · 1 message");
   expect(seen).toHaveLength(0);
   expect(ui.commits.length).toBe(commits + 1);
   expect(JSON.stringify(ui.commits.at(-1)?.buf)).toContain(

@@ -274,6 +274,24 @@
           "marker": "",
           "lang": "",
           "runs": [
+            {
+              "text": "────────────────────────────────────────────────────────────────────────",
+              "class": "rule"
+            }
+          ]
+        },
+        {
+          "id": "b11",
+          "para": true,
+          "head": false,
+          "quote": false,
+          "item": false,
+          "code": false,
+          "table": false,
+          "nest": false,
+          "marker": "",
+          "lang": "",
+          "runs": [
             "Use ",
             {
               "text": "fetchRetry",

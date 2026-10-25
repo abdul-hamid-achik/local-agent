@@ -203,7 +203,13 @@ function addLink(
   if (known) return known.n;
   if (links.length >= MAX_LINKS) return undefined;
   const n = links.length + 1;
-  links.push({ n, text: clip(text, MAX_LINK_TEXT), url });
+  // The sources row gives each target one line: a label the model wrapped
+  // reads as one.
+  links.push({
+    n,
+    text: clip(text.replace(/\s+/g, " ").trim(), MAX_LINK_TEXT),
+    url,
+  });
   return n;
 }
 
@@ -225,6 +231,8 @@ interface Frame {
   kind: string;
   /** The node holding the literal marker; it is blanked when the frame closes. */
   node: number;
+  /** A `[` right after an unescaped `!`: an image's alt text. */
+  image?: boolean;
 }
 
 function charBefore(text: string, i: number): string {
@@ -242,10 +250,11 @@ function charAt(text: string, i: number): string {
 /**
  * Inline markdown to runs: `**bold**`/`__bold__` (class b), `*em*`/`_em_` (i),
  * `` `code` `` (code), `~~strike~~` (strike) and `[text](url)` (the text in
- * class link, then its `[n]` source marker in class url). A marker that does
+ * class link, then its `[n]` source marker in class url). An image
+ * `![alt](url)` is a link that says so: `image: alt[n]`. A marker that does
  * not close, or that CommonMark would not let open (`2 * 3 * 4`,
  * `snake_case_name`), stays literal text, so a message that is still streaming
- * and ends mid-marker reads fine. No HTML, no images, no reference links.
+ * and ends mid-marker reads fine. No HTML, no reference links.
  *
  * When `links` is given, each link target is registered in it (see addLink) and
  * the marker is the target's number; without it (the live stream, where no
@@ -305,8 +314,8 @@ export function inlineRuns(text: string, links?: LinkRef[]): Run[] {
   const add = (s: string, m = 0) => {
     if (s !== "") nodes.push({ s, m });
   };
-  const push = (kind: string) => {
-    stack.push({ kind, node: nodes.length });
+  const push = (kind: string, image = false) => {
+    stack.push({ kind, node: nodes.length, image });
     open[kind] = (open[kind] ?? 0) + 1;
     add(kind);
   };
@@ -399,7 +408,11 @@ export function inlineRuns(text: string, links?: LinkRef[]): Run[] {
       } else if (rest > 0) add(c.repeat(rest));
       i += n;
     } else if (c === "[") {
-      push("[");
+      // `!` is plain text, so it ends the node before this one; an escaped
+      // `\!` is a node of its own and stays a `!`.
+      let slashes = 0;
+      while (text[i - 2 - slashes] === "\\") slashes++;
+      push("[", text[i - 1] === "!" && slashes % 2 === 0);
       i++;
     } else if (c === "]") {
       i++;
@@ -422,6 +435,13 @@ export function inlineRuns(text: string, links?: LinkRef[]): Run[] {
       }
       if (f && end >= 0) {
         close(f, LINK);
+        const before = nodes[f.node - 1];
+        if (f.image && before?.s.endsWith("!")) {
+          let alt = "";
+          for (let k = f.node + 1; k < nodes.length; k++)
+            alt += nodes[k]?.s ?? "";
+          before.s = `${before.s.slice(0, -1)}${alt.trim() ? "image: " : "image"}`;
+        }
         const url = text.slice(i + 1, end);
         // The sources row numbers each target once: the marker [n] goes right
         // after the link text, and the same url always gets the same n. With
@@ -633,6 +653,16 @@ function textBlock(
 // ------------------------------------------------------------------------ tables
 
 const TABLE_ROW = /^\s*\|.*\|\s*$/;
+/** A thematic break: three or more `-`, `*` or `_`, spaces between allowed. */
+const RULE = /^ {0,3}([-*_])(?:[ \t]*\1){2,}[ \t]*$/;
+/**
+ * A setext heading's underline: the paragraph above it is the heading. One
+ * `-` is not enough here (CommonMark takes it): mid-stream it is the start of
+ * the list item that so often follows a paragraph line.
+ */
+const SETEXT = /^ {0,3}(?:=+|-{2,})[ \t]*$/;
+/** A rule's width without a table width to follow. */
+const RULE_COLS = 24;
 const DIVIDER_CELL = /^:?-+:?$/;
 
 function tableCells(row: string): string[] {
@@ -1111,6 +1141,28 @@ export function parseBlocksAt(
       codes?.push({ lang, text: rawBody.join("\n") });
       starts.push(at);
       blocks.push(codeBlock(next(), lang, body));
+    } else if (para.length > 0 && !item && SETEXT.test(line)) {
+      // CommonMark: `Title` over `===` or `---` is a heading, not a rule.
+      starts.push(paraAt);
+      blocks.push(
+        textBlock(next(), "head", para.map((l) => l.trim()).join(" "), links),
+      );
+      para = [];
+      underItem = false;
+    } else if (RULE.test(line)) {
+      // A thematic break (it wins over a `* * *` list item): a dim rule as
+      // wide as a table may be.
+      flush();
+      underItem = false;
+      starts.push(i);
+      blocks.push(
+        block(next(), { para: true }, [
+          {
+            text: "─".repeat(Math.min(tableCols ?? RULE_COLS, 72)),
+            class: "rule",
+          },
+        ]),
+      );
     } else if (TABLE_ROW.test(line)) {
       flush();
       underItem = false;

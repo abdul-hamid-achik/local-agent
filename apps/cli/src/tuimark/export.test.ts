@@ -43,7 +43,7 @@ test("the export is the rendered conversation as markdown, never raw JSON", () =
   expect(markdown).toContain("## You\n\nAdd a retry please");
   expect(markdown).toContain("## Assistant");
   expect(markdown).toContain("````ts\nconst tries = 3;\n````");
-  expect(markdown).toContain("## Tool · read · succeeded");
+  expect(markdown).toContain("## Tool · read · succeeded\n\n`src/big.txt`");
   expect(markdown).toContain("file body");
   // The tool message's raw JSON envelope never reaches the file.
   expect(markdown).not.toContain('"status"');
@@ -249,4 +249,33 @@ test("images are counted, never embedded: their base64 stays out of the file", (
   expect(markdown).not.toContain("data:image");
   expect(markdown).not.toContain(tiny.slice(0, 32));
   expect((views.at(-1)?.images ?? []).length).toBe(2);
+});
+
+test("a call's arguments are code, so markdown in them stays literal", () => {
+  const markdown = transcriptMarkdown(
+    viewsOf([
+      {
+        role: "assistant",
+        content: "",
+        tool_calls: [
+          {
+            id: "c1",
+            function: {
+              name: "run_command",
+              arguments: { command: "rm *.tmp # `old` __files__" },
+            },
+          },
+        ],
+      },
+      {
+        role: "tool",
+        tool_name: "run_command",
+        tool_call_id: "c1",
+        content: JSON.stringify({ status: "succeeded", output: "" }),
+      },
+    ]),
+  );
+  expect(markdown).toContain(
+    '\n``{"command":"rm *.tmp # `old` __files__"}``\n',
+  );
 });

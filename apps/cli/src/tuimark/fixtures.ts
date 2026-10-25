@@ -101,6 +101,8 @@ const MARKDOWN = [
   "| 1 | 200 ms |",
   "| 2 | 400 ms |",
   "",
+  "---",
+  "",
   "Use `fetchRetry` for **every** call, and a stray 2 * 3 * 4 or snake_case_name stays as typed.",
 ].join("\n");
 

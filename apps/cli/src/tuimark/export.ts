@@ -21,6 +21,20 @@ function fenceFor(text: string): string {
   return "`".repeat(longest + 1);
 }
 
+/**
+ * `text` as an inline code span: a command's `*` or `#` and a JSON key's `_`
+ * stay what they are. The fence outruns any backticks inside, and a space
+ * pads a span that starts or ends with one.
+ */
+function inlineCode(text: string): string {
+  let longest = 0;
+  for (const run of text.match(/`+/g) ?? [])
+    longest = Math.max(longest, run.length);
+  const fence = "`".repeat(longest + 1);
+  const pad = text.startsWith("`") || text.endsWith("`") ? " " : "";
+  return `${fence}${pad}${text}${pad}${fence}`;
+}
+
 /** One rendered block back as markdown text (marks were consumed by the parser). */
 function blockText(block: Block): string {
   const text = runsText(block.runs);
@@ -60,7 +74,7 @@ export function transcriptMarkdown(views: readonly MessageView[]): string {
     else if (view.is_tool) {
       const { card } = view;
       parts.push(`## Tool · ${card.name} · ${card.status}`, "");
-      if (card.args) parts.push(card.args, "");
+      if (card.args) parts.push(inlineCode(card.args), "");
       const output = runsText(card.out);
       if (output) {
         const fence = fenceFor(output);

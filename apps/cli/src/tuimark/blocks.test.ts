@@ -73,6 +73,46 @@ test("markdown becomes paragraphs, headings, items, quotes and code", () => {
   expect(new Set(blocks.map((b) => b.id)).size).toBe(blocks.length);
 });
 
+test("a thematic break is a dim rule; a paragraph over === or --- is a heading", () => {
+  const rule = { text: "─".repeat(24), class: "rule" };
+  for (const line of ["---", "***", "___", "* * *", "- - -", "   ----  "]) {
+    const blocks = parseBlocks(`before\n\n${line}\n\nafter`);
+    expect(blocks.map((b) => b.runs)).toEqual([["before"], [rule], ["after"]]);
+    expect(blocks[1]).toMatchObject({ para: true, item: false });
+  }
+  // As wide as a table may be, never past 72 columns.
+  expect(parseBlocks("***", "b", undefined, 40)[0]?.runs).toEqual([
+    { text: "─".repeat(40), class: "rule" },
+  ]);
+  expect(parseBlocks("***", "b", undefined, 200)[0]?.runs).toEqual([
+    { text: "─".repeat(72), class: "rule" },
+  ]);
+  // Not rules: two marks, other text on the line, four spaces in.
+  for (const line of ["--", "*-*", "--- x", "    ---"])
+    expect(parseBlocks(line)[0]?.runs).not.toEqual([rule]);
+  // CommonMark: an underline makes the paragraph above it a heading.
+  for (const line of ["===", "=", "---", "--"]) {
+    const blocks = parseBlocks(`A long\ntitle\n${line}\nbody`);
+    expect(blocks.map((b) => [b.head, runsText(b.runs)])).toEqual([
+      [true, "A long title"],
+      [false, "body"],
+    ]);
+  }
+  // One dash under a line is the list item that follows it mid-stream.
+  expect(parseBlocks("Steps:\n- one").map((b) => b.item)).toEqual([
+    false,
+    true,
+  ]);
+  expect(
+    parseBlocks("Steps:\n-").map((b) => [b.head, runsText(b.runs)]),
+  ).toEqual([[false, "Steps:\n-"]]);
+  // Under an item, --- ends the list with a rule.
+  expect(parseBlocks("- one\n---").map((b) => [b.item, b.runs])).toEqual([
+    [true, ["one"]],
+    [false, [rule]],
+  ]);
+});
+
 test("every block carries every flag, because the markup has no equality test", () => {
   for (const block of parseBlocks(
     "a\n\n# b\n\n- c\n\n```\nc\n```\n\n| a |\n|---|\n| b |",
@@ -1361,6 +1401,38 @@ test("a link is its text in class link, then its [n] source marker", () => {
     { text: "the docs", class: "link" },
     " now",
   ]);
+});
+
+test("an image is a link that says so; an escaped ! stays a !", () => {
+  const links: LinkRef[] = [];
+  expect(
+    inlineRuns("see ![a diagram](https://x.dev/d.png) here", links),
+  ).toEqual([
+    "see image: ",
+    { text: "a diagram", class: "link" },
+    { text: "[1]", class: "url" },
+    " here",
+  ]);
+  expect(links).toEqual([
+    { n: 1, text: "a diagram", url: "https://x.dev/d.png" },
+  ]);
+  expect(inlineRuns("![](https://x.dev/e.png)", [])).toEqual([
+    "image",
+    { text: "[1]", class: "url" },
+  ]);
+  expect(inlineRuns("wow\\![x](u)")).toEqual([
+    "wow!",
+    { text: "x", class: "link" },
+  ]);
+  expect(inlineRuns("wow![x]")).toEqual(["wow![x]"]);
+});
+
+test("a link label the model wrapped is one line in the sources row", () => {
+  const links: LinkRef[] = [];
+  expect(
+    runsText(inlineRuns("read [the\nguide](https://x.dev/g)", links)),
+  ).toBe("read the\nguide[1]");
+  expect(links).toEqual([{ n: 1, text: "the guide", url: "https://x.dev/g" }]);
 });
 
 test("one url gets one number, whatever the message cites it", () => {

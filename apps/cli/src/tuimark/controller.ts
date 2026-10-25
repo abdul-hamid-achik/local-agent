@@ -1389,7 +1389,7 @@ export class TuimarkClient {
     const grants = this.grantLabels();
     await this.adoptConversation(
       context,
-      `Resumed session ${context.state.publicId} · ${context.state.messages.length} messages` +
+      `Resumed session ${context.state.publicId} · ${context.state.messages.length} message${context.state.messages.length === 1 ? "" : "s"}` +
         (grants.length ? ` · grants kept: ${grants.join(" · ")}` : ""),
     );
   }
@@ -1847,12 +1847,17 @@ export class TuimarkClient {
 
   // ------------------------------------------------------------------ the writer
 
+  /** Keeps a failure for the session's error list, the newest MAX_WRITE_ERRORS. */
+  private recordError(failure: string): void {
+    this.writeErrors.push(failure);
+    if (this.writeErrors.length > MAX_WRITE_ERRORS) this.writeErrors.shift();
+  }
+
   /** Records a refused write or commit, saying so once on the status line. */
   private async noteFailure(failure: string): Promise<void> {
     const ui = this.ui;
     if (!ui) return;
-    this.writeErrors.push(failure);
-    if (this.writeErrors.length > MAX_WRITE_ERRORS) this.writeErrors.shift();
+    this.recordError(failure);
     // Say so once on the status line, so a frozen view is not silent.
     if (!this.reportedWriteError) {
       this.reportedWriteError = true;
@@ -1940,10 +1945,9 @@ export class TuimarkClient {
     if (this.spill.length > MAX_SPILL) {
       this.spill.shift();
       this.spillDropped++;
-      this.writeErrors.push(
+      this.recordError(
         `spill queue overflow: dropped oldest refused print (${this.spillDropped} dropped)`,
       );
-      if (this.writeErrors.length > MAX_WRITE_ERRORS) this.writeErrors.shift();
     }
   }
 
@@ -3695,9 +3699,7 @@ export class TuimarkClient {
       published,
       view,
     ).catch((error) => {
-      this.writeErrors.push(
-        error instanceof Error ? error.message : String(error),
-      );
+      this.recordError(error instanceof Error ? error.message : String(error));
     });
     await promptShown;
   }

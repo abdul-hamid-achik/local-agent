@@ -1,7 +1,7 @@
 === grid 80x30 ===
  Local Agent      build  LOCAL  qwen3-coder:30b      ctx 9.6k/32k  ███▋░░░░░░░░ 
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│  | 2       | 400 ms |                                                        │
+│ ────────────────────────────────────────────────────────────────────────     │
 │ Use fetchRetry for every call, and a stray 2 * 3 * 4 or snake_case_name      │
 │ stays as typed.                                                              │
 │ sources                                                                      │
@@ -11,7 +11,7 @@
 │ ╭─ Read ───────────────────────────────────────────────────────────────────╮ │
 │ │ ✓ succeeded                                                              │ │
 │ │ packages/runtime/src/providers/ollam…ng/backpressure/chunk_reassembly.ts │ │
-│ │ 1: export function reassemble(chunks) {                                  │ ┃
+│ │ 1: export function reassemble(chunks) {                                  │ │
 │ │ 2:   return chunks.join('');                                             │ ┃
 │ ╰──────────────────────────────────────────────────────────────────────────╯ ┃
 │                                                                              ┃

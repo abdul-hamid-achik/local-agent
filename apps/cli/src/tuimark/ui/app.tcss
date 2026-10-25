@@ -135,6 +135,7 @@ span.str { color: $str; }
 span.num { color: $num; }
 span.think { color: $muted; italic: true; }
 span.com, span.note { color: $com; italic: true; }
+span.rule { color: $muted; }
 span.err { color: $danger; bold: true; }
 /* The change an edit made, on its card (blocks.ts changeRows). */
 span.add { color: $ok; }

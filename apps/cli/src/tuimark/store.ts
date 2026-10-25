@@ -419,10 +419,16 @@ export const EMPTY_COMMIT_VIEW: MessageView = Object.freeze({
 }) as MessageView;
 
 /** A token count in k = 1024 tokens: 32768 reads "32k", 9800 reads "9.6k". */
+/** The marker under a cut preview: lines not shown whole. */
+function moreLines(n: number): string {
+  return `${n} more line${n === 1 ? "" : "s"} not shown`;
+}
+
 export function tokens(n: number): string {
   if (n < 1000) return String(n);
   const k = n / 1024;
-  return `${k >= 10 ? Math.round(k) : k.toFixed(1)}k`;
+  // 9.96k rounds to "10.0k" at one decimal: from there it is whole k.
+  return `${k >= 9.95 ? Math.round(k) : k.toFixed(1)}k`;
 }
 
 /** The transcript note for a compacted history (the runtime's estimates). */
@@ -843,8 +849,10 @@ export function previewRows(
   let shown = 0;
   let truncated = false;
   outer: for (const line of source) {
-    const add = line.startsWith("+") && !line.startsWith("+++");
-    const del = line.startsWith("-") && !line.startsWith("---");
+    // A file header is `+++ b/path` or `--- a/path`; an added `++i;` is a
+    // line like any other.
+    const add = line.startsWith("+") && !line.startsWith("+++ ");
+    const del = line.startsWith("-") && !line.startsWith("--- ");
     for (const t of wrapLine(line, width)) {
       if (lines.length >= maxRows) {
         truncated = true;
@@ -857,7 +865,7 @@ export function previewRows(
   if (truncated)
     lines.push({
       n: lines.length,
-      t: `… ${source.length - shown} more lines not shown`,
+      t: `… ${moreLines(source.length - shown)}`,
       add: false,
       del: false,
       note: true,
@@ -1049,7 +1057,10 @@ export function grantCovers(
     if (grant.key !== `cmd:${encoded}`) return false;
     const approved = new Set(grant.options ?? []);
     return (
-      grant.prefix.every((word, i) => (proposal.argv[i] ?? "") === word) &&
+      // Each prefix word must be there: `ls ""` does not cover a bare `ls`.
+      grant.prefix.every(
+        (word, i) => i < proposal.argv.length && proposal.argv[i] === word,
+      ) &&
       proposal.argv
         .slice(grant.prefix.length)
         .every((word) => !isOption(word) || approved.has(word))
@@ -1265,7 +1276,7 @@ export function detailsRows(text: string, width: number): DiffLine[] {
   if (truncated)
     lines.push({
       n: lines.length,
-      t: `… ${source.length - shown} more lines not shown`,
+      t: `… ${moreLines(source.length - shown)}`,
       add: false,
       del: false,
       note: true,

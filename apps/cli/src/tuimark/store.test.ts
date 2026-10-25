@@ -78,6 +78,9 @@ test("token counts read like the Vue sidebar", () => {
   expect(tokens(16_384)).toBe("16k");
   expect(tokens(32_768)).toBe("32k");
   expect(tokens(2048)).toBe("2.0k");
+  // One decimal while it stays under 10k: 9.95k would read "10.0k".
+  expect(tokens(10_188)).toBe("9.9k");
+  expect(tokens(10_189)).toBe("10k");
   expect(contextLabel(9_830, 32_768)).toBe("9.6k/32k");
   expect(contextPct(16_384, 32_768)).toBe(50);
   expect(contextPct(99_999, 32_768)).toBe(100);
@@ -171,7 +174,7 @@ test("the approval dialog says what is being approved", () => {
     path: "a.ts",
     before: "",
     after: "",
-    diff: "--- a\n+++ b\n-old\n+new",
+    diff: "--- a\n+++ b\n-old\n+new\n+++i;\n---i;",
     identity: "i",
   });
   expect(edit).toMatchObject({
@@ -179,11 +182,14 @@ test("the approval dialog says what is being approved", () => {
     title: "Edit a.ts?",
     danger: false,
   });
+  // The headers are neither; an added `++i;` and a removed `--i;` are lines.
   expect(edit.lines.map((l) => [l.add, l.del])).toEqual([
     [false, false],
     [false, false],
     [false, true],
     [true, false],
+    [true, false],
+    [false, true],
   ]);
   const command = approvalState(
     {
@@ -621,6 +627,11 @@ test("grant matching: files shared, commands by argv prefix, MCP exact", () => {
   expect(grantCovers(bunTest, cmd(["bun", "run"]))).toBe(false);
   expect(grantCovers(bunTest, cmd(["bun"]))).toBe(false);
 
+  const blank = grantFor(cmd(["ls", ""]));
+  expect(blank).toMatchObject({ prefix: ["ls", ""] });
+  expect(grantCovers(blank, cmd(["ls", "", "x"]))).toBe(true);
+  expect(grantCovers(blank, cmd(["ls"]))).toBe(false);
+
   const ls = grantFor(cmd(["ls"]));
   expect(grantCovers(ls, cmd(["ls"]))).toBe(true);
   expect(grantCovers(ls, cmd(["ls", "-la"]))).toBe(false);
@@ -855,6 +866,11 @@ test("detailsState titles the receipt and wraps its output per presentation", ()
     t: "… 30 more lines not shown",
     note: true,
   });
+  const one = detailsRows(
+    Array.from({ length: APPROVAL_MAX_ROWS + 1 }, (_, i) => `l${i}`).join("\n"),
+    80,
+  );
+  expect(one.at(-1)?.t).toBe("… 1 more line not shown");
 });
 
 test("the ctx meter exposes what it shows and resets for a new conversation", () => {
