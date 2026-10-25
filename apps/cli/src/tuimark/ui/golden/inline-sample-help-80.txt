@@ -19,13 +19,13 @@
             │  /mcp show connected MCP servers and their tools     │            
             │  /goal [OBJECTIVE|stop] run turns toward an object…  │            
             │  Keys                                                │            
-            │  enter send · shift/alt+enter new line               │            
-            │  shift-drag select text (mouse reporting is on)      │            
-            │  y allow                                             │            
-            │  a session                                           │            
-            │  ! always                                            │            
-            │  n deny                                              │            
-            │  pgup/pgdn scroll                                    │            
-            │  home/end top/end                                    │            
-            │  ^P commands                                         │            
+            │  enter       send · shift/alt+enter new line         │            
+            │  shift-drag  select text (mouse reporting is on)     │            
+            │  ^P          commands                                │            
+            │  esc         cancel the turn, and a running goal     │            
+            │  ctrl+c      clear the draft, cancel, then quit      │            
+            │  ↑/↓         history                                 │            
+            │  ↑           edit a queued message (empty draft)     │            
+            │  pgup/pgdn   scroll the live region                  │            
+            │  ^L          back to the latest output               │            
             ╰──────────────────────────────────────────────────────╯            

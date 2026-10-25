@@ -41,16 +41,17 @@ steps:
             notContains: "Message the model"
         timeoutMs: 10000
     - snapshot: help
-    # 24 rows show the commands and a few keys: the last key is further down.
+    # 24 rows show the commands and a few keys: the last key, the
+    # approval's home/end, is further down.
     - wait:
         screen:
-            notContains: "shift+tab mode"
+            notContains: "its top or its end"
         timeoutMs: 10000
     - press: pagedown
     - press: pagedown
     - wait:
         screen:
-            contains: "shift+tab mode"
+            contains: "its top or its end"
         timeoutMs: 10000
     - press: esc
     - wait:

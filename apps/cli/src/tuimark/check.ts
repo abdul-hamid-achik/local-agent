@@ -99,6 +99,37 @@ async function matches(path: string, expected: string, what: string) {
 
 console.log(`tuimark: ${tuimark(["version"]).out.trim()} (${bin})`);
 
+// The help's keys are plain rows grouped by where they work (a <hints
+// scope="all"> lists every labeled row with no context), so nothing ties
+// them to the keymap but this: every labeled row of a document has its
+// keycap (or its first key) among the keys of that document's help. A
+// row's `when` may hold a `>` (a child selector), so a tag ends at the
+// first `>` outside quotes.
+for (const doc of ["app.tui", "inline.tui"]) {
+  const source = await Bun.file(join(ui, doc)).text();
+  const start = source.indexOf('<modal id="help_dialog"');
+  const help = source.slice(start, source.indexOf("</modal>", start));
+  const shown = new Set(
+    [...help.matchAll(/<text class="la-helpkey">([^<]*)<\/text>/g)].flatMap(
+      ([, key = ""]) => [key, ...key.split("/")],
+    ),
+  );
+  if (start < 0 || shown.size === 0)
+    failures.push(`${doc}: no help keys to check the keymap against`);
+  for (const [bind] of source.matchAll(
+    /<bind\b(?:[^>"']|"[^"]*"|'[^']*')*>/g,
+  )) {
+    const attr = (name: string) =>
+      bind.match(new RegExp(`\\s${name}="([^"]*)"`))?.[1];
+    if (!attr("label")) continue;
+    const keycap = attr("keycap") || attr("keys")?.split(",")[0] || "";
+    if (!shown.has(keycap))
+      failures.push(
+        `${doc}: the help lists no ${keycap} (${attr("label")}), a labeled keymap row`,
+      );
+  }
+}
+
 // 1 + 2 + 3: samples, validate, goldens.
 for (const [name, make] of Object.entries(SAMPLES)) {
   const data = `samples/${name}.json`;
@@ -890,31 +921,30 @@ const plays: Expect[] = [
       "/copy [code]",
       "/details",
       "/sessions",
-      "enter send",
-      "shift/alt+enter new line",
-      "shift-drag select text",
-      "^Y copy",
-      "↑/↓ history",
+      "Keys",
+      "send · shift/alt+enter new line",
+      "select text (mouse reporting is on)",
+      "cancel the turn, and a running goal",
     ],
   },
   { sample: "sample-help", input: "q", actions: ["help_close"] },
   { sample: "sample-help", input: "esc", actions: ["help_close"] },
   // A short terminal scrolls the commands and the keys together: the last
-  // key is below at first, and two pages down the first command is above.
+  // key is below at first, and three pages down the first command is above.
   {
     sample: "sample-help",
     rows: 15,
     input: "",
     actions: [],
     screen: ["? close help", "/mode plan|build"],
-    notScreen: ["shift+tab mode"],
+    notScreen: ["its top or its end"],
   },
   {
     sample: "sample-help",
     rows: 15,
-    input: "pgdn pgdn",
+    input: "pgdn pgdn pgdn",
     actions: [],
-    screen: ["? close help", "shift+tab mode"],
+    screen: ["? close help", "In an approval", "its top or its end"],
     notScreen: ["/mode plan|build"],
   },
   // The slash popup: every edit of the composer reaches the parent (that
@@ -1355,8 +1385,8 @@ const plays: Expect[] = [
       "Commands",
       "/mode plan|build",
       "/copy [code]",
-      "enter send",
-      "shift/alt+enter new line",
+      "Keys",
+      "send · shift/alt+enter new line",
     ],
     // The region is the help alone: nothing shows at its edges.
     notScreen: ["Local Agent", "Message the model", "build · last"],
@@ -1371,7 +1401,7 @@ const plays: Expect[] = [
     input: "",
     actions: [],
     screen: ["? close help", "/mode plan|build"],
-    notScreen: ["shift+tab mode"],
+    notScreen: ["its top or its end"],
   },
   {
     sample: "inline-sample-help",
@@ -1380,7 +1410,7 @@ const plays: Expect[] = [
     rows: 15,
     input: "pgdn pgdn",
     actions: [],
-    screen: ["? close help", "shift+tab mode"],
+    screen: ["? close help", "In an approval", "its top or its end"],
     notScreen: ["/mode plan|build"],
   },
   // The composer is back, and focused, once the help or the palette closes.

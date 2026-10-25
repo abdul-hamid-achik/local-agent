@@ -352,11 +352,13 @@
     <!-- The help overlay. The kit's k-help lists keys only and takes no
          slot, so the overlay is written here with its classes: the slash
          commands (help.cmds, from the one catalog in ../commands.ts),
-         then every labeled key, in one scroll, so a short terminal
-         scrolls the commands too instead of cutting them. The kit's
-         .k-help rows (q, ?) and on:escape close it. The composer's own
-         enter keys are plain rows: no keymap row can name them (the
-         composer takes them first). -->
+         then the keys, in one scroll, so a short terminal scrolls the
+         commands too instead of cutting them. The kit's .k-help rows
+         (q, ?) and on:escape close it. The keys are plain rows grouped by
+         where they work: a <hints scope="all"> lists every labeled row
+         with no context (the approval's a and ! as if they were global).
+         check.ts fails when a labeled row of this document is missing
+         here. The composer's enter keys have no keymap row at all. -->
     <modal id="help_dialog" class="k-help" open="help.open" title="Help" on:escape="help_close">
       <row class="k-help-close">
         <text class="k-help-key">?</text>
@@ -372,14 +374,78 @@
         </col>
         <text class="la-help-head">Keys</text>
         <row class="la-helpcmd">
-          <text class="la-helpcmd-key">enter</text>
+          <text class="la-helpkey">enter</text>
           <text class="la-helpcmd-desc">send · shift/alt+enter new line</text>
         </row>
         <row class="la-helpcmd">
-          <text class="la-helpcmd-key">{help.select_key}</text>
+          <text class="la-helpkey">{help.select_key}</text>
           <text class="la-helpcmd-desc">{help.select_desc}</text>
         </row>
-        <hints class="k-hints k-help-keys" scope="all"/>
+        <row class="la-helpcmd">
+          <text class="la-helpkey">^P</text>
+          <text class="la-helpcmd-desc">commands</text>
+        </row>
+        <row class="la-helpcmd">
+          <text class="la-helpkey">esc</text>
+          <text class="la-helpcmd-desc">cancel the turn, and a running goal</text>
+        </row>
+        <row class="la-helpcmd">
+          <text class="la-helpkey">ctrl+c</text>
+          <text class="la-helpcmd-desc">clear the draft, cancel, then quit</text>
+        </row>
+        <row class="la-helpcmd">
+          <text class="la-helpkey">↑/↓</text>
+          <text class="la-helpcmd-desc">history</text>
+        </row>
+        <row class="la-helpcmd">
+          <text class="la-helpkey">↑</text>
+          <text class="la-helpcmd-desc">edit a queued message (empty draft)</text>
+        </row>
+        <row class="la-helpcmd">
+          <text class="la-helpkey">pgup/pgdn</text>
+          <text class="la-helpcmd-desc">scroll the transcript</text>
+        </row>
+        <row class="la-helpcmd">
+          <text class="la-helpkey">^L</text>
+          <text class="la-helpcmd-desc">back to the latest message</text>
+        </row>
+        <row class="la-helpcmd">
+          <text class="la-helpkey">^O</text>
+          <text class="la-helpcmd-desc">load earlier messages</text>
+        </row>
+        <row class="la-helpcmd">
+          <text class="la-helpkey">^Y</text>
+          <text class="la-helpcmd-desc">copy the last reply</text>
+        </row>
+        <row class="la-helpcmd">
+          <text class="la-helpkey">shift+tab</text>
+          <text class="la-helpcmd-desc">cycle build, plan and chat</text>
+        </row>
+        <text class="la-help-head">In an approval</text>
+        <row class="la-helpcmd">
+          <text class="la-helpkey">y/n</text>
+          <text class="la-helpcmd-desc">allow · deny (esc denies too)</text>
+        </row>
+        <row class="la-helpcmd">
+          <text class="la-helpkey">a</text>
+          <text class="la-helpcmd-desc">allow for the session, if offered</text>
+        </row>
+        <row class="la-helpcmd">
+          <text class="la-helpkey">!</text>
+          <text class="la-helpcmd-desc">always allow, if offered</text>
+        </row>
+        <row class="la-helpcmd">
+          <text class="la-helpkey">pgup/pgdn</text>
+          <text class="la-helpcmd-desc">scroll what is being approved</text>
+        </row>
+        <row class="la-helpcmd">
+          <text class="la-helpkey">↑/↓</text>
+          <text class="la-helpcmd-desc">scroll one line</text>
+        </row>
+        <row class="la-helpcmd">
+          <text class="la-helpkey">home/end</text>
+          <text class="la-helpcmd-desc">its top or its end</text>
+        </row>
       </scroll>
     </modal>
     <!-- The details viewer: the latest tool receipt's output in full

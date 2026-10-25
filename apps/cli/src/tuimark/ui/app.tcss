@@ -197,6 +197,8 @@ span.del { color: $danger; }
 .la-helpcmds { height: auto; layout: column; }
 .la-helpcmd { width: 1fr; height: 1; gap: 1; }
 .la-helpcmd-key { width: auto; bold: true; color: $accent; }
+/* A key column wide enough for the longest key, "option-drag". */
+.la-helpkey { width: 11; bold: true; color: $accent; }
 .la-helpcmd-desc { width: 1fr; color: $muted; }
 
 /* The details viewer modal: the kit help dialog's box at the approval
