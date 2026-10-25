@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { historyProblem } from "#runtime/agent";
 import { commandLine } from "#runtime/command";
-import type { Message, ToolCall } from "#runtime/index";
+import type { Message, ToolCall } from "#runtime/schemas";
 import type {
   Disposition,
   EventRow,

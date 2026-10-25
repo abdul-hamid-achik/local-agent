@@ -4,7 +4,7 @@ import { constants } from "node:fs";
 import { chmod, lstat, mkdir, open, realpath } from "node:fs/promises";
 import { dirname } from "node:path";
 import { z } from "zod";
-import { type Message, MessageSchema } from "#runtime/index";
+import { type Message, MessageSchema } from "#runtime/schemas";
 import { tryLockFile } from "#runtime/workspace_native";
 
 const SCHEMA_VERSION = 3;

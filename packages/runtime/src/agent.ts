@@ -22,14 +22,6 @@ import {
 import type { Provider } from "#runtime/config";
 import { postEditDiagnostics } from "#runtime/diagnostics";
 import {
-  chat,
-  INVALID_ARGUMENTS,
-  type Message,
-  MessageSchema,
-  type RunEvent,
-  type ToolCall,
-} from "#runtime/index";
-import {
   ASK_USER_NOTE,
   GOAL_NOTE,
   hostInstructions,
@@ -45,12 +37,19 @@ import {
 import { assertFetchTarget, type FetchPolicy, fetchPolicy } from "#runtime/net";
 import { sandboxUnavailable } from "#runtime/sandbox";
 import {
+  type Message,
+  MessageSchema,
+  type RunEvent,
+  type ToolCall,
+} from "#runtime/schemas";
+import {
   ConversationFullError,
   type ExecutionEvent,
   resultThatFits,
   type Session,
   type SessionStore,
 } from "#runtime/session";
+import { chat, INVALID_ARGUMENTS } from "#runtime/transport";
 import {
   NotAppliedError,
   type Workspace,

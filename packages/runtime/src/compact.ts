@@ -5,7 +5,7 @@
 // removed: every message keeps its place, role and tool-call identity, so
 // the history stays one a session can resume.
 
-import type { Message } from "#runtime/index";
+import type { Message } from "#runtime/schemas";
 
 /** Compaction starts when the prompt passes this share of the window... */
 export const COMPACT_HIGH = 0.7;
