@@ -479,6 +479,14 @@ const extraDumps: {
     golden: "sample-empty-40-r24.txt",
     contains: ["/help lists keys", "^P commands"],
   },
+  {
+    doc: "app.tui",
+    sample: "sample-empty",
+    cols: 60,
+    rows: 24,
+    golden: "sample-empty-60-r24.txt",
+    contains: ["Local Agent", "/help lists keys", "esc cancels a turn"],
+  },
   // A status longer than its row ends in an ellipsis at a word: a fixed
   // width cut it mid-word, with nothing to say it went on.
   {
@@ -1858,6 +1866,29 @@ const plays: Expect[] = [
       "qwen3-coder:30b",
       "/help lists keys",
       "ctrl+p opens commands",
+    ],
+  },
+  // A model name longer than a 40-column row wraps inside its group, and the
+  // welcome still fits: title on top, the last tip at the bottom.
+  {
+    sample: "sample-empty",
+    input: "",
+    cols: 40,
+    rows: 24,
+    steps: [
+      {
+        set: {
+          path: "header.model",
+          value: "hf.co/unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF:Q4_K_M",
+        },
+      },
+    ],
+    actions: [],
+    screen: [
+      "Local Agent",
+      "struct-GGUF:Q4_K_M · Ollama /",
+      "loopback",
+      "esc cancels a turn",
     ],
   },
   {

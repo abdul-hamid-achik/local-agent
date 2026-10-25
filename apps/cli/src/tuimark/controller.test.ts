@@ -3074,8 +3074,10 @@ test("grants: `a` on an edit lets a later write through with a status flash and 
   await ui.fire("send", "two");
   await until(() => decisions.length === 2);
   expect(store(ui).approval.open).toBe(false);
-  await until(() => store(ui).status.includes("files: allowed for session"));
-  expect(store(ui).status).toContain("files: allowed for session");
+  await until(() =>
+    store(ui).status.includes("Allowed · files for this session"),
+  );
+  expect(store(ui).status).toContain("Allowed · files for this session");
   release();
   await client.idle();
   expect(decisions).toEqual([true, true]);
@@ -3101,6 +3103,8 @@ test("grants: a command grant matches program + first argument as a prefix, noth
   await ui.fire("dialog_session");
   await client.idle();
   expect(store(ui).header.grants).toBe("auto: bun test");
+  // A prefix grant's verdict keeps the dialog's "…": it covers more.
+  expect(statusWrites(ui)).toContain("Allowed · bun test … for this session");
 
   // `bun test …` runs; `bun run` still asks, and its grant keeps the script.
   await ui.fire("send", "two");

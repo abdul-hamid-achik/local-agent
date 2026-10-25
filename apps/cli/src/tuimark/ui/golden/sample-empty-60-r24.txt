@@ -1,0 +1,25 @@
+=== grid 60x24 ===
+ Local Agent          build  LOCAL  qwen3-coder:30b         
+┌──────────────────────────────────────────────────────────┐
+│                       Local Agent                        │
+│                                                          │
+│           qwen3-coder:30b · Ollama / loopback            │
+│                 build · session a1b2c3d                  │
+│                         project                          │
+│                                                          │
+│                     /help lists keys                     │
+│                  ctrl+p opens commands                   │
+│           pgup/pgdn scroll · wheel scrolls too           │
+│                 shift-drag selects text                  │
+│               /copy copies the last reply                │
+│                    esc cancels a turn                    │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+└──────────────────────────────────────────────────────────┘
+╔══════════════════════════════════════════════════════════╗
+║ Message the model                                        ║
+╚══════════════════════════════════════════════════════════╝
+ build · last 1m 06s · 32 tok… ^P commands  ^Y copy         

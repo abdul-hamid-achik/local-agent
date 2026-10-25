@@ -414,6 +414,15 @@ type Spill =
 /** The messages the composer's history keeps. */
 const MAX_SENT = 200;
 
+/**
+ * The status after a session grant lets a call through, as `a` made it or
+ * as it covers a later call: the grant named the way the dialog offered it,
+ * a command prefix with its "…" (it covers more than the words shown).
+ */
+function sessionVerdict(key: string, label: string): string {
+  return `Allowed · ${key.startsWith("cmd:") ? `${label} …` : label} for this session`;
+}
+
 export class TuimarkClient {
   private ui?: UiHost;
   private readonly run: RunAgent;
@@ -3381,19 +3390,19 @@ export class TuimarkClient {
     // chat mutations before this callback runs, and this keeps it true here.
     const grant = grantFor(proposal);
     // With the sandbox on, a command runs outside only from its own card.
-    const grantedLabel =
+    const covering =
       this.intent === "build" &&
       !sandboxLost &&
       !secret &&
       !(this.sandbox && proposal.kind === "command")
         ? [...this.grants.entries()].find(([key, remembered]) =>
             grantCovers({ key, ...remembered }, proposal),
-          )?.[1].label
+          )
         : undefined;
-    if (grantedLabel !== undefined) {
+    if (covering !== undefined) {
       // The least invasive visible trace: the status flash a tool result
       // gets, naming the grant that let the call through.
-      this.flash(`${grantedLabel}: allowed for session`);
+      this.flash(sessionVerdict(covering[0], covering[1].label));
       return true;
     }
     return new Promise<boolean>((resolve) => {
@@ -3430,15 +3439,10 @@ export class TuimarkClient {
               ? { options: [...new Set([...known, ...grant.options])] }
               : {}),
           });
-          granted = grant.label;
+          granted = sessionVerdict(grant.key, grant.label);
         }
         const verdict =
-          status ??
-          (!allowed
-            ? "Denied"
-            : granted !== undefined
-              ? `Allowed · ${granted} for this session`
-              : "Allowed");
+          status ?? (!allowed ? "Denied" : (granted ?? "Allowed"));
         // The verdict stays on the status line until the next state change
         // (a tool result, the turn's end); the turn's clock goes on.
         this.flashed = true;

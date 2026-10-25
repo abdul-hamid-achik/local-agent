@@ -50,6 +50,33 @@ test("the export is the rendered conversation as markdown, never raw JSON", () =
   expect(markdown).not.toContain("tool_call_id");
 });
 
+test("an edit the runtime applied exports under its card's word", () => {
+  const views = viewsOf([
+    {
+      role: "assistant",
+      content: "",
+      tool_calls: [
+        {
+          id: "e1",
+          function: {
+            name: "edit",
+            arguments: { path: "a.ts", old_string: "x", new_string: "y" },
+          },
+        },
+      ],
+    },
+    {
+      role: "tool",
+      tool_name: "edit",
+      tool_call_id: "e1",
+      content: JSON.stringify({ status: "succeeded", output: "Updated a.ts." }),
+    },
+  ]);
+  const markdown = transcriptMarkdown(views);
+  expect(markdown).toContain("## Tool · edit · applied");
+  expect(markdown).not.toContain("succeeded");
+});
+
 test("an MCP result exports as the server's text under its head, not the envelope", () => {
   const output = JSON.stringify({
     transport: "success",
