@@ -856,9 +856,11 @@ test("a command that leaves a process holding its output has an unknown outcome"
   // the runner cannot see the command end: the turn stops there. It holds
   // on until the test is done (a stop file, 30 s at most), not for a fixed
   // time a loaded machine may outlast before the runner sees the leader go.
-  // It writes its pid, so the test can wait for it to be gone.
+  // It writes its pid, so the test can wait for it to be gone. The parent
+  // exits only once the pid is there, after setsid: the runner signals the
+  // group when the leader exits, which would kill a child not yet out of it.
   const script =
-    'use POSIX; if (fork) { exit 0 } POSIX::setsid(); open(my $f, ">", "pid.tmp"); print $f $$; close $f; rename "pid.tmp", "pid"; for (1..300) { last if -e "stop"; select(undef, undef, undef, 0.1) } exit 0';
+    'use POSIX; if (fork) { for (1..300) { last if -e "pid"; select(undef, undef, undef, 0.02) } exit 0 } POSIX::setsid(); open(my $f, ">", "pid.tmp"); print $f $$; close $f; rename "pid.tmp", "pid"; for (1..300) { last if -e "stop"; select(undef, undef, undef, 0.1) } exit 0';
   let root = "";
   try {
     await expect(
