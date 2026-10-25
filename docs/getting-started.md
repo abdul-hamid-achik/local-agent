@@ -49,7 +49,10 @@ bun run dev --workspace /path/to/your/repository
 The fullscreen client takes over the terminal and shows a welcome screen.
 
 Type a prompt into the composer at the bottom and press `enter` to send.
-`shift+enter` or `alt+enter` inserts a newline.
+`shift+enter` or `alt+enter` inserts a newline. A message holds up to
+1,000,000 characters; a longer one stays in the composer, and the status line
+says `Not sent` with its length. Send a large text in parts, or save it to a
+file in the workspace and ask the model to read it.
 
 Start read-only:
 

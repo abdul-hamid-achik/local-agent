@@ -16,9 +16,10 @@ also run in an operating-system sandbox instead of asking
 The default provider is Ollama on the local machine, at `OLLAMA_HOST` — by
 default `127.0.0.1:11434`. With that default, prompts stay on the machine.
 
-The only remote provider is Chalupa, and it is opt-in through the
-environment: the client refuses to start with Chalupa selected unless you
-explicitly set `LOCAL_AGENT_LOCAL_ONLY=false`. See [Providers](/providers).
+Remote providers are opt-in through the environment: the client refuses to
+start with Chalupa, or an OpenAI-compatible server off loopback, unless you
+explicitly set `LOCAL_AGENT_LOCAL_ONLY=false`. The Tuimark client's top bar
+then says `REMOTE`. See [Providers](/providers#where-the-prompt-goes).
 
 HTTP MCP endpoints follow the same posture: they must point at loopback
 (`127.0.0.1`, `localhost`, `::1`) unless the server entry explicitly sets
@@ -303,7 +304,10 @@ group, such as a daemon, is not seen.
 
 If the host exits, or is stopped by SIGINT, SIGTERM or SIGHUP with no handler
 of its own, the groups of commands still running are killed too. A SIGKILL of
-the host cannot be caught, so it can leave them behind.
+the host cannot be caught, so it can leave them behind. Closing the terminal
+window sends SIGHUP, and the CLI stops as it does for SIGTERM: the running
+turn's calls are closed, MCP servers are shut down and the session store is
+closed.
 
 ### Commands that name a secret path
 

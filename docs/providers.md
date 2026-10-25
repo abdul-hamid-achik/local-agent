@@ -67,6 +67,16 @@ stays 16384; only local Ollama plans one). On startup the
 client checks the model against `GET {baseURL}/models`; servers that do not
 implement the endpoint (404) skip the check with a status note.
 
+## Where the prompt goes
+
+The Tuimark client's top bar says whether prompts leave this machine. Wide
+terminals show the provider: `Ollama / loopback`, `Chalupa / remote`, or
+`OpenAI-compatible / local` (or `/ remote`). Below 111 columns, `LOCAL` or
+`REMOTE` takes its place, `REMOTE` in the accent color, and below 61 columns
+the model name gives way to it. Chalupa is remote even though its URL is on
+loopback: that URL is a tunnel. A server on loopback is local, and a server
+on any other host, a LAN machine included, is remote.
+
 ## Retries
 
 A request to the model, and the metadata reads at startup (Ollama's

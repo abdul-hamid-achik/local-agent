@@ -63,6 +63,17 @@ others. A server that fails to connect does not stop the run:
   send before the servers are ready waits for them, because their tools are
   part of what the model is offered. Esc cancels the wait.
 
+A STDIO server that does not start is reported with the last line it wrote to
+stderr, after the reason, on one line with escape sequences and control
+characters removed. That line is shown to you, never to the model.
+
+A STDIO server that stops during a session is not restarted. Its later calls
+fail before anything is sent, and the model is told not to call that server
+again; restart the client to start it again. An HTTP server that stops
+answering is not detected this way: a call to it fails in the transport as
+an uncertain outcome, which stops the run until you record what happened
+(see [Interrupted work](/sessions#interrupted-work)).
+
 ## A working browser today
 
 A real browser — navigation, clicks, forms, screenshots, page snapshots — needs

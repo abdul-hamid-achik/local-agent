@@ -82,7 +82,11 @@ the status line says so.
 A session keeps every message. When the conversation no longer fits the
 context window, even with old tool results shortened, each request carries
 only its newest whole exchanges, and the model is told how many of the oldest
-it cannot see. The messages a request leaves out are saved as they were. A
+it cannot see. The messages a request leaves out are saved as they were.
+The todo list survives that: in modes that offer `todo_write`, while an item
+on it is pending or in progress, a request that leaves the list out carries
+it in the system prompt, in at most a quarter of the window (done items give
+way first, then pending ones, marked `…`). A
 conversation holds up to 9999 messages and a session's saved state up to
 8 MiB; past either, the turn is refused with a sentence that says so. Start
 over with `/sessions new`.
