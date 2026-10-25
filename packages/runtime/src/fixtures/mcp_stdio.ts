@@ -1,4 +1,4 @@
-import { writeFileSync } from "node:fs";
+import { appendFileSync, writeFileSync } from "node:fs";
 import { McpServer } from "@modelcontextprotocol/server";
 import { StdioServerTransport } from "@modelcontextprotocol/server/stdio";
 import { z } from "zod";
@@ -11,15 +11,20 @@ server.registerTool(
     inputSchema: { text: z.string() },
     annotations: { readOnlyHint: true },
   },
-  async ({ text }) => ({
-    content: [
-      {
-        type: "text",
-        text: `echo:${text}:secret=${process.env.MCP_SECRET ?? "missing"}:home=${process.env.HOME ?? "missing"}`,
-      },
-    ],
-    structuredContent: { secret: "do-not-project" },
-  }),
+  async ({ text }) => {
+    // A call leaves a line, so a test can tell a tool that ran from one refused.
+    if (process.env.MCP_CALL_FILE)
+      appendFileSync(process.env.MCP_CALL_FILE, `echo:${text}\n`);
+    return {
+      content: [
+        {
+          type: "text",
+          text: `echo:${text}:secret=${process.env.MCP_SECRET ?? "missing"}:home=${process.env.HOME ?? "missing"}`,
+        },
+      ],
+      structuredContent: { secret: "do-not-project" },
+    };
+  },
 );
 // It notes a SIGTERM, so a test can tell a graceful close from a kill.
 const termFile = process.env.MCP_TERM_FILE;

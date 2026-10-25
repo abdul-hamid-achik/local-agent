@@ -19,6 +19,8 @@ async function runMcpCli(
   flags: string[],
 ) {
   const configPath = join(root, "mcp.json");
+  // The fixture adds a line here each time its tool runs.
+  const callsPath = join(root, "mcp-calls.log");
   await writeFile(
     configPath,
     JSON.stringify([
@@ -29,7 +31,7 @@ async function runMcpCli(
           command: process.execPath,
           args: [fixturePath],
           cwd: root,
-          env: {},
+          env: { MCP_CALL_FILE: callsPath },
         },
       },
     ]),
@@ -70,7 +72,10 @@ async function runMcpCli(
     new Response(child.stderr).text(),
     child.exited,
   ]);
-  return { stdout, stderr, code, dbPath };
+  const calls = (await Bun.file(callsPath).exists())
+    ? (await Bun.file(callsPath).text()).split("\n").filter(Boolean)
+    : [];
+  return { stdout, stderr, code, dbPath, calls };
 }
 
 function jsonEvents(stdout: string): Record<string, unknown>[] {
@@ -127,7 +132,12 @@ test("MCP approval is independent from command approval", async () => {
     const result = await runMcpCli(root, server, ["--approve-commands"]);
     expect(result.code).toBe(0);
     expect(result.stderr).toBe("");
-    expect(result.stdout).toContain('"status":"denied"');
+    expect(
+      jsonEvents(result.stdout).find((event) => event.type === "tool_result")
+        ?.status,
+    ).toBe("denied");
+    // Denied means the server never ran the tool.
+    expect(result.calls).toEqual([]);
     expect(result.stdout).not.toContain("process-secret-must-not-leak");
     expect(result.stdout).not.toContain("do-not-project");
     const store = await SessionStore.open(result.dbPath);
@@ -156,6 +166,8 @@ test("approved MCP calls are reported unverified and redact fixture secrets", as
     const result = await runMcpCli(root, server, ["--approve-mcp"]);
     expect(result.code).toBe(0);
     expect(result.stderr).toBe("");
+    // The tool ran once: the record the denied runs below are told apart by.
+    expect(result.calls).toEqual(["echo:hello"]);
     const toolResult = jsonEvents(result.stdout).find(
       (event) => event.type === "tool_result",
     );
@@ -197,7 +209,12 @@ test("plan mode denies even read-only MCP annotations without invoking the tool"
     const result = await runMcpCli(root, server, ["--intent", "plan"]);
     expect(result.code).toBe(0);
     expect(result.stderr).toBe("");
-    expect(result.stdout).toContain('"status":"denied"');
+    expect(
+      jsonEvents(result.stdout).find((event) => event.type === "tool_result")
+        ?.status,
+    ).toBe("denied");
+    // Without invoking the tool: the server saw no call.
+    expect(result.calls).toEqual([]);
     expect(result.stdout).not.toContain("process-secret-must-not-leak");
     expect(result.stdout).not.toContain("do-not-project");
     const store = await SessionStore.open(result.dbPath);

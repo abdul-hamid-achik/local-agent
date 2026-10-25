@@ -27,7 +27,8 @@ import {
 } from "@local-agent/vue-tui";
 import { defineComponent, h, nextTick, onUnmounted, ref } from "vue";
 import { approvalPreview, messageText, tokensPerSecond } from "#cli/preview";
-import { terminalLine } from "#cli/text";
+import { terminalLine, terminalTextStream } from "#cli/text";
+import { providerLabel } from "#cli/tuimark/store";
 
 const messageSyntax = SyntaxStyle.fromStyles({
   default: { fg: "#d8dee9" },
@@ -78,6 +79,21 @@ export function createTerminalRoot(
       const thinking = ref(false);
       const selectedIntent = ref(intent);
       const exit = useExit();
+      // What a history message shows, cleaned once: the screen is rendered
+      // again for every piece of a reply, and a message does not change.
+      const shown = new WeakMap<Message, string>();
+      const shownText = (message: Message) => {
+        let text = shown.get(message);
+        if (text === undefined) {
+          text = terminalText(
+            message.role === "assistant"
+              ? message.content
+              : messageText(message),
+          );
+          shown.set(message, text);
+        }
+        return text;
+      };
       let turn: AbortController | undefined;
       const pending = ref<ApprovalRequest>();
       let decide: ((allowed: boolean) => void) | undefined;
@@ -157,12 +173,7 @@ export function createTerminalRoot(
           }
           return;
         }
-        if (
-          /^\/(theme|mouse|copy)(\s|$)/i.test(command) ||
-          command === "/theme" ||
-          command === "/mouse" ||
-          command === "/copy"
-        ) {
+        if (/^\/(theme|mouse|copy)(\s|$)/i.test(command)) {
           // Session theme/mouse are Tuimark-host features (@theme, <tui
           // mouse>); /copy needs the Tuimark client's clipboard tools.
           status.value =
@@ -189,6 +200,8 @@ export function createTerminalRoot(
         const request = new AbortController();
         turn = request;
         let receivedMessage = false;
+        // A sequence split between two pieces of the reply is still one.
+        const streamText = terminalTextStream();
         let evalCount = 0;
         let evalDuration = 0;
         history.value.push({ role: "user", content: prompt });
@@ -226,7 +239,7 @@ export function createTerminalRoot(
             if (event.type === "text") {
               live.value += event.text;
               if (mode === "inline")
-                process.stdout.write(terminalText(event.text));
+                process.stdout.write(streamText(event.text));
             }
           }
           const speed = tokensPerSecond(evalCount, evalDuration);
@@ -266,8 +279,7 @@ export function createTerminalRoot(
               h(
                 Text,
                 { bold: true },
-                () =>
-                  `Local Agent · ${provider.type === "ollama_remote" ? "Chalupa / remote" : "Ollama / loopback"} · experimental`,
+                () => `Local Agent · ${providerLabel(provider)} · experimental`,
               ),
               mode === "fullscreen"
                 ? h(
@@ -298,13 +310,11 @@ export function createTerminalRoot(
                             ),
                             message.role === "assistant"
                               ? h(Markdown, {
-                                  content: terminalText(message.content),
+                                  content: shownText(message),
                                   syntaxStyle: messageSyntax,
                                   width: "100%",
                                 })
-                              : h(Text, {}, () =>
-                                  terminalText(messageText(message)),
-                                ),
+                              : h(Text, {}, () => shownText(message)),
                           ],
                         ),
                       ),

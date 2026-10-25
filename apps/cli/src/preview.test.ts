@@ -64,6 +64,27 @@ test("a command that names a secret path says so under the command line", () => 
   );
 });
 
+test.each([
+  // A workspace at the filesystem root: its prefix is "/", not "//".
+  ["/", "/usr/bin", "in usr/bin ·"],
+  ["/", "/", "in the workspace ·"],
+  // A root written with a trailing slash is the same root.
+  ["/w/", "/w/pkg", "in pkg ·"],
+  ["/w/", "/w", "in the workspace ·"],
+  // Outside the workspace the whole path is shown, not a climb out of it.
+  ["/w", "/other/pkg", "in /other/pkg ·"],
+  ["/w", "/w2/pkg", "in /w2/pkg ·"],
+  // A folder whose name starts with two dots is inside.
+  ["/w", "/w/..cache", "in ..cache ·"],
+])("a command in %s that runs in %s is placed as %j", (root, cwd, expected) => {
+  expect(
+    approvalPreview(
+      { kind: "command", argv: ["ls"], cwd, timeoutMs: 1000 },
+      root,
+    ),
+  ).toContain(expected);
+});
+
 test("tokensPerSecond needs both of Ollama's counters", () => {
   expect(tokensPerSecond(30, 1_000_000_000)).toBe("30 tok/s");
   expect(tokensPerSecond(5, 1_000_000_000)).toBe("5.0 tok/s");

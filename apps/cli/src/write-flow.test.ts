@@ -1,6 +1,7 @@
 import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { expect, test } from "vitest";
 
 // A write is a file change: only --approve-edits grants it, never the command or MCP grants.
@@ -34,7 +35,7 @@ test.each([
     const child = Bun.spawn(
       [
         process.execPath,
-        new URL("./main.ts", import.meta.url).pathname,
+        fileURLToPath(new URL("./main.ts", import.meta.url)),
         "--model",
         "fixture",
         "--mode",

@@ -1,14 +1,23 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { type Message, SessionStore } from "@local-agent/runtime";
 import { expect, test } from "vitest";
 
-test("resumes completed state and inspects hazardous sessions without replaying effects", async () => {
+const mainPath = fileURLToPath(new URL("./main.ts", import.meta.url));
+
+/**
+ * A session database, a model that answers "Resumed answer", and the CLI to
+ * run against them. What the model was sent is recorded for the test to check
+ * once the process has ended: an expectation inside the handler would turn
+ * into a 500 the CLI reports without the comparison.
+ */
+async function sessionFixture() {
   const root = await mkdtemp(join(tmpdir(), "local-agent-session-flow-"));
   const path = join(root, "sessions.sqlite");
   const store = await SessionStore.open(path);
-  let chats = 0;
+  const chats: Array<{ messages: { role: string; content: string }[] }> = [];
   let requests = 0;
   const server = Bun.serve({
     hostname: "127.0.0.1",
@@ -23,14 +32,9 @@ test("resumes completed state and inspects hazardous sessions without replaying 
           capabilities: ["completion", "tools"],
           model_info: { "fixture.context_length": 16384 },
         });
-      const body = (await req.json()) as {
-        messages: { role: string; content: string }[];
-      };
-      chats++;
-      expect(body.messages).toContainEqual({
-        role: "assistant",
-        content: "Remembered answer",
-      });
+      chats.push(
+        (await req.json()) as { messages: { role: string; content: string }[] },
+      );
       return new Response(
         `${JSON.stringify({ message: { role: "assistant", content: "Resumed answer" }, done: true })}\n`,
       );
@@ -40,7 +44,8 @@ test("resumes completed state and inspects hazardous sessions without replaying 
     const child = Bun.spawn(
       [
         process.execPath,
-        new URL("./main.ts", import.meta.url).pathname,
+        "--no-env-file",
+        mainPath,
         "--session-db",
         path,
         "--workspace",
@@ -48,7 +53,10 @@ test("resumes completed state and inspects hazardous sessions without replaying 
         ...args,
       ],
       {
+        cwd: root,
         env: {
+          PATH: process.env.PATH ?? "",
+          HOME: root,
           // The test's private config home, never the developer's.
           XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME ?? "",
           ...(model
@@ -66,25 +74,80 @@ test("resumes completed state and inspects hazardous sessions without replaying 
     ]);
     return { stdout, stderr, code };
   }
+  return {
+    root,
+    store,
+    chats,
+    launch,
+    requests: () => requests,
+    async close() {
+      await server.stop(true);
+      store.close();
+      await rm(root, { recursive: true, force: true });
+    },
+  };
+}
+
+const remembered = [
+  { role: "user", content: "Remember this" },
+  { role: "assistant", content: "Remembered answer" },
+] as const satisfies Message[];
+
+/** A tool call the session stopped before it ran, and the receipt that would answer it. */
+const call: Message = {
+  role: "assistant",
+  content: "",
+  tool_calls: [{ function: { name: "read", arguments: { path: "file" } } }],
+};
+const receipt: Message = {
+  role: "tool",
+  tool_name: "read",
+  content: "result",
+};
+
+test("lists a session and resumes its completed state", async () => {
+  const fixture = await sessionFixture();
   try {
-    const state = await store.createSession(root, [
-      { role: "user", content: "Remember this" },
-      { role: "assistant", content: "Remembered answer" },
+    const state = await fixture.store.createSession(fixture.root, [
+      ...remembered,
     ]);
-    const listing = await launch(["--sessions"]);
+    const listing = await fixture.launch(["--sessions"]);
     expect(listing.code).toBe(0);
     expect(JSON.parse(listing.stdout)).toEqual([
       { id: state.publicId, revision: 0, messages: 2 },
     ]);
-    const resumed = await launch(
+    const resumed = await fixture.launch(
       ["--resume", state.publicId, "--prompt", "Continue", "--json"],
       true,
     );
     expect(resumed.stderr).toBe("");
     expect(resumed.code).toBe(0);
-    const restored = await store.loadSession(state.publicId, root);
+    // The model was sent the saved history, then the new prompt.
+    expect(fixture.chats).toHaveLength(1);
+    expect(fixture.chats[0]?.messages).toContainEqual({
+      role: "assistant",
+      content: "Remembered answer",
+    });
+    expect(fixture.chats[0]?.messages.at(-1)).toEqual({
+      role: "user",
+      content: "Continue",
+    });
+    const restored = await fixture.store.loadSession(
+      state.publicId,
+      fixture.root,
+    );
     expect(restored.messages).toHaveLength(4);
     expect(restored.messages.at(-1)?.content).toBe("Resumed answer");
+  } finally {
+    await fixture.close();
+  }
+});
+
+test("inspects a hazardous session, and resumes it only once its recovery is recorded", async () => {
+  const fixture = await sessionFixture();
+  try {
+    const { store, launch, root } = fixture;
+    const state = await store.createSession(root, [...remembered]);
     const identity = {
       sessionId: state.id,
       workspaceId: state.workspaceId,
@@ -106,10 +169,11 @@ test("resumes completed state and inspects hazardous sessions without replaying 
     const inspection = await launch(["--session-info", state.publicId]);
     expect(inspection.code).toBe(0);
     expect(JSON.parse(inspection.stdout).hazards).toHaveLength(1);
+    const before = await store.loadSession(state.publicId, root);
     const recovery = await launch(["--recovery-info", state.publicId]);
     expect(recovery.code).toBe(0);
     const review = JSON.parse(recovery.stdout);
-    expect(review.revision).toBe(restored.revision);
+    expect(review.revision).toBe(before.revision);
     expect(review.hazards).toHaveLength(1);
     expect(review.hazards[0]).toEqual({
       eventId: expect.any(Number),
@@ -124,7 +188,7 @@ test("resumes completed state and inspects hazardous sessions without replaying 
     expect(recovery.stdout).not.toContain("Remembered answer");
     expect(recovery.stdout).not.toContain("messages");
     expect((await store.loadSession(state.publicId, root)).revision).toBe(
-      restored.revision,
+      before.revision,
     );
     const blocked = await launch(
       ["--resume", state.publicId, "--prompt", "Retry", "--json"],
@@ -133,10 +197,10 @@ test("resumes completed state and inspects hazardous sessions without replaying 
     expect(blocked.code).toBe(1);
     expect(blocked.stderr).toContain("uncertain tool outcome");
     expect(blocked.stderr).toContain(`--recover ${state.publicId}`);
-    expect(chats).toBe(1);
-    expect(
-      (await store.loadSession(state.publicId, root)).messages,
-    ).toHaveLength(4);
+    expect(fixture.chats).toHaveLength(0);
+    expect((await store.loadSession(state.publicId, root)).messages).toEqual(
+      remembered,
+    );
     // --recover lists it, shows a dry run, and records only with --apply.
     const listed = await launch(["--recover", state.publicId]);
     expect(listed.code).toBe(0);
@@ -196,17 +260,20 @@ test("resumes completed state and inspects hazardous sessions without replaying 
       true,
     );
     expect(unblocked.code).toBe(0);
-    expect(chats).toBe(2);
-    const call: Message = {
+    expect(fixture.chats).toHaveLength(1);
+    expect(fixture.chats[0]?.messages).toContainEqual({
       role: "assistant",
-      content: "",
-      tool_calls: [{ function: { name: "read", arguments: { path: "file" } } }],
-    };
-    const receipt: Message = {
-      role: "tool",
-      tool_name: "read",
-      content: "result",
-    };
+      content: "Remembered answer",
+    });
+  } finally {
+    await fixture.close();
+  }
+}, 30_000);
+
+test("refuses to resume a history that is not a valid one, and closes a call the session stopped before", async () => {
+  const fixture = await sessionFixture();
+  try {
+    const { store, launch, root } = fixture;
     const invalidHistories: Message[][] = [
       [receipt, call],
       [call, { ...receipt, tool_name: "edit" }],
@@ -230,7 +297,7 @@ test("resumes completed state and inspects hazardous sessions without replaying 
         { ...receipt, tool_call_id: "first" },
       ],
     ];
-    const previousRequests = requests;
+    const previousRequests = fixture.requests();
     for (const messages of invalidHistories) {
       const invalid = await store.createSession(root, messages);
       const rejected = await launch(
@@ -243,12 +310,11 @@ test("resumes completed state and inspects hazardous sessions without replaying 
         0,
       );
     }
-    expect(requests).toBe(previousRequests);
+    expect(fixture.requests()).toBe(previousRequests);
     // A call the session stopped before running is closed at resume, and
     // the turn goes on.
     const lone = await store.createSession(root, [
-      { role: "user", content: "Remember this" },
-      { role: "assistant", content: "Remembered answer" },
+      ...remembered,
       { role: "user", content: "Read it" },
       call,
     ]);
@@ -258,11 +324,10 @@ test("resumes completed state and inspects hazardous sessions without replaying 
     );
     expect(settled.stderr).toContain("note: closed 1 tool call");
     expect(settled.code).toBe(0);
+    expect(fixture.chats).toHaveLength(1);
     const closed = await store.loadSession(lone.publicId, root);
     expect(closed.messages[4]?.content).toContain("Not run");
   } finally {
-    await server.stop(true);
-    store.close();
-    await rm(root, { recursive: true, force: true });
+    await fixture.close();
   }
-});
+}, 30_000);

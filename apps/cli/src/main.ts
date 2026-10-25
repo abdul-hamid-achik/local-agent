@@ -25,7 +25,7 @@ import {
 } from "@local-agent/runtime";
 import { secretNote } from "#cli/preview";
 import { recoverCommand } from "#cli/recover";
-import { terminalText } from "#cli/text";
+import { terminalText, terminalTextStream } from "#cli/text";
 import { terminalTrustIO, trustRulesCommand } from "#cli/trust-rules";
 import { interactiveClient, parseUi } from "#cli/ui-flag";
 
@@ -77,6 +77,12 @@ const HANGUP_GRACE_MS = 5_000;
 const unavailable = (failed: { name: string; error: string }) =>
   `MCP server ${failed.name} unavailable: ${failed.error}`;
 
+/**
+ * The exit code of a run a signal stopped (128 plus the signal's number), as
+ * a shell reads it; 0 when none did.
+ */
+let interrupted = 0;
+
 try {
   const { values } = parseArgs({
     args: Bun.argv.slice(2),
@@ -87,7 +93,7 @@ try {
       think: { type: "string" },
       context: { type: "string" },
       prompt: { type: "string", short: "p" },
-      mode: { type: "string", default: "fullscreen" },
+      mode: { type: "string" },
       ui: { type: "string" },
       theme: { type: "string" },
       json: { type: "boolean" },
@@ -198,7 +204,8 @@ A resumed session first closes the calls it was interrupted before running.`);
       process.off("SIGTERM", stop);
     }
   } else {
-    if (!["fullscreen", "inline", "headless"].includes(values.mode))
+    const mode = values.mode ?? "fullscreen";
+    if (!["fullscreen", "inline", "headless"].includes(mode))
       throw new Error("Unknown presentation mode");
     if (
       values.intent !== "plan" &&
@@ -244,8 +251,14 @@ A resumed session first closes the calls it was interrupted before running.`);
       values.recover !== undefined;
     const prompt = values.prompt ?? "";
     const headless =
-      values.mode === "headless" || values.prompt !== undefined || values.json;
+      mode === "headless" || values.prompt !== undefined || values.json;
     if (!inspect) {
+      // --prompt and --json run headless: an interactive mode named beside
+      // them would be dropped without a word.
+      if (values.mode !== undefined && mode !== "headless" && headless)
+        throw new Error(
+          `--mode ${mode} is interactive, but --prompt and --json run headless; drop --mode or use --mode headless`,
+        );
       if (values.ui === "tuimark" && headless)
         throw new Error(
           "--ui tuimark needs an interactive terminal; use it without --prompt, --json or --mode headless",
@@ -265,6 +278,22 @@ A resumed session first closes the calls it was interrupted before running.`);
         throw new Error(
           "Choose --approve-commands (commands run as you) or --sandbox-commands (confined), not both",
         );
+      if (values.theme !== undefined) {
+        if (headless)
+          throw new Error(
+            "--theme styles the interactive Tuimark client; it has no effect with --prompt, --json or --mode headless",
+          );
+        // Only the default Tuimark client may still fall back to Vue, once the
+        // binary is looked for below; every other choice is known now.
+        if (
+          interactiveClient(
+            ui,
+            mode as "fullscreen" | "inline",
+            values.ui !== undefined,
+          ) !== "tuimark"
+        )
+          throw new Error("--theme needs the Tuimark client; use --ui tuimark");
+      }
       if (!headless && (!process.stdin.isTTY || !process.stdout.isTTY))
         throw new Error(
           "Interactive modes require a terminal; use --mode headless --prompt",
@@ -363,7 +392,7 @@ A resumed session first closes the calls it was interrupted before running.`);
           !headless &&
           interactiveClient(
             ui,
-            values.mode as "fullscreen" | "inline",
+            mode as "fullscreen" | "inline",
             values.ui !== undefined,
           ) === "tuimark";
         const problem = store && resumed && sessionProblem(store, resumed);
@@ -400,23 +429,22 @@ A resumed session first closes the calls it was interrupted before running.`);
           if (admission.status === "rejected")
             throw new Error(admission.message);
         }
-        const session: SessionContext | undefined = store
-          ? {
-              store,
-              state: resumed ?? (await store.createSession(workspace.root)),
-            }
-          : undefined;
         const controller = new AbortController();
-        const stop = () => controller.abort();
+        const stopFor = (code: number) => () => {
+          interrupted ||= code;
+          controller.abort();
+        };
+        const interrupt = stopFor(130);
+        const terminate = stopFor(143);
         // The terminal went away (its window closed): stop as for SIGTERM,
         // the turn's calls closed and the servers too, but do not outlive
         // the terminal by long when something will not let go.
         const hangup = () => {
-          stop();
+          stopFor(129)();
           setTimeout(() => process.exit(129), HANGUP_GRACE_MS).unref();
         };
-        process.once("SIGINT", stop);
-        process.once("SIGTERM", stop);
+        process.once("SIGINT", interrupt);
+        process.once("SIGTERM", terminate);
         process.once("SIGHUP", hangup);
         // Filled as servers connect (the Tuimark client opens first and
         // shows them arriving); every one is closed on the way out.
@@ -440,7 +468,7 @@ A resumed session first closes the calls it was interrupted before running.`);
             ? "vue"
             : interactiveClient(
                 ui,
-                values.mode as "fullscreen" | "inline",
+                mode as "fullscreen" | "inline",
                 values.ui !== undefined,
               );
           let bin: string | undefined;
@@ -498,6 +526,14 @@ A resumed session first closes the calls it was interrupted before running.`);
                 );
             }
           }
+          // Only now, with every refusal of the run's own flags and servers
+          // behind: an earlier one would leave an empty session in the database.
+          const session: SessionContext | undefined = store
+            ? {
+                store,
+                state: resumed ?? (await store.createSession(workspace.root)),
+              }
+            : undefined;
           if (headless) {
             if (session) {
               if (values.json)
@@ -513,6 +549,9 @@ A resumed session first closes the calls it was interrupted before running.`);
             const fileRules = workspaceRules(workspace.root, (warning) =>
               process.stderr.write(`warning: ${terminalText(warning)}\n`),
             );
+            // The model's text arrives in pieces: an escape sequence split
+            // between two of them is still one sequence to remove.
+            const streamText = terminalTextStream();
             // Native terminal rendering stays behind the interactive dynamic import.
             for await (const event of runAgent(
               provider,
@@ -574,7 +613,7 @@ A resumed session first closes the calls it was interrupted before running.`);
             )) {
               if (values.json) console.log(JSON.stringify(event));
               else if (event.type === "text")
-                process.stdout.write(terminalText(event.text));
+                process.stdout.write(streamText(event.text));
               else if (event.type === "tool_result")
                 process.stderr.write(
                   `${terminalText(event.name)}: ${event.status}\n`,
@@ -599,7 +638,7 @@ A resumed session first closes the calls it was interrupted before running.`);
               values.intent,
               session,
               mcp,
-              values.mode as "fullscreen" | "inline",
+              mode as "fullscreen" | "inline",
               values.theme ?? "auto",
               {
                 mcpNames,
@@ -618,7 +657,7 @@ A resumed session first closes the calls it was interrupted before running.`);
             const { runTerminal } = await import("#cli/terminal");
             await runTerminal(
               provider,
-              values.mode as "fullscreen" | "inline",
+              mode as "fullscreen" | "inline",
               controller.signal,
               workspace,
               values.intent,
@@ -632,20 +671,24 @@ A resumed session first closes the calls it was interrupted before running.`);
           mcpAbort.abort();
           await mcpReady;
           await Promise.allSettled(mcp.map((connection) => connection.close()));
-          process.off("SIGINT", stop);
-          process.off("SIGTERM", stop);
+          process.off("SIGINT", interrupt);
+          process.off("SIGTERM", terminate);
           process.off("SIGHUP", hangup);
         }
+        // A client that stops for a signal returns as if it had finished.
+        if (interrupted) process.exitCode = interrupted;
       }
     } finally {
       store?.close();
     }
   }
 } catch (error) {
-  console.error(
-    terminalText(
-      error instanceof Error ? error.message : "Unable to run Local Agent",
-    ),
-  );
-  process.exitCode = 1;
+  // The stop a signal asked for is not a failure to report; its code says it.
+  if (!(interrupted && error instanceof Error && error.name === "AbortError"))
+    console.error(
+      terminalText(
+        error instanceof Error ? error.message : "Unable to run Local Agent",
+      ),
+    );
+  process.exitCode = interrupted || 1;
 }

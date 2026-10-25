@@ -1,6 +1,7 @@
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { SessionStore, trustRules } from "@local-agent/runtime";
 import { expect, test } from "vitest";
 
@@ -62,7 +63,7 @@ test.each([
       const child = Bun.spawn(
         [
           process.execPath,
-          new URL("./main.ts", import.meta.url).pathname,
+          fileURLToPath(new URL("./main.ts", import.meta.url)),
           "--model",
           "fixture",
           "--mode",
@@ -171,7 +172,7 @@ async function headless(
     const child = Bun.spawn(
       [
         process.execPath,
-        new URL("./main.ts", import.meta.url).pathname,
+        fileURLToPath(new URL("./main.ts", import.meta.url)),
         "--model",
         "fixture",
         "--workspace",

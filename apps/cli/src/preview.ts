@@ -1,6 +1,7 @@
 // Plain-text previews shared by the Vue and Tuimark clients. Nothing here may
 // import a renderer: this module is loaded before any terminal is claimed.
 
+import { isAbsolute, relative, sep } from "node:path";
 import {
   type ApprovalRequest,
   commandLine,
@@ -13,8 +14,13 @@ import { terminalText } from "#cli/text";
 /** The directory a command runs in, as the approval says it: relative to the workspace when known. */
 function commandWhere(cwd: string, root?: string): string {
   if (root === undefined) return cwd;
-  if (cwd === root) return "the workspace";
-  return cwd.startsWith(`${root}/`) ? cwd.slice(root.length + 1) : cwd;
+  const inside = relative(root, cwd);
+  if (inside === "") return "the workspace";
+  // Outside the root, relative() climbs out of it (or, on another drive, gives
+  // an absolute path): the whole path says more than a run of "..".
+  return inside === ".." || inside.startsWith(`..${sep}`) || isAbsolute(inside)
+    ? cwd
+    : inside;
 }
 
 /**

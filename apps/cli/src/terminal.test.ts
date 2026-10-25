@@ -5,11 +5,16 @@ import {
   appendRule,
   MAX_MESSAGE_CHARS,
   type McpConnection,
+  type Message,
+  type Provider,
+  type SessionContext,
+  SessionStore,
   Workspace,
 } from "@local-agent/runtime";
 import {
   createNodeOps,
   exitInjectionKey,
+  type Presentation,
   rendererInjectionKey,
   terminalOptions,
 } from "@local-agent/vue-tui";
@@ -21,7 +26,163 @@ import { createTerminalRoot } from "#cli/terminal";
 const cleanups: Array<() => Promise<void>> = [];
 
 afterEach(async () => {
-  for (const cleanup of cleanups.splice(0)) await cleanup();
+  // A cleanup that throws must not leave the others (a server, a temporary
+  // directory, a renderer) running into the next test: all run, then the
+  // failures are reported together.
+  const failures: unknown[] = [];
+  for (const cleanup of cleanups.splice(0)) {
+    try {
+      await cleanup();
+    } catch (error) {
+      failures.push(error);
+    }
+  }
+  if (failures.length > 0)
+    throw new AggregateError(failures, "a test cleanup failed");
+});
+
+/** A model endpoint for a test that never contacts one: any request is recorded. */
+function untouchedModel() {
+  const requests: string[] = [];
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch(request) {
+      requests.push(`${request.method} ${new URL(request.url).pathname}`);
+      return new Response("not a model", { status: 500 });
+    },
+  });
+  cleanups.push(async () => {
+    await server.stop(true);
+  });
+  return { origin: server.url.origin, requests };
+}
+
+/** The Vue client mounted on a test renderer, torn down after the test. */
+async function mountTerminal(
+  provider: Provider,
+  mode: Presentation,
+  options: {
+    intent?: "plan" | "build" | "chat";
+    session?: SessionContext;
+    /** The workspace, when a session was made for one; else a new folder holding notes.txt. */
+    root?: string;
+    height?: number;
+  } = {},
+) {
+  const root =
+    options.root ??
+    (await mkdtemp(join(tmpdir(), "local-agent-terminal-mount-")));
+  if (!options.root) await writeFile(join(root, "notes.txt"), "before\n");
+  const workspace = await Workspace.create(root);
+  const terminal = await createTestRenderer({
+    ...terminalOptions(mode),
+    width: 100,
+    height: options.height ?? 30,
+    kittyKeyboard: true,
+  });
+  const signal = new AbortController();
+  const app = createRenderer(createNodeOps(terminal.renderer)).createApp(
+    createTerminalRoot(
+      provider,
+      mode,
+      signal.signal,
+      workspace,
+      options.intent ?? "build",
+      options.session,
+    ),
+  );
+  app.provide(rendererInjectionKey, terminal.renderer);
+  app.provide(exitInjectionKey, () => terminal.renderer.destroy());
+  app.mount(terminal.renderer.root);
+  cleanups.push(async () => {
+    signal.abort();
+    app.unmount();
+    terminal.renderer.destroy();
+    workspace.close();
+    await rm(root, { recursive: true, force: true });
+  });
+  await terminal.flush();
+  return { terminal, root };
+}
+
+/** What the client writes to stdout (the scrollback of the inline screen), until the test ends. */
+function captureStdout() {
+  const written: string[] = [];
+  const spy = vi
+    .spyOn(process.stdout, "write")
+    .mockImplementation((chunk: string | Uint8Array) => {
+      written.push(String(chunk));
+      return true;
+    });
+  cleanups.push(async () => spy.mockRestore());
+  return written;
+}
+
+/** A model that answers with these pieces of text, one per line of the stream, after any tool call. */
+function streamingModel(
+  pieces: string[],
+  toolCall?: { name: string; arguments: Record<string, string> },
+) {
+  const requests: Array<{ messages?: Array<{ role?: string }> }> = [];
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    async fetch(request) {
+      const path = new URL(request.url).pathname;
+      if (request.method === "GET" && path === "/api/tags")
+        return Response.json({ models: [{ name: "fixture", size: 1000 }] });
+      if (request.method === "POST" && path === "/api/show")
+        return Response.json({
+          capabilities: ["completion", "tools"],
+          model_info: { "fixture.context_length": 16384 },
+        });
+      const body = (await request.json()) as (typeof requests)[number];
+      requests.push(body);
+      const lines =
+        toolCall && !body.messages?.some((entry) => entry.role === "tool")
+          ? [
+              {
+                message: {
+                  role: "assistant",
+                  content: "",
+                  tool_calls: [
+                    {
+                      function: {
+                        name: toolCall.name,
+                        arguments: toolCall.arguments,
+                      },
+                    },
+                  ],
+                },
+                done: false,
+              },
+              { message: { role: "assistant", content: "" }, done: true },
+            ]
+          : [
+              ...pieces.map((content) => ({
+                message: { role: "assistant", content },
+                done: false,
+              })),
+              { message: { role: "assistant", content: "" }, done: true },
+            ];
+      return new Response(
+        lines.map((line) => `${JSON.stringify(line)}\n`).join(""),
+        { headers: { "content-type": "application/x-ndjson" } },
+      );
+    },
+  });
+  cleanups.push(async () => {
+    await server.stop(true);
+  });
+  return { origin: server.url.origin, requests };
+}
+
+const fixtureProvider = (origin: string): Provider => ({
+  type: "ollama",
+  base_url: origin,
+  model: "fixture",
+  context_size: 16384,
 });
 
 test.each(["edit", "mcp"])(
@@ -321,46 +482,27 @@ test("the workspace's rules apply in the Vue client: allow skips the prompt, den
 });
 
 test("fullscreen mode can switch intent from the composer", async () => {
-  const root = await mkdtemp(join(tmpdir(), "local-agent-terminal-mode-"));
-  const workspace = await Workspace.create(root);
-  const terminal = await createTestRenderer({
-    ...terminalOptions("fullscreen"),
-    width: 100,
-    height: 24,
-    kittyKeyboard: true,
-  });
-  const signal = new AbortController();
-  const app = createRenderer(createNodeOps(terminal.renderer)).createApp(
-    createTerminalRoot(
-      {
-        type: "ollama",
-        base_url: "http://127.0.0.1:11434",
-        model: "fixture",
-        context_size: 16384,
-      },
-      "fullscreen",
-      signal.signal,
-      workspace,
-      "build",
-    ),
+  const model = untouchedModel();
+  const { terminal } = await mountTerminal(
+    fixtureProvider(model.origin),
+    "fullscreen",
+    { height: 24 },
   );
-  app.provide(rendererInjectionKey, terminal.renderer);
-  app.provide(exitInjectionKey, () => terminal.renderer.destroy());
-  app.mount(terminal.renderer.root);
-  cleanups.push(async () => {
-    signal.abort();
-    app.unmount();
-    terminal.renderer.destroy();
-    workspace.close();
-    await rm(root, { recursive: true, force: true });
-  });
 
-  await terminal.flush();
+  // Before any command the sidebar says what a build run may do; the words
+  // the commands below wait for are not on the screen yet.
+  const before = terminal.captureCharFrame();
+  expect(before).toContain("Read · Edit · Write");
+  expect(before).not.toContain("Read only");
+  expect(before).not.toContain("Read · Research · MCP asks");
+
   await terminal.mockInput.pasteBracketedText("/mode plan");
   terminal.mockInput.pressEnter();
-  await terminal.waitForFrame(
-    (frame) => frame.includes("Mode") && frame.includes("Read only"),
+  const plan = await terminal.waitForFrame((frame) =>
+    frame.includes("Read only"),
   );
+  expect(plan).toContain("Mode changed to plan");
+  expect(plan).not.toContain("Edit · Write");
   // Chat cannot edit, write or run commands: the sidebar does not say it can.
   await terminal.flush();
   await terminal.mockInput.pasteBracketedText("/mode chat");
@@ -369,11 +511,13 @@ test("fullscreen mode can switch intent from the composer", async () => {
     text.includes("Read · Research · MCP asks"),
   );
   expect(frame).not.toContain("Edit · Write");
+  expect(frame).toContain("Mode changed to chat");
+  expect(model.requests).toEqual([]);
 });
 
 test.each([
-  ["/help", "/mode plan|build|chat"],
-  ["/mcp", "MCP servers: 0"],
+  ["/help", "/mcp · /help · Esc cancel"],
+  ["/mcp", "MCP servers: 0 · use --mcp-config"],
   ["/mode banana", "Unknown mode: banana"],
   // A paste reaches the status line as the composer took it: without the
   // sequences it carried.
@@ -387,49 +531,196 @@ test.each([
     "/copy code",
     "/theme, /mouse and /copy are available in the Tuimark client",
   ],
+  // With no argument, and in any case: the same line.
+  ["/theme", "/theme, /mouse and /copy are available in the Tuimark client"],
+  ["/MOUSE", "/theme, /mouse and /copy are available in the Tuimark client"],
+  ["/copy", "/theme, /mouse and /copy are available in the Tuimark client"],
 ] as const)(
   "handles %s locally without contacting the model",
   async (command, expected) => {
-    const root = await mkdtemp(join(tmpdir(), "local-agent-terminal-command-"));
-    const workspace = await Workspace.create(root);
-    const terminal = await createTestRenderer({
-      ...terminalOptions("fullscreen"),
-      width: 100,
-      height: 24,
-      kittyKeyboard: true,
-    });
-    const signal = new AbortController();
-    const app = createRenderer(createNodeOps(terminal.renderer)).createApp(
-      createTerminalRoot(
-        {
-          type: "ollama",
-          base_url: "http://127.0.0.1:11434",
-          model: "fixture",
-          context_size: 16384,
-        },
-        "fullscreen",
-        signal.signal,
-        workspace,
-        "build",
-      ),
+    const model = untouchedModel();
+    const { terminal } = await mountTerminal(
+      fixtureProvider(model.origin),
+      "fullscreen",
+      { height: 24 },
     );
-    app.provide(rendererInjectionKey, terminal.renderer);
-    app.provide(exitInjectionKey, () => terminal.renderer.destroy());
-    app.mount(terminal.renderer.root);
-    cleanups.push(async () => {
-      signal.abort();
-      app.unmount();
-      terminal.renderer.destroy();
-      workspace.close();
-      await rm(root, { recursive: true, force: true });
-    });
 
-    await terminal.flush();
     await terminal.mockInput.pasteBracketedText(command);
     terminal.mockInput.pressEnter();
     await terminal.waitForFrame((frame) => frame.includes(expected));
+    expect(model.requests).toEqual([]);
   },
 );
+
+test.each([
+  [
+    { type: "ollama", base_url: "http://127.0.0.1:11434" },
+    "Local Agent · Ollama / loopback · experimental",
+  ],
+  [
+    { type: "ollama_remote", base_url: "https://gpu.example.test" },
+    "Local Agent · Chalupa / remote · experimental",
+  ],
+  [
+    { type: "openai_local", base_url: "http://127.0.0.1:8080/v1" },
+    "Local Agent · OpenAI-compatible / local · experimental",
+  ],
+] as const)(
+  "the header names a %j provider as it is",
+  async (provider, title) => {
+    const { terminal } = await mountTerminal(
+      { ...provider, model: "fixture", context_size: 16384 },
+      "fullscreen",
+    );
+    expect(terminal.captureCharFrame()).toContain(title);
+  },
+);
+
+test("the inline presentation hands stdout to the renderer's scrollback", () => {
+  // The inline screen writes the run to process.stdout (the next tests read
+  // what it writes). That is the renderer's own scrollback only because it
+  // captures stdout in this mode, and fullscreen leaves it alone.
+  expect(terminalOptions("inline")).toMatchObject({
+    screenMode: "split-footer",
+    externalOutputMode: "capture-stdout",
+  });
+  expect(terminalOptions("fullscreen")).toMatchObject({
+    screenMode: "alternate-screen",
+    externalOutputMode: "passthrough",
+  });
+});
+
+test("inline writes the prompt, the approval, the tool result and the reply to stdout in that order", async () => {
+  const model = streamingModel(["all ", "done"], {
+    name: "edit",
+    arguments: { path: "notes.txt", old_string: "before", new_string: "after" },
+  });
+  const written = captureStdout();
+  const { terminal, root } = await mountTerminal(
+    fixtureProvider(model.origin),
+    "inline",
+  );
+
+  await terminal.mockInput.pasteBracketedText("go");
+  terminal.mockInput.pressEnter();
+  await terminal.waitForFrame((frame) => frame.includes("Edit notes.txt?"));
+  // The preview is in the scrollback; the dialog keeps one line of it.
+  expect(written.join("")).toContain("-before");
+  expect(terminal.captureCharFrame()).toContain("Diff printed above");
+  terminal.mockInput.pressKey("n");
+  await expect.poll(() => written.join("")).toContain("all done\n");
+
+  const output = written.join("");
+  const order = [
+    "\nYou: go\nAssistant: ",
+    "-before",
+    "\nedit: denied\n",
+    "all done\n",
+  ].map((part) => output.indexOf(part));
+  expect(order).toEqual([...order].sort((a, b) => a - b));
+  expect(order.every((at) => at >= 0)).toBe(true);
+  // The prompt comes first, and the turn ends with one line break.
+  expect(output.startsWith("\nYou: go\nAssistant: ")).toBe(true);
+  expect(output.endsWith("all done\n")).toBe(true);
+  expect(await readFile(join(root, "notes.txt"), "utf8")).toBe("before\n");
+});
+
+test("inline removes an escape sequence the reply splits between two pieces", async () => {
+  // The first piece ends inside a colour sequence, the third inside an OSC
+  // title: cleaned one by one, "[31m" and "0;pwned" would reach the screen.
+  const model = streamingModel([
+    "a\u001b",
+    "[31mred\u001b[0",
+    "m then \u001b]0;pw",
+    "ned\u0007 end",
+  ]);
+  const written = captureStdout();
+  const { terminal } = await mountTerminal(
+    fixtureProvider(model.origin),
+    "inline",
+  );
+
+  await terminal.mockInput.pasteBracketedText("go");
+  terminal.mockInput.pressEnter();
+  await expect.poll(() => written.join("")).toContain("end\n");
+  expect(written.join("")).toBe("\nYou: go\nAssistant: ared then  end\n");
+});
+
+test("a long history is not cleaned again for every piece of a reply", async () => {
+  const root = await mkdtemp(join(tmpdir(), "local-agent-terminal-history-"));
+  const store = await SessionStore.open(join(root, "sessions.sqlite"));
+  cleanups.push(async () => {
+    store.close();
+    await rm(root, { recursive: true, force: true });
+  });
+  const history: Message[] = [];
+  for (let i = 0; i < 30; i++)
+    history.push(
+      { role: "user", content: `question ${i}` },
+      { role: "assistant", content: `answer ${i}` },
+    );
+  const state = await store.createSession(root, history);
+  const pieces = Array.from({ length: 20 }, (_, i) => `piece ${i} `);
+  const encoder = new TextEncoder();
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch(request) {
+      const path = new URL(request.url).pathname;
+      if (request.method === "GET" && path === "/api/tags")
+        return Response.json({ models: [{ name: "fixture", size: 1000 }] });
+      if (request.method === "POST" && path === "/api/show")
+        return Response.json({
+          capabilities: ["completion", "tools"],
+          model_info: { "fixture.context_length": 16384 },
+        });
+      return new Response(
+        new ReadableStream({
+          async start(controller) {
+            for (const content of pieces) {
+              controller.enqueue(
+                encoder.encode(
+                  `${JSON.stringify({ message: { role: "assistant", content }, done: false })}\n`,
+                ),
+              );
+              await Bun.sleep(10);
+            }
+            controller.enqueue(
+              encoder.encode(
+                `${JSON.stringify({ message: { role: "assistant", content: "" }, done: true })}\n`,
+              ),
+            );
+            controller.close();
+          },
+        }),
+        { headers: { "content-type": "application/x-ndjson" } },
+      );
+    },
+  });
+  cleanups.push(async () => {
+    await server.stop(true);
+  });
+  const { terminal } = await mountTerminal(
+    fixtureProvider(server.url.origin),
+    "fullscreen",
+    { session: { store, state }, root },
+  );
+  const strip = vi.spyOn(Bun, "stripANSI");
+  cleanups.push(async () => strip.mockRestore());
+
+  await terminal.mockInput.pasteBracketedText("go");
+  terminal.mockInput.pressEnter();
+  // Every piece draws the screen again: the finished reply is on it last.
+  await expect
+    .poll(async () => {
+      await terminal.flush();
+      return terminal.captureCharFrame();
+    })
+    .toContain("piece 19");
+  // The new message and the live reply are cleaned; the sixty before them
+  // were cleaned when they first drew, not once per piece.
+  expect(strip.mock.calls.length).toBeLessThan(history.length);
+});
 
 test("a send past what a message holds stays in the composer", async () => {
   let requests = 0;

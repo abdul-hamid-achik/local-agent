@@ -1,6 +1,7 @@
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { trustRules } from "@local-agent/runtime";
 import { expect, test } from "vitest";
 
@@ -65,7 +66,7 @@ test("headless runs apply the workspace's deny and trusted allow rules", async (
     const child = Bun.spawn(
       [
         process.execPath,
-        new URL("./main.ts", import.meta.url).pathname,
+        fileURLToPath(new URL("./main.ts", import.meta.url)),
         "--model",
         "fixture",
         "--mode",
@@ -176,7 +177,7 @@ test("headless refuses an ask rule's call whatever the flags say", async () => {
     const child = Bun.spawn(
       [
         process.execPath,
-        new URL("./main.ts", import.meta.url).pathname,
+        fileURLToPath(new URL("./main.ts", import.meta.url)),
         "--model",
         "fixture",
         "--workspace",
