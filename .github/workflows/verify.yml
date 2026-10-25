@@ -13,7 +13,9 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-latest, macos-latest]
-    timeout-minutes: 10
+    # macOS takes 7.5 to 10 minutes, six of them in the Tuimark contracts:
+    # 10 cut a release's verify short (0.50.3).
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
