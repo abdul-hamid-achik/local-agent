@@ -118,7 +118,11 @@ export function createTerminalRoot(
       }
       onUnmounted(() => turn?.abort());
 
-      async function submit() {
+      // The composer's text when enter was pressed. Keys that reach it in
+      // one read with their enter (a paste, a fast typist, a busy machine)
+      // submit before their edit reaches the draft, which was still empty.
+      async function submit(value: string) {
+        draft.value = value;
         if (busy.value) {
           if (isCommand(draft.value.trim()))
             status.value = "Busy · wait for the current turn to finish";
@@ -364,7 +368,7 @@ export function createTerminalRoot(
                     "onUpdate:modelValue": (value: string) => {
                       draft.value = value;
                     },
-                    onSubmit: () => void submit(),
+                    onSubmit: (value: string) => void submit(value),
                     onCancel: () => turn?.abort(),
                   }),
             ],

@@ -708,6 +708,94 @@ test("mode switch changes the Ollama tool catalog", async () => {
   });
 });
 
+test.each(["fullscreen", "inline"] as const)(
+  "a prompt and its enter in one read are sent from the %s screen",
+  async (mode) => {
+    const root = await mkdtemp(join(tmpdir(), "local-agent-terminal-burst-"));
+    const workspace = await Workspace.create(root);
+    const requests: Array<{
+      messages?: Array<{ role: string; content: string }>;
+    }> = [];
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      async fetch(request) {
+        const path = new URL(request.url).pathname;
+        if (request.method === "GET" && path === "/api/tags")
+          return Response.json({ models: [{ name: "fixture", size: 1000 }] });
+        if (request.method === "POST" && path === "/api/show")
+          return Response.json({
+            capabilities: ["completion", "tools"],
+            model_info: { "fixture.context_length": 16384 },
+          });
+        requests.push(await request.json());
+        return new Response(
+          `${JSON.stringify({ message: { role: "assistant", content: "sent once" }, done: true })}\n`,
+          { headers: { "content-type": "application/x-ndjson" } },
+        );
+      },
+    });
+    const terminal = await createTestRenderer({
+      ...terminalOptions(mode),
+      width: 100,
+      height: 30,
+      kittyKeyboard: true,
+    });
+    const signal = new AbortController();
+    const app = createRenderer(createNodeOps(terminal.renderer)).createApp(
+      createTerminalRoot(
+        {
+          type: "ollama",
+          base_url: server.url.origin,
+          model: "fixture",
+          context_size: 16384,
+        },
+        mode,
+        signal.signal,
+        workspace,
+        "build",
+      ),
+    );
+    app.provide(rendererInjectionKey, terminal.renderer);
+    app.provide(exitInjectionKey, () => terminal.renderer.destroy());
+    app.mount(terminal.renderer.root);
+    cleanups.push(async () => {
+      signal.abort();
+      app.unmount();
+      terminal.renderer.destroy();
+      server.stop(true);
+      workspace.close();
+      await rm(root, { recursive: true, force: true });
+    });
+    // Inline writes the run to scrollback; fullscreen draws it.
+    let written = "";
+    const stdout = vi
+      .spyOn(process.stdout, "write")
+      .mockImplementation((chunk: string | Uint8Array) => {
+        written += String(chunk);
+        return true;
+      });
+    cleanups.push(async () => stdout.mockRestore());
+
+    await terminal.flush();
+    // A terminal hands the client what is waiting: on a busy machine the
+    // typed keys and their enter come in one read, and the enter used to
+    // submit the draft before the keys reached it, so nothing was sent.
+    terminal.renderer.stdin.emit("data", Buffer.from("stream a reply\r"));
+    await expect.poll(() => requests.length).toBe(1);
+    expect(requests[0]?.messages?.at(-1)).toMatchObject({
+      role: "user",
+      content: "stream a reply",
+    });
+    await expect
+      .poll(async () => {
+        await terminal.flush();
+        return written + terminal.captureCharFrame();
+      })
+      .toContain("sent once");
+  },
+);
+
 test("a finished reply keeps its prose on every frame as it leaves the stream", async () => {
   const root = await mkdtemp(join(tmpdir(), "local-agent-terminal-reply-"));
   const workspace = await Workspace.create(root);
