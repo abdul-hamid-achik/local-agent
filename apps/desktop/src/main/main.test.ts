@@ -18,6 +18,7 @@ import {
   resolveBun,
 } from "#desktop/main/bun-path";
 import { TextFileGrants, userMcpConfigPath } from "#desktop/main/file-access";
+import { externalUrl, staysInApp } from "#desktop/main/navigation";
 import { LineDecoder } from "#desktop/main/ndjson";
 import { writePrivateFile } from "#desktop/main/private-file";
 import {
@@ -485,5 +486,34 @@ describe("SidecarClient lifecycle", () => {
     } finally {
       client.stop();
     }
+  });
+});
+
+describe("navigation", () => {
+  test("only a web link opens outside", () => {
+    expect(externalUrl("https://local-agent.dev/safety")).toBe(
+      "https://local-agent.dev/safety",
+    );
+    expect(externalUrl("http://example.com")).toBe("http://example.com/");
+    for (const url of [
+      "file:///etc/passwd",
+      "javascript:alert(1)",
+      "data:text/html,<p>x</p>",
+      "local-agent://x",
+      "not a url",
+    ])
+      expect(externalUrl(url)).toBeUndefined();
+  });
+
+  test("a navigation stays only on the app's own page", () => {
+    const dev = "http://localhost:5173/#/chat";
+    expect(staysInApp("http://localhost:5173/#/sessions", dev)).toBe(true);
+    expect(staysInApp("http://localhost:5174/", dev)).toBe(false);
+    expect(staysInApp("https://example.com/", dev)).toBe(false);
+    const packaged = "file:///Applications/X.app/dist-renderer/index.html";
+    expect(staysInApp(`${packaged}#/chat`, packaged)).toBe(true);
+    expect(staysInApp("file:///tmp/evil.html", packaged)).toBe(false);
+    expect(staysInApp("https://example.com/", packaged)).toBe(false);
+    expect(staysInApp("not a url", packaged)).toBe(false);
   });
 });

@@ -3,6 +3,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
 import { TextFileGrants, userMcpConfigPath } from "#desktop/main/file-access";
+import { externalUrl, staysInApp } from "#desktop/main/navigation";
 import { providerEnvProblem } from "#desktop/main/provider-env";
 import {
   loadSettings,
@@ -114,9 +115,27 @@ function createWindow(): void {
       join(import.meta.dirname, "..", "dist-renderer", "index.html"),
     );
   }
+  const contents = mainWindow.webContents;
+  // No other page loads in this window (its bridge drives the sidecar): a
+  // new window or a link away from the app opens in the system browser,
+  // when it is a web link, and never here.
+  contents.setWindowOpenHandler(({ url }) => {
+    openOutside(url);
+    return { action: "deny" };
+  });
+  contents.on("will-navigate", (event, url) => {
+    if (staysInApp(url, contents.getURL())) return;
+    event.preventDefault();
+    openOutside(url);
+  });
   mainWindow.on("closed", () => {
     mainWindow = undefined;
   });
+}
+
+function openOutside(url: string): void {
+  const external = externalUrl(url);
+  if (external) void shell.openExternal(external);
 }
 
 ipcMain.handle("desktop/rpc", (_event, method: string, params?: unknown) => {
@@ -149,20 +168,23 @@ ipcMain.handle("desktop/get-provider-env", () => settings.providerEnv ?? {});
 ipcMain.handle(
   "desktop/pick",
   async (
-    _event,
+    event,
     options: {
       kind: "directory" | "file";
       filters?: { name: string; extensions: string[] }[];
     },
   ) => {
-    const picked = await dialog.showOpenDialog(
-      mainWindow ?? new BrowserWindow(),
-      {
-        properties:
-          options.kind === "directory" ? ["openDirectory"] : ["openFile"],
-        filters: options.filters,
-      },
-    );
+    const request: Electron.OpenDialogOptions = {
+      properties:
+        options.kind === "directory" ? ["openDirectory"] : ["openFile"],
+      filters: options.filters,
+    };
+    // The dialog belongs to the window that asked; with none, it stands
+    // alone (a window made for it would stay open, empty).
+    const owner = BrowserWindow.fromWebContents(event.sender) ?? mainWindow;
+    const picked = owner
+      ? await dialog.showOpenDialog(owner, request)
+      : await dialog.showOpenDialog(request);
     const path = picked.filePaths[0];
     if (path && options.kind === "file") textFiles.grant(path);
     return path;
@@ -184,8 +206,9 @@ ipcMain.handle(
 );
 
 ipcMain.handle("desktop/open-external", (_event, url: string) => {
-  if (!/^https?:\/\//.test(url)) throw new Error("Only http(s) URLs may open");
-  return shell.openExternal(url);
+  const external = externalUrl(url);
+  if (!external) throw new Error("Only http(s) URLs may open");
+  return shell.openExternal(external);
 });
 
 app.whenReady().then(async () => {
