@@ -6114,6 +6114,46 @@ test("esc stays live between a goal's turns, and stops the goal there", async ()
   expect(store(ui).running).toBe(false);
 });
 
+test("esc between a turn and its queued send gives the send back", async () => {
+  let release: () => void = () => {};
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let calls = 0;
+  const { ui, client, seen } = setup(async function* () {
+    calls++;
+    if (calls === 1) await gate;
+    yield {
+      type: "message",
+      message: { role: "assistant", content: `answer ${calls}` },
+    };
+  });
+  const kept: unknown[] = [];
+  const presses: Promise<unknown>[] = [];
+  ui.refuse = (writes) => {
+    if (
+      !presses.length &&
+      writes.some(
+        (write) =>
+          write.path === "placeholder" && write.value === "Message the model",
+      )
+    ) {
+      kept.push(writes.find((write) => write.path === "running")?.value);
+      presses.push(ui.fire("cancel"));
+    }
+    return undefined;
+  };
+  await ui.fire("send", "go");
+  await ui.fire("send", "also run lint");
+  release();
+  await client.idle();
+  await presses[0];
+  expect(kept).toEqual([true]);
+  expect(seen).toHaveLength(1);
+  expect(store(ui).draft).toBe("also run lint");
+  expect(store(ui).running).toBe(false);
+});
+
 test("ctrl+c between a goal's turns gives a queued send back instead of running it", async () => {
   let release: () => void = () => {};
   const gate = new Promise<void>((resolve) => {
