@@ -1,6 +1,6 @@
 ---
 title: Configuration
-description: Configure the Local Agent Bun CLI with flags and environment variables only.
+description: Configure the Local Agent Bun CLI with flags and environment variables, plus the MCP, permissions and AGENTS.md files it reads.
 outline: deep
 ---
 
@@ -10,9 +10,13 @@ import ThemeGallery from './.vitepress/theme/ThemeGallery.vue'
 
 # Configuration
 
-There is no configuration file. Configuration is command-line flags plus
-environment variables — nothing else. Every setting is either a flag documented
-in the [Command reference](/reference) or a variable in the table below.
+There is no settings file: every setting is either a flag documented in the
+[Command reference](/reference) or a variable in the table below. Three files
+are read when they exist, each for one purpose:
+`~/.config/local-agent/mcp.json` lists your MCP servers ([MCP](/mcp)), the
+workspace's `.local-agent/permissions.json` holds its approval rules
+([Persistent rules](/safety#persistent-rules)), and the workspace's root
+`AGENTS.md` is model context ([Repository instructions](#repository-instructions)).
 
 ## Environment variables
 

@@ -12,6 +12,7 @@
       "packages/**/*.ts",
       "packages/**/package.json",
       "scripts/**/*.ts",
+      "specs/**/*.ts",
       "package.json",
       "tsconfig.json",
       "biome.json",

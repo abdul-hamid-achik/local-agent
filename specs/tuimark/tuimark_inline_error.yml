@@ -23,6 +23,15 @@ steps:
         screen:
             contains: "Error"
         timeoutMs: 15000
+    # Ollama's error body is read, not shown raw: the message, no JSON.
+    - wait:
+        screen:
+            contains: "the model exploded"
+        timeoutMs: 10000
+    - wait:
+        screen:
+            notContains: "{\"error\""
+        timeoutMs: 10000
     - snapshot: failed_turn
     - press: ctrl+c
     - wait:

@@ -87,9 +87,9 @@ agent as `browser__*` tools:
     "name": "browser",
     "transport": {
       "kind": "stdio",
-      "command": "bunx",
-      "args": ["@playwright/mcp@latest"],
-      "env": { "PATH": "/usr/local/bin:/usr/bin:/bin", "HOME": "/Users/you" }
+      "command": "/Users/you/.bun/bin/bunx",
+      "args": ["@playwright/mcp@0.0.83"],
+      "env": { "PATH": "/Users/you/.bun/bin:/usr/bin:/bin", "HOME": "/Users/you" }
     }
   }
 ]
@@ -102,6 +102,10 @@ installs to `/opt/homebrew/bin` on Apple silicon and Bun to `~/.bun/bin`.
 Give the command's full path (`command -v bunx` prints it) or add its
 directory to `env.PATH`; a server that cannot start says which. Verify the
 connection before a session with `--mcp-status`.
+
+The version is pinned on purpose: `@latest` would run whatever was published
+last, the next time the server starts. Move the pin when you have checked a
+newer release.
 
 ## Tool invocation
 

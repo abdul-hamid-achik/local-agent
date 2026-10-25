@@ -20,13 +20,11 @@ steps:
         screen:
             contains: "stream complete"
         timeoutMs: 10000
+    # The headless setup sent this turn, never the client: its text on screen
+    # is the saved session, loaded by --resume.
     - wait:
         screen:
             contains: "stream the first reply"
-        timeoutMs: 10000
-    - wait:
-        screen:
-            contains: "session"
         timeoutMs: 10000
     - snapshot: resumed
     - type: "stream a second reply"

@@ -470,3 +470,11 @@ operating-system sandbox:
 
 Keep valuable work in version control and backed up outside the agent
 process.
+
+## This website
+
+local-agent.dev counts page views with
+[Vercel Web Analytics](https://vercel.com/docs/analytics/privacy-policy):
+aggregate counts of pages, referrers, countries, browsers and device types,
+without cookies. The `local-agent` CLI sends nothing to it, or anywhere else:
+it has no telemetry.

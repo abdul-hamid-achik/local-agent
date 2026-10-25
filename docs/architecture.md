@@ -10,8 +10,10 @@ Local Agent is a Bun monorepo. The conversation surface, the inference runtime, 
 ```text
 apps/cli (composition) -----> packages/runtime (inference + host authority)
         |                              |
-        +-- tuimark client             +-- tools: read, read_image, list, search, fetch, web_search, edit, write, run_command
-        |   (declarative document)     +-- MCP client + approval boundary
+        +-- tuimark client             +-- tools: read, read_image, list, search, fetch, web_search,
+        |   (declarative document)     |   task, todo_write, ask_user, goal_status,
+        |                              |   edit, write, run_command
+        |                              +-- MCP client + approval boundary
         |
         +-- vue client (packages/vue-tui)
 ```

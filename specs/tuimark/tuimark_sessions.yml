@@ -28,6 +28,9 @@ steps:
             contains: "messages · current"
         timeoutMs: 10000
     - snapshot: picker
+    # Newest first (listSessions orders by updated_at): the fresh current
+    # session, then the second saved one. A wrong row fails the wait below,
+    # whose text only the second saved session holds.
     - press: down
     - press: enter
     - wait:

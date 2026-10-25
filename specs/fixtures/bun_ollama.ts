@@ -4,55 +4,99 @@ import { join } from "node:path";
 
 const mode = Bun.argv[2] ?? "headless";
 const verifyMode = mode === "verify";
-const cliMode =
-  verifyMode
-    ? "headless"
-    : mode === "edit-deny" || mode === "edit-approve"
-      ? "fullscreen"
-      : mode;
+const cliMode = verifyMode
+  ? "headless"
+  : mode === "edit-deny" || mode === "edit-approve"
+    ? "fullscreen"
+    : mode;
 const prompt = Bun.argv[3] ?? "hello";
 const model = "fixture-model";
-const editMode =
-  mode === "edit-deny" || mode === "edit-approve" || verifyMode;
+const editMode = mode === "edit-deny" || mode === "edit-approve" || verifyMode;
 const configHome = await mkdtemp(join(tmpdir(), "local-agent-config-"));
 const workspaceRoot = editMode
   ? await mkdtemp(join(tmpdir(), "local-agent-glyph-"))
   : undefined;
-if (workspaceRoot) await writeFile(join(workspaceRoot, "notes.txt"), "before\n");
+if (workspaceRoot)
+  await writeFile(join(workspaceRoot, "notes.txt"), "before\n");
 // Any free port: the client is given the server's own URL.
+/** JSON text as a value, or undefined: a malformed body is a 500 that says so. */
+function parsed(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return undefined;
+  }
+}
+
+/** The last tool message's result, when it is the JSON the client sends. */
+function toolResult(
+  messages: Array<{ content?: string; role?: string }> | undefined,
+): { status?: string; output?: string } | undefined {
+  const content = messages?.findLast(
+    (message) => message.role === "tool",
+  )?.content;
+  const result = parsed(content ?? "{}");
+  return typeof result === "object" && result !== null
+    ? (result as { status?: string; output?: string })
+    : undefined;
+}
+
 const server = Bun.serve({
   port: 0,
   hostname: "127.0.0.1",
   async fetch(request) {
-    if (new URL(request.url).pathname === "/api/tags") return Response.json({ models: [{ name: model, size: 1000 }] });
-    if (new URL(request.url).pathname === "/api/show" && request.method === "POST") {
+    if (new URL(request.url).pathname === "/api/tags")
+      return Response.json({ models: [{ name: model, size: 1000 }] });
+    if (
+      new URL(request.url).pathname === "/api/show" &&
+      request.method === "POST"
+    ) {
       const body = await request.json();
-      if (body.model !== model) return new Response("Wrong model", { status: 400 });
-      return Response.json({ capabilities: ["completion", "tools"], model_info: { "fixture.context_length": 65536 } });
+      if (body.model !== model)
+        return new Response("Wrong model", { status: 400 });
+      return Response.json({
+        capabilities: ["completion", "tools"],
+        model_info: { "fixture.context_length": 65536 },
+      });
     }
-    if (request.method !== "POST" || new URL(request.url).pathname !== "/api/chat")
+    if (
+      request.method !== "POST" ||
+      new URL(request.url).pathname !== "/api/chat"
+    )
       return new Response("not found", { status: 404 });
 
     const body = (await request.json()) as {
       messages?: Array<{ content?: string; role?: string }>;
     };
     const requested = body.messages?.at(-1)?.content ?? "";
-    const hasToolResult = body.messages?.some((message) => message.role === "tool");
-    const toolCount = body.messages?.filter((message) => message.role === "tool").length ?? 0;
+    const hasToolResult = body.messages?.some(
+      (message) => message.role === "tool",
+    );
+    const toolCount =
+      body.messages?.filter((message) => message.role === "tool").length ?? 0;
     if (verifyMode && hasToolResult) {
-      const result = JSON.parse(body.messages?.findLast((message) => message.role === "tool")?.content ?? "{}");
+      const result = toolResult(body.messages);
+      if (!result)
+        return new Response("The tool result is not JSON", { status: 500 });
       if (result.status !== "succeeded")
         return new Response("Unexpected tool outcome", { status: 500 });
       if (toolCount === 3) {
-        const command = JSON.parse(result.output ?? "{}");
-        if (command.exitCode !== 0 || !command.output.includes("verification passed"))
-          return new Response("Verification command did not prove the edit", { status: 500 });
+        const command = parsed(result.output ?? "{}") as
+          | { exitCode?: number; output?: string }
+          | undefined;
+        if (
+          command?.exitCode !== 0 ||
+          !command.output?.includes("verification passed")
+        )
+          return new Response("Verification command did not prove the edit", {
+            status: 500,
+          });
       }
     }
     // The reply says what the edit's result was, so the spec's wait proves
     // the decision the client sent, not only the mode.
     const status = hasToolResult
-      ? JSON.parse(body.messages?.findLast((message) => message.role === "tool")?.content ?? "{}").status
+      ? toolResult(body.messages)?.status
       : undefined;
     const answer = hasToolResult
       ? verifyMode
@@ -67,7 +111,11 @@ const server = Bun.serve({
       { name: "read", arguments: { path: "notes.txt" } },
       {
         name: "edit",
-        arguments: { path: "notes.txt", old_string: "before", new_string: "after" },
+        arguments: {
+          path: "notes.txt",
+          old_string: "before",
+          new_string: "after",
+        },
       },
       {
         name: "run_command",
@@ -85,32 +133,35 @@ const server = Bun.serve({
     const chunks = [
       {
         model,
-        message: verifyMode && verifyCall
+        message:
+          verifyMode && verifyCall
             ? {
                 role: "assistant",
                 content: "",
-                ...(verifyCall ? { tool_calls: [{ function: verifyCall }] } : {}),
+                ...(verifyCall
+                  ? { tool_calls: [{ function: verifyCall }] }
+                  : {}),
               }
-          : hasToolResult
-            ? { role: "assistant", content: answer }
-            : editMode
-            ? {
-                role: "assistant",
-                content: "",
-                tool_calls: [
-                  {
-                    function: {
-                      name: "edit",
-                      arguments: {
-                        path: "notes.txt",
-                        old_string: "before",
-                        new_string: "after",
+            : hasToolResult
+              ? { role: "assistant", content: answer }
+              : editMode
+                ? {
+                    role: "assistant",
+                    content: "",
+                    tool_calls: [
+                      {
+                        function: {
+                          name: "edit",
+                          arguments: {
+                            path: "notes.txt",
+                            old_string: "before",
+                            new_string: "after",
+                          },
+                        },
                       },
-                    },
-                  },
-                ],
-              }
-            : { role: "assistant", content: answer },
+                    ],
+                  }
+                : { role: "assistant", content: answer },
         done: false,
       },
       {
@@ -121,9 +172,12 @@ const server = Bun.serve({
         eval_count: 2,
       },
     ];
-    return new Response(`${chunks.map((chunk) => JSON.stringify(chunk)).join("\n")}\n`, {
-      headers: { "content-type": "application/x-ndjson" },
-    });
+    return new Response(
+      `${chunks.map((chunk) => JSON.stringify(chunk)).join("\n")}\n`,
+      {
+        headers: { "content-type": "application/x-ndjson" },
+      },
+    );
   },
 });
 
@@ -182,15 +236,19 @@ async function stop(exitCode: number): Promise<never> {
   // exit code 1, and the temporary directories go either way.
   const holds = async (file: string, expected: string) =>
     workspaceRoot !== undefined &&
-    (await readFile(join(workspaceRoot, file), "utf8").catch(() => undefined)) === expected;
+    (await readFile(join(workspaceRoot, file), "utf8").catch(
+      () => undefined,
+    )) === expected;
   try {
     if (workspaceRoot) {
-      const expected = mode === "edit-approve" || verifyMode ? "after\n" : "before\n";
+      const expected =
+        mode === "edit-approve" || verifyMode ? "after\n" : "before\n";
       if (!(await holds("notes.txt", expected))) exitCode = 1;
       if (verifyMode && !(await holds("verified.txt", "checked"))) exitCode = 1;
     }
   } finally {
-    if (workspaceRoot) await rm(workspaceRoot, { recursive: true, force: true });
+    if (workspaceRoot)
+      await rm(workspaceRoot, { recursive: true, force: true });
     await rm(configHome, { recursive: true, force: true });
   }
   process.exit(exitCode);

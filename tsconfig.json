@@ -20,6 +20,9 @@
     "apps/**/*.ts",
     "packages/**/*.ts",
     "scripts/**/*.ts",
+    "specs/**/*.ts",
+    "docs/.vitepress/**/*.ts",
+    "docs/.vitepress/**/*.mts",
     "vitest.config.ts",
     "vitest.setup.ts"
   ],

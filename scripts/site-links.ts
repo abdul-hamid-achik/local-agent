@@ -1,6 +1,9 @@
 import { posix, resolve } from "node:path";
 import { decodeHTMLAttribute } from "entities";
 
+/** Meta tags whose content is a URL on this site. */
+const SHARED_META = new Set(["og:image", "og:url", "twitter:image"]);
+
 /** Check rendered navigation, assets and anchors offline, including theme output. */
 export async function checkSiteLinks(
   root: string,
@@ -32,6 +35,14 @@ export async function checkSiteLinks(
           for (const attribute of ["href", "src"]) {
             const value = element.getAttribute(attribute);
             if (value) page.references.push(decodeHTMLAttribute(value));
+          }
+          // A link preview fetches its image and canonical page from these.
+          if (element.tagName === "meta") {
+            const key =
+              element.getAttribute("property") ?? element.getAttribute("name");
+            const content = element.getAttribute("content");
+            if (content && key && SHARED_META.has(key))
+              page.references.push(decodeHTMLAttribute(content));
           }
         },
       })

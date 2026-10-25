@@ -25,9 +25,9 @@
 //   prompt contains "read the long file" -> one `read` tool call on long.txt
 //                                      (20 lines: its card truncates, /details does not)
 //   prompt contains "read outside" -> one `read` tool call on a path outside the workspace
-//   prompt contains "edit again"   -> one `edit` tool call, after -> final
-//   prompt contains "edit"         -> one `edit` tool call on notes.txt
-//   prompt contains "fail"         -> HTTP 500, so the turn fails
+//   prompt has the words "edit again" -> one `edit` tool call, after -> final
+//   prompt has the word "edit"     -> one `edit` tool call on notes.txt
+//   prompt contains "fail"         -> HTTP 500 with Ollama's {"error": …} body
 //   prompt contains "slow"         -> one chunk, then nothing until cancelled
 //   anything else                  -> a streamed markdown reply with a code block
 //
@@ -50,7 +50,16 @@ const rawMode = Bun.argv[2] ?? "chat";
 const inline = rawMode.endsWith("-inline");
 const mode = inline ? rawMode.slice(0, -"-inline".length) : rawMode;
 const model = "fixture-model";
-const modes = ["chat", "edit-approve", "edit-deny", "session", "edit-session", "sessions", "goal", "old-binary"];
+const modes = [
+  "chat",
+  "edit-approve",
+  "edit-deny",
+  "session",
+  "edit-session",
+  "sessions",
+  "goal",
+  "old-binary",
+];
 if (!modes.includes(mode)) throw new Error(`unknown mode: ${rawMode}`);
 
 const workspaceRoot = await mkdtemp(join(tmpdir(), "local-agent-tuimark-"));
@@ -158,7 +167,8 @@ const server = Bun.serve({
       return Response.json({ models: [{ name: model, size: 1000 }] });
     if (path === "/api/show" && request.method === "POST") {
       const body = (await request.json()) as { model?: string };
-      if (body.model !== model) return new Response("Wrong model", { status: 400 });
+      if (body.model !== model)
+        return new Response("Wrong model", { status: 400 });
       return Response.json({
         capabilities: ["completion", "tools"],
         model_info: { "fixture.context_length": 32768 },
@@ -181,7 +191,10 @@ const server = Bun.serve({
     if (last?.role === "tool") {
       // The reply says what the call's result was, so a spec's wait proves
       // what the client did, not only the mode the fixture runs in.
-      const result = JSON.parse(last.content ?? "{}") as { status?: string; output?: unknown };
+      const result = JSON.parse(last.content ?? "{}") as {
+        status?: string;
+        output?: unknown;
+      };
       const reply =
         last.tool_name === "edit" && result.status === "succeeded"
           ? `edit applied ${++toolReplies}`
@@ -209,7 +222,10 @@ const server = Bun.serve({
                     },
                   },
                 },
-                goalStatus({ state: "continue", summary: "notes.txt says after" }),
+                goalStatus({
+                  state: "continue",
+                  summary: "notes.txt says after",
+                }),
               ]
             : [
                 goalStatus({
@@ -293,14 +309,20 @@ const server = Bun.serve({
         [
           assistant("", {
             tool_calls: [
-              { function: { name: "read", arguments: { path: "../outside.txt" } } },
+              {
+                function: {
+                  name: "read",
+                  arguments: { path: "../outside.txt" },
+                },
+              },
             ],
           }),
           done,
         ],
         5,
       );
-    if (prompt.includes("edit again"))
+    // Whole words: "credit" or "edited" in a prompt is not an edit.
+    if (/\bedit again\b/u.test(prompt))
       return stream(
         [
           assistant("", {
@@ -321,7 +343,7 @@ const server = Bun.serve({
         ],
         5,
       );
-    if (prompt.includes("edit"))
+    if (/\bedit\b/u.test(prompt))
       return stream(
         [
           assistant("", {
@@ -343,9 +365,11 @@ const server = Bun.serve({
         5,
       );
     if (prompt.includes("fail"))
-      return new Response("fixture failure: the model exploded", {
-        status: 500,
-      });
+      // As Ollama answers a failed chat: a JSON body with an error field.
+      return Response.json(
+        { error: "fixture failure: the model exploded" },
+        { status: 500 },
+      );
     if (prompt.includes("perf stream"))
       // Startup/streaming spec: same reply, ~50ms per chunk.
       return stream([...REPLY.map((piece) => assistant(piece)), done], 50);
@@ -361,7 +385,7 @@ const cli = process.env.LOCAL_AGENT_BIN
   ? [process.env.LOCAL_AGENT_BIN]
   : [process.execPath, "apps/cli/src/main.ts"];
 const baseArgs = ["--model", model, "--workspace", workspaceRoot];
-const env = {
+const env: Record<string, string> = {
   PATH: process.env.PATH ?? "",
   TERM: process.env.TERM ?? "xterm-256color",
   COLORTERM: process.env.COLORTERM ?? "",
@@ -402,7 +426,10 @@ async function stop(exitCode: number): Promise<never> {
   await Promise.all(children.map((run) => run.exited));
   server.stop(true);
   try {
-    const contents = await readFile(join(workspaceRoot, "notes.txt"), "utf8").catch(() => undefined);
+    const contents = await readFile(
+      join(workspaceRoot, "notes.txt"),
+      "utf8",
+    ).catch(() => undefined);
     // Approved: the exact edit landed (twice for edit-session: the second
     // edit only lands if the session grant let it through; once for goal,
     // in its second turn). Otherwise nothing may have changed.
@@ -412,18 +439,26 @@ async function stop(exitCode: number): Promise<never> {
         : mode === "edit-approve" || mode === "goal"
           ? "after\n"
           : "before\n";
-    if (contents !== expected) exitCode = 1;
+    if (contents !== expected) {
+      console.error(
+        `notes.txt is ${JSON.stringify(contents)}, expected ${JSON.stringify(expected)} for mode ${mode}`,
+      );
+      exitCode = 1;
+    }
     if (mode === "old-binary") {
       const calls = await readFile(oldCalls, "utf8").catch(() => "");
       if (calls !== "--version\n") {
-        console.error(`the old tuimark was called ${JSON.stringify(calls)}, not asked its version once`);
+        console.error(
+          `the old tuimark was called ${JSON.stringify(calls)}, not asked its version once`,
+        );
         exitCode = 1;
       }
     }
   } finally {
     await rm(workspaceRoot, { recursive: true, force: true });
     await rm(configHome, { recursive: true, force: true });
-    if (sessionDirectory) await rm(sessionDirectory, { recursive: true, force: true });
+    if (sessionDirectory)
+      await rm(sessionDirectory, { recursive: true, force: true });
   }
   process.exit(exitCode);
 }
@@ -437,7 +472,16 @@ process.on("SIGTERM", () => void shutdown(143));
 async function headless(prompt: string, database: string): Promise<string> {
   await going();
   const run = Bun.spawn(
-    [...cli, ...baseArgs, "--mode", "headless", "-p", prompt, "--session-db", database],
+    [
+      ...cli,
+      ...baseArgs,
+      "--mode",
+      "headless",
+      "-p",
+      prompt,
+      "--session-db",
+      database,
+    ],
     { stdout: "ignore", stderr: "pipe", env },
   );
   children.push(run);
@@ -452,9 +496,13 @@ async function headless(prompt: string, database: string): Promise<string> {
 const extraArgs: string[] = [];
 if (mode === "old-binary") {
   const old = join(configHome, "tuimark-0.4.6");
-  await writeFile(old, `#!/bin/sh\necho "$*" >> '${oldCalls}'\necho "tuimark 0.4.6 (commit fixture)"\n`, {
-    mode: 0o755,
-  });
+  await writeFile(
+    old,
+    `#!/bin/sh\necho "$*" >> '${oldCalls}'\necho "tuimark 0.4.6 (commit fixture)"\n`,
+    {
+      mode: 0o755,
+    },
+  );
   env.TUIMARK_BINARY = old;
 }
 if (mode === "session") {

@@ -33,3 +33,24 @@ test("rendered links resolve clean routes, encoded anchors and assets and report
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("a social card's image and canonical URL are checked like links", async () => {
+  const root = await mkdtemp(join(tmpdir(), "local-agent-links-"));
+  try {
+    await writeFile(join(root, "social-card.png"), "png");
+    await writeFile(join(root, "guide.html"), "<main>Guide</main>");
+    const head = (image: string) =>
+      `<meta property="og:url" content="https://local-agent.dev/guide">
+      <meta property="og:image" content="https://local-agent.dev/${image}">
+      <meta name="twitter:image" content="https://local-agent.dev/${image}">
+      <meta property="og:title" content="not a URL">`;
+    await writeFile(join(root, "index.html"), head("social-card.png"));
+    expect(await checkSiteLinks(root)).toEqual([]);
+    await writeFile(join(root, "index.html"), head("gone.png"));
+    const failures = await checkSiteLinks(root);
+    expect(failures).toHaveLength(2);
+    expect(failures.join("\n")).toContain("gone.png");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});

@@ -16,6 +16,7 @@ the authoritative short list.
 | Flag | Semantics |
 |---|---|
 | `-h`, `--help` | Print help and exit |
+| `--version` | Print the CLI version and exit |
 | `--model MODEL` | Ollama model. Default `qwen3.5:4b-q4_K_M` or `LOCAL_AGENT_MODEL`; the flag overrides the environment. The default is the smallest model that passed the agent battery reliably |
 | `--think on\|off` | Force thinking on or off; `LOCAL_AGENT_THINK=1\|0` is equivalent. Unset means the model default |
 | `--context N` | Context tokens for local Ollama, or `LOCAL_AGENT_CONTEXT`; `32768` and `32k` both work. Cannot exceed the model's native context. Default: planned from the model and the machine's memory, at most 32768 (see [Ollama models](/ollama-models#context)). Chalupa negotiates its own context |
@@ -25,7 +26,7 @@ the authoritative short list.
 | `--theme NAME` | `dark`, `light`, `auto`, or a named theme such as `midnight`, `catppuccin-mocha`, `tokyo-night`, `nord` or `dracula` ([all themes](/configuration#themes)). Tuimark client only |
 | `--json` | Emit NDJSON events on stdout in headless mode; implies headless |
 | `--workspace PATH` | Workspace directory; default is the current working directory |
-| `--intent plan\|build\|chat` | Starting intent; default `build` |
+| `--intent plan\|build\|chat` | Starting intent; default `build`, which asks before each edit or command. `plan` refuses edits, writes, commands and MCP calls; `chat` refuses edits, writes and commands but keeps MCP calls, each behind its approval ([Modes](/modes)) |
 | `--approve-edits` | Headless only: allow file edits and writes |
 | `--approve-commands` | Headless only: allow command execution with your permissions |
 | `--sandbox-commands` | macOS: run commands in the sandbox without asking: no network, writes only in the workspace, no reads in the home folder beyond toolchains (see [Sandboxed commands](/safety#sandboxed-commands-macos)). Headless, no command runs outside it: deny and ask rules refuse, allow rules run confined; a command that names a path the workspace treats as secret is refused. In the Tuimark client, starts with `/sandbox on` |

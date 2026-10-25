@@ -23,9 +23,10 @@ steps:
         screen:
             contains: "verification passed"
         timeoutMs: 10000
+    # The command's own exit code, inside the tool result's JSON output.
     - wait:
         screen:
-            contains: "exitCode"
+            contains: '\"exitCode\":0'
         timeoutMs: 3000
     - wait:
         process:
@@ -41,9 +42,10 @@ outcomes:
       description: command tool output includes its actual process exit code
       verify:
         screen:
-            contains: "exitCode"
+            contains: '\"exitCode\":0'
     - id: headless_json_exits_cleanly
       description: the isolated read-edit-verify flow exits successfully without alternate screen
       verify:
         process:
             exitCode: 0
+contractHash: sha256:24d8da4bf75f48cbc99d67f399e6a1c7e754e990d8a2864d30ec43bdcbd0a657

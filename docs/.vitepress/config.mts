@@ -1,4 +1,4 @@
-import { defineConfig } from 'vitepress'
+import { defineConfig, type HeadConfig } from 'vitepress'
 
 const siteURL = 'https://local-agent.dev'
 const repositoryURL = 'https://github.com/abdul-hamid-achik/local-agent'
@@ -112,7 +112,7 @@ export default defineConfig({
       String(context.pageData.frontmatter.description || context.description || defaultDescription)
     const canonicalURL = new URL(route, `${siteURL}/`).href
     const title = socialTitle(stripBrand(pageTitle))
-    const head = [
+    const head: HeadConfig[] = [
       ['meta', { name: 'robots', content: 'index, follow' }],
       ['link', { rel: 'canonical', href: canonicalURL }],
       ['meta', { property: 'og:type', content: 'website' }],
