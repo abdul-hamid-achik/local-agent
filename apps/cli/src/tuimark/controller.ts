@@ -21,6 +21,7 @@ import {
   type Approval,
   type ApprovalRequest,
   admitOllamaModel,
+  admitOpenAILocalModel,
   appendRule,
   ConversationFullError,
   clearRules,
@@ -35,6 +36,7 @@ import {
   type McpConnection,
   type Message,
   type OllamaAdmission,
+  type OpenAILocalAdmission,
   type PermissionFile,
   type PermissionRule,
   type Provider,
@@ -281,13 +283,14 @@ export interface ClientOptions {
    */
   writeExport?: (path: string, text: string) => Promise<void>;
   /**
-   * Validates a candidate provider's model against the Ollama inventory
-   * (`/model NAME`). Default the runtime's admission check; tests replace.
+   * Validates a candidate provider's model (`/model NAME`) as launch does:
+   * against the Ollama inventory, or an OpenAI-compatible server's model
+   * list. Default the runtime's admission check; tests replace.
    */
   admitModel?: (
     provider: Provider,
     signal: AbortSignal,
-  ) => Promise<OllamaAdmission>;
+  ) => Promise<OllamaAdmission | OpenAILocalAdmission>;
   /**
    * Commands start in the sandbox (`--sandbox-commands`): where it is
    * unavailable they ask, and the status says why.
@@ -353,6 +356,13 @@ function flatLine(message: string): string {
 
 function oneLine(message: string): string {
   return clip(flatLine(message), STATUS_MAX);
+}
+
+/** A validated admission from Ollama's inventory, the one that says how big the model is. */
+function sized(
+  admission: OllamaAdmission | OpenAILocalAdmission,
+): admission is Extract<OllamaAdmission, { status: "validated" }> {
+  return "sizeBytes" in admission;
 }
 
 export { formatElapsed };
@@ -1661,12 +1671,16 @@ export class TuimarkClient {
     await this.write([
       { path: "status", value: `Switching model to ${name}…` },
     ]);
-    const admit = this.options.admitModel ?? admitOllamaModel;
+    const admit =
+      this.options.admitModel ??
+      (this.provider.type === "openai_local"
+        ? admitOpenAILocalModel
+        : admitOllamaModel);
     // A size the user did not set is planned again for the new model
     // (a different load anyway), so admission is asked only for its facts.
     const planned =
       this.provider.type === "ollama" && !this.provider.context_explicit;
-    let admission: OllamaAdmission;
+    let admission: OllamaAdmission | OpenAILocalAdmission;
     try {
       admission = await admit(
         {
@@ -1687,21 +1701,36 @@ export class TuimarkClient {
       ]);
       return false;
     }
-    if (admission.status !== "validated") {
+    // The process is quitting: nothing is switched.
+    if (this.options.signal.aborted) return false;
+    // An OpenAI-compatible server that answers without a model list is
+    // taken at its word, as at launch: a chat request fails loudly on a
+    // model it does not serve, and the status says the name was not
+    // checked. One that cannot be reached is no answer: a misspelled name
+    // would wait for the next turn to fail.
+    const unchecked =
+      admission.status === "unverified" && admission.kind === "unlisted"
+        ? admission.message
+        : undefined;
+    if (admission.status !== "validated" && unchecked === undefined) {
       await this.write([{ path: "status", value: oneLine(admission.message) }]);
       return false;
     }
-    const facts = {
-      nativeContext: admission.nativeContext,
-      weightsBytes: admission.sizeBytes,
-      kvBytesPerToken: admission.kvBytesPerToken,
-      totalMemory: this.options.totalMemory?.() ?? totalmem(),
-      mlx: admission.mlx,
-    };
+    const model = admission.status === "validated" ? admission.model : name;
+    // Only Ollama's inventory says how big a model is.
+    const facts = sized(admission)
+      ? {
+          nativeContext: admission.nativeContext,
+          weightsBytes: admission.sizeBytes,
+          kvBytesPerToken: admission.kvBytesPerToken,
+          totalMemory: this.options.totalMemory?.() ?? totalmem(),
+          mlx: admission.mlx,
+        }
+      : undefined;
     // A size the user set stays: its note (and warning) is for this model.
-    const plan = planned ? planContextSize(facts) : undefined;
+    const plan = planned && facts ? planContextSize(facts) : undefined;
     const note =
-      !planned && this.provider.type === "ollama"
+      !planned && this.provider.type === "ollama" && facts
         ? explicitContextNote(facts, this.provider.context_size)
         : undefined;
     // A planned size warns only on Ollama's MLX runner.
@@ -1714,21 +1743,22 @@ export class TuimarkClient {
     this.placement = undefined;
     this.provider = {
       ...previous,
-      model: admission.model,
+      model,
       ...(plan
         ? { context_size: plan.context, context_plan: plan.reason }
         : {}),
       ...(note ? { context_plan: note.reason } : {}),
       ...(warning ? { context_warning: warning } : {}),
     };
+    const said = [warning, unchecked].filter(Boolean).join(" · ");
     await this.write([
       {
         path: "status",
-        value: warning
-          ? oneLine(`Model changed to ${admission.model} · ${warning}`)
-          : `Model changed to ${admission.model}`,
+        value: said
+          ? oneLine(`Model changed to ${model} · ${said}`)
+          : `Model changed to ${model}`,
       },
-      { path: "header.model", value: clip(cleanText(admission.model), 40) },
+      { path: "header.model", value: clip(cleanText(model), 40) },
       ...this.ctxWrites(this.ctx.current),
     ]);
     return true;

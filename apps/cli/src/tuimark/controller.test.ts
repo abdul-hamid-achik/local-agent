@@ -4468,6 +4468,185 @@ test("/model reports the current model, then switches the provider the next turn
   expect(providers.at(-1)?.model).toBe("llama3.2");
 });
 
+test("/model on an OpenAI-compatible server checks its model list, as launch does", async () => {
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch: (request) =>
+      new URL(request.url).pathname === "/v1/models"
+        ? Response.json({ data: [{ id: "qwen3-4b" }, { id: "llama-3.2" }] })
+        : new Response("not found", { status: 404 }),
+  });
+  try {
+    const providers: Provider[] = [];
+    const { ui, client } = setup(reply("ok"), {
+      provider: {
+        type: "openai_local",
+        base_url: `http://127.0.0.1:${server.port}/v1`,
+        model: "qwen3-4b",
+        context_size: 8192,
+      } as Provider,
+      run: (provider, messages, options) => {
+        providers.push(provider);
+        return reply("ok")({ options, messages });
+      },
+    });
+    await ui.fire("send", "/model mistral");
+    expect(store(ui).status).toBe(
+      `Model mistral is not served by http://127.0.0.1:${server.port}/v1. Available: qwen3-4b, llama-3.2.`,
+    );
+    expect(store(ui).header.model).toBe("qwen3-4b");
+    await ui.fire("send", "/model llama-3.2");
+    expect(store(ui).status).toBe("Model changed to llama-3.2");
+    await ui.fire("send", "hi");
+    await client.idle();
+    expect(providers.at(-1)).toMatchObject({
+      type: "openai_local",
+      model: "llama-3.2",
+      context_size: 8192,
+    });
+  } finally {
+    await server.stop(true);
+  }
+});
+
+test("/model on a server without a model list switches, and says the name was not checked", async () => {
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch: () => new Response("not found", { status: 404 }),
+  });
+  try {
+    const { ui } = setup(reply("ok"), {
+      provider: {
+        type: "openai_local",
+        base_url: `http://127.0.0.1:${server.port}/v1`,
+        model: "qwen3-4b",
+        context_size: 8192,
+      } as Provider,
+    });
+    await ui.fire("send", "/model mistral");
+    expect(store(ui).status).toBe(
+      "Model changed to mistral · Server does not expose GET /v1/models; skipped model validation",
+    );
+    expect(store(ui).header.model).toBe("mistral");
+  } finally {
+    await server.stop(true);
+  }
+});
+
+test("/model on an OpenAI-compatible server that cannot be reached keeps the model", async () => {
+  // A port nothing listens on any more.
+  const gone = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch: () => new Response(),
+  });
+  const port = gone.port;
+  await gone.stop(true);
+  const { ui } = setup(reply("ok"), {
+    provider: {
+      type: "openai_local",
+      base_url: `http://127.0.0.1:${port}/v1`,
+      model: "qwen3-4b",
+      context_size: 8192,
+    } as Provider,
+  });
+  await ui.fire("send", "/model qwen3-4bb");
+  expect(store(ui).status).toBe("OpenAI-compatible endpoint is unreachable");
+  expect(store(ui).header.model).toBe("qwen3-4b");
+});
+
+/** A loopback Ollama whose inventory holds qwen3.5:4b, and nothing else. */
+function ollamaInventory() {
+  return Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch: (request) => {
+      const path = new URL(request.url).pathname;
+      if (path === "/api/tags")
+        return Response.json({
+          models: [{ name: "qwen3.5:4b", size: 3_000_000_000 }],
+        });
+      if (path === "/api/show")
+        return Response.json({
+          capabilities: ["completion", "tools"],
+          model_info: {
+            "general.architecture": "qwen3",
+            "qwen3.context_length": 32_768,
+          },
+        });
+      return new Response("not found", { status: 404 });
+    },
+  });
+}
+
+test("/model on Ollama asks Ollama's inventory, as launch does", async () => {
+  const server = ollamaInventory();
+  try {
+    const { ui } = setup(reply("ok"), {
+      provider: {
+        ...provider,
+        base_url: `http://127.0.0.1:${server.port}`,
+      } as Provider,
+    });
+    await ui.fire("send", "/model qwen3.5:4b");
+    expect(store(ui).status).toMatch(/^Model changed to qwen3\.5:4b/);
+    expect(store(ui).header.model).toBe("qwen3.5:4b");
+  } finally {
+    await server.stop(true);
+  }
+});
+
+test("/model on Chalupa asks the Ollama inventory behind it, as launch does", async () => {
+  const server = ollamaInventory();
+  try {
+    const { ui } = setup(reply("ok"), {
+      provider: {
+        ...provider,
+        type: "ollama_remote",
+        base_url: `http://127.0.0.1:${server.port}`,
+        max_model_bytes: 10_000_000_000,
+        stream_idle_timeout: "30s",
+      } as Provider,
+    });
+    await ui.fire("send", "/model qwen3.5:4b");
+    expect(store(ui).status).toBe("Model changed to qwen3.5:4b");
+    expect(store(ui).header.model).toBe("qwen3.5:4b");
+  } finally {
+    await server.stop(true);
+  }
+});
+
+test("/model switches nothing when the process quits during the check", async () => {
+  const quit = new AbortController();
+  const { ui } = setup(reply("ok"), {
+    signal: quit.signal,
+    admitModel: async (candidate) => {
+      quit.abort();
+      return validated(candidate.model);
+    },
+  });
+  await ui.fire("send", "/model llama3.2");
+  expect(store(ui).header.model).toBe("fixture");
+  expect(store(ui).status).not.toBe("Model changed to llama3.2");
+});
+
+test("/model on Ollama does not take an unreachable inventory for a yes", async () => {
+  const { ui } = setup(reply("ok"), {
+    admitModel: async () => ({
+      status: "unverified",
+      kind: "transport",
+      message: "Ollama is not reachable at http://127.0.0.1:11434",
+    }),
+  });
+  await ui.fire("send", "/model llama3.2");
+  expect(store(ui).status).toBe(
+    "Ollama is not reachable at http://127.0.0.1:11434",
+  );
+  expect(store(ui).header.model).toBe("fixture");
+});
+
 test("/model plans the new model's context unless the user chose a size", async () => {
   const GIB = 1024 ** 3;
   const asked: number[] = [];

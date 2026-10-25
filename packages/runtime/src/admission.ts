@@ -360,7 +360,11 @@ export async function admitOllamaModel(
 }
 
 export type OpenAILocalAdmission =
-  | { status: "unverified"; message: string }
+  /**
+   * The model is not checked: the server could not be reached
+   * ("transport"), or it answered without a model list ("unlisted").
+   */
+  | { status: "unverified"; kind: "transport" | "unlisted"; message: string }
   | { status: "rejected"; message: string }
   | { status: "validated"; model: string };
 
@@ -394,12 +398,14 @@ export async function admitOpenAILocalModel(
     if (response.status === 404)
       return {
         status: "unverified",
+        kind: "unlisted",
         message:
           "Server does not expose GET /v1/models; skipped model validation",
       };
     if (!response.ok)
       return {
         status: "unverified",
+        kind: "unlisted",
         message: `Model list request failed (${response.status})`,
       };
     // A body we cannot read as a model list proves nothing about the model:
@@ -415,11 +421,13 @@ export async function admitOpenAILocalModel(
       if (error instanceof MetadataError)
         return {
           status: "unverified",
+          kind: "unlisted",
           message: `${error.message}; skipped model validation`,
         };
       if (error instanceof SyntaxError)
         return {
           status: "unverified",
+          kind: "unlisted",
           message:
             "Model list response was not valid JSON; skipped model validation",
         };
@@ -429,6 +437,7 @@ export async function admitOpenAILocalModel(
     if (!listed.success)
       return {
         status: "unverified",
+        kind: "unlisted",
         message:
           "Model list response had no `data` array; skipped model validation",
       };
@@ -449,6 +458,7 @@ export async function admitOpenAILocalModel(
   } catch {
     return {
       status: "unverified",
+      kind: "transport",
       message: "OpenAI-compatible endpoint is unreachable",
     };
   }
