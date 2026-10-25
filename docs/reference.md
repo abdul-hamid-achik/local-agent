@@ -138,15 +138,15 @@ instead of running; in the Tuimark client `/copy` and `/goal` still run.
 | Key | Action |
 |---|---|
 | `ctrl+p` | Open the command palette |
-| `esc` | Cancel the current turn, and a running `/goal` with it |
+| `esc` | Cancel the current turn, and a running `/goal` with it; a queued message comes back to the composer |
 | `ctrl+c` | Tuimark client: clears the draft first, then cancels a running turn, or stops a `/goal` between its turns; the next press quits. Vue client: quits at once |
-| `up`, `down` | Browse input history |
+| `up`, `down` | Browse input history; `up` in an empty composer takes a queued message back to edit (Tuimark client) |
 | `ctrl+o` | Load earlier messages |
 | `pgup`, `pgdn` | Scroll the log |
 | `ctrl+l` | Jump to the latest output |
 | `ctrl+y` | Tuimark client: copy the last reply, as `/copy` |
 | `shift+tab` | Next intent: `build` → `plan` → `chat` → `build` |
-| `enter` | Send the draft |
+| `enter` | Send the draft; while a turn runs, queue it for when the turn ends (Tuimark client) |
 | `shift+enter`, `alt+enter` | Insert a newline without sending |
 
 Context-sensitive keys:
@@ -154,7 +154,8 @@ Context-sensitive keys:
 | Context | Keys |
 |---|---|
 | Slash popup | `up`/`down` choose, `tab` completes, `esc` closes |
-| Approval dialog | `a` grants for the session (not for commands while the sandbox is on, nor for a command that names a secret path); arrows, `pgup`, `home`, `end` scroll the diff |
+| Approval dialog (Tuimark) | `y` allows once; `a` grants for the session (not for commands while the sandbox is on, a command that names a secret path, or a preview too long to show whole); `!` saves an always rule (not for those last two); `n` or `esc` denies; arrows, `pgup`/`pgdn`, `home`/`end` scroll the diff |
+| Approval (Vue client) | `y` allows; `n`, `enter` or `esc` denies |
 | Question (Tuimark) | `up`/`down` choose, `enter` answers; or type the row's number, its label, or `y`/`n`; `esc` skips |
 | Panels and details | `q` or `esc` closes; arrows scroll |
 | Sessions picker | `up`/`down` choose, `enter` loads |

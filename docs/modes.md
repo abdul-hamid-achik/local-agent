@@ -60,11 +60,15 @@ Build instructs the model to propose concrete changes and respect host
 approval decisions. Every mutating proposal — file edits and writes, commands,
 MCP calls — passes through an approve callback before it runs.
 
-Interactively, the approval card offers:
+Interactively, the Tuimark client's approval card offers:
 
 - `y` — approve this one proposal
-- `a` — approve this for the rest of the session
-- `n` — deny
+- `a` — approve this and matching proposals for the rest of the session
+- `!` — always: save a rule for exactly this proposal (see [Persistent
+  rules](/safety#persistent-rules))
+- `n` or `esc` — deny; the turn goes on
+
+The Vue client's card takes `y`, and `n`, `enter` or `esc` to deny.
 
 In the Tuimark client, `/goal OBJECTIVE` runs build turns toward an
 objective until the model reports it done or blocked, or a limit stops it.

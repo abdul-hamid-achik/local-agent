@@ -88,7 +88,7 @@ a child and draws the whole screen from `apps/cli/src/tuimark/ui/app.tui`.
   blocks are committed into the terminal's own scrollback (the SDK `commit()`)
   as they close; a small live region below the cursor holds the streaming
   tail, an in-flow approval (no modal: `y` allows, `a` allows for the
-  session, `n`/`esc` deny), the
+  session, `!` saves an always rule, `n`/`esc` deny), the
   composer, and the status. A bare `--mode inline` still uses the Vue client,
   and the headless flags refuse `--ui tuimark`.
 - The SDK comes from npm (`@thelacanians/tuimark@0.5.1`); it downloads the

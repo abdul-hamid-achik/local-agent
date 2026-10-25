@@ -1,34 +1,63 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" role="img" aria-labelledby="social-title social-description">
-  <title id="social-title">local-agent — local-first coding agent</title>
-  <desc id="social-description">A dark terminal panel showing local-agent running with Ollama, Go, Charm, and MCP.</desc>
+  <title id="social-title">local-agent: a local coding agent with explicit authority</title>
+  <desc id="social-description">The local-agent logo and headline beside an approval card from its terminal client: a test command waits for y allow, a session, ! always, or n deny. Below, its three intents: build, plan and chat.</desc>
 
   <defs>
-    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
-      <path d="M40 0H0V40" fill="none" stroke="#27313d" stroke-width="1" opacity="0.42"/>
-    </pattern>
+    <radialGradient id="glow" cx="0.82" cy="0.38" r="0.62">
+      <stop offset="0" stop-color="#b85f3d" stop-opacity="0.16"/>
+      <stop offset="1" stop-color="#b85f3d" stop-opacity="0"/>
+    </radialGradient>
   </defs>
 
-  <rect width="1200" height="630" fill="#10151c"/>
-  <rect width="1200" height="630" fill="url(#grid)"/>
-  <rect x="64" y="54" width="1072" height="522" rx="28" fill="#161d26" stroke="#344150" stroke-width="2"/>
-  <path d="M64 132H1136" stroke="#344150" stroke-width="2"/>
+  <rect width="1200" height="630" fill="#101310"/>
+  <rect width="1200" height="630" fill="url(#glow)"/>
 
-  <circle cx="112" cy="93" r="8" fill="#6f7f8f"/>
-  <circle cx="142" cy="93" r="8" fill="#6f7f8f"/>
-  <circle cx="172" cy="93" r="8" fill="#63d6c7"/>
-  <text x="1058" y="101" text-anchor="end" fill="#91a0af" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="22">LOCAL</text>
+  <!-- The logo and the name. -->
+  <g transform="translate(80 72) scale(1.25)">
+    <rect x="1" y="1" width="46" height="46" rx="12" fill="#151916" stroke="#b85f3d" stroke-width="2"/>
+    <path d="M13 14.5 22 24l-9 9.5" fill="none" stroke="#d6e3a5" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M27 33.5h9" fill="none" stroke="#d6e3a5" stroke-width="3" stroke-linecap="round"/>
+    <circle cx="35" cy="14" r="3" fill="#b85f3d"/>
+  </g>
+  <text x="160" y="113" fill="#f1eee4" font-family="SFMono-Regular, 'Cascadia Code', 'Roboto Mono', ui-monospace, Menlo, Consolas, monospace" font-size="30" font-weight="600">local-agent</text>
 
-  <text x="112" y="246" fill="#f1f5f9" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="76" font-weight="700" letter-spacing="-4">local-agent</text>
-  <rect x="112" y="275" width="118" height="8" rx="4" fill="#63d6c7"/>
-  <text x="112" y="342" fill="#c6d0da" font-family="ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, sans-serif" font-size="38" font-weight="600">A local-first coding agent for Ollama.</text>
-  <text x="112" y="400" fill="#91a0af" font-family="ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, sans-serif" font-size="28">Inspect. Edit with approval. Verify. Stay in the terminal.</text>
+  <!-- The headline, as the home page says it. -->
+  <g font-family="'Avenir Next', Avenir, ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-weight="700" font-size="62" letter-spacing="-2">
+    <text x="78" y="262" fill="#f1eee4">A local coding</text>
+    <text x="78" y="332" fill="#f1eee4">agent with</text>
+    <text x="78" y="402" fill="#e08a69">explicit authority.</text>
+  </g>
+  <text x="80" y="456" fill="#b7b8ad" font-family="'Avenir Next', Avenir, ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="22">For Ollama. Edits and commands ask first by default.</text>
 
-  <rect x="112" y="462" width="140" height="48" rx="12" fill="#203e3d" stroke="#3f8078"/>
-  <text x="182" y="494" text-anchor="middle" fill="#9ce8df" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="21" font-weight="700">NORMAL</text>
-  <rect x="268" y="462" width="112" height="48" rx="12" fill="#1d2630" stroke="#465666"/>
-  <text x="324" y="494" text-anchor="middle" fill="#b6c2ce" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="21" font-weight="700">PLAN</text>
-  <rect x="396" y="462" width="108" height="48" rx="12" fill="#1d2630" stroke="#465666"/>
-  <text x="450" y="494" text-anchor="middle" fill="#b6c2ce" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="21" font-weight="700">AUTO</text>
+  <!-- The three intents. -->
+  <g font-family="SFMono-Regular, 'Cascadia Code', 'Roboto Mono', ui-monospace, Menlo, Consolas, monospace" font-size="19" font-weight="700" text-anchor="middle">
+    <rect x="80" y="508" width="104" height="44" rx="11" fill="#3a2219" stroke="#b85f3d" stroke-width="1.5"/>
+    <text x="132" y="537" fill="#f0b199">build</text>
+    <rect x="198" y="508" width="92" height="44" rx="11" fill="#171b18" stroke="#3a423b" stroke-width="1.5"/>
+    <text x="244" y="537" fill="#d2d4c8">plan</text>
+    <rect x="304" y="508" width="92" height="44" rx="11" fill="#171b18" stroke="#3a423b" stroke-width="1.5"/>
+    <text x="350" y="537" fill="#d2d4c8">chat</text>
+  </g>
 
-  <text x="1088" y="494" text-anchor="end" fill="#91a0af" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="22">OLLAMA · GO · CHARM · MCP</text>
+  <!-- An approval card in the client's dark palette. -->
+  <g font-family="SFMono-Regular, 'Cascadia Code', 'Roboto Mono', ui-monospace, Menlo, Consolas, monospace" font-size="17">
+    <rect x="676" y="150" width="452" height="330" rx="18" fill="#0d1117" stroke="#30363d" stroke-width="2"/>
+    <path d="M720 214H726M864 214H1084Q1096 214 1096 226V420Q1096 432 1084 432H720Q708 432 708 420V226Q708 214 720 214" fill="none" stroke="#f85c55" stroke-width="1.5"/>
+    <text x="708" y="184" font-weight="700" fill="#58a6ff">Local Agent</text>
+    <text x="842" y="184" fill="#d29922">build</text>
+    <text x="906" y="184" fill="#9da7b3">LOCAL</text>
+    <text x="736" y="220" fill="#f85c55">Run command?</text>
+    <text x="732" y="262" fill="#e6edf3">Runs exactly as written:</text>
+    <text x="732" y="286" fill="#e6edf3">there is no shell.</text>
+    <rect x="728" y="306" width="348" height="58" rx="4" fill="#161b22" stroke="#30363d"/>
+    <text x="744" y="331" fill="#e6edf3">$ bun test provider.test.ts</text>
+    <text x="744" y="353" fill="#9da7b3">in the workspace · 120s</text>
+    <rect x="874" y="384" width="88" height="28" fill="#58a6ff"/>
+    <text x="918" y="404" fill="#0d1117" font-weight="700" text-anchor="middle">Deny</text>
+    <rect x="974" y="384" width="98" height="28" fill="#f85c55"/>
+    <text x="1023" y="404" fill="#0d1117" font-weight="700" text-anchor="middle">Allow</text>
+    <text x="708" y="462" fill="#e6edf3" font-size="16"><tspan fill="#58a6ff">y</tspan> allow · <tspan fill="#58a6ff">a</tspan> session · <tspan fill="#58a6ff">!</tspan> always · <tspan fill="#58a6ff">n</tspan> deny</text>
+  </g>
+
+  <text x="1120" y="537" text-anchor="end" fill="#9da497" font-family="SFMono-Regular, 'Cascadia Code', 'Roboto Mono', ui-monospace, Menlo, Consolas, monospace" font-size="20">local-agent.dev</text>
 </svg>

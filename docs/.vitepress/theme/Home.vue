@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { withBase } from 'vitepress'
 import { onBeforeUnmount, onMounted, ref } from 'vue'
+import HeroTerminal from './HeroTerminal.vue'
 
 const repositoryURL = 'https://github.com/abdul-hamid-achik/local-agent'
 
@@ -29,8 +30,8 @@ const modes = [
     name: 'chat',
     title: 'Questions and research',
     description:
-      'The read-only research tools without the coding preamble, the todo list, or subagents: for questions, documentation lookups, and guides.',
-    scope: 'read · search · fetch · web search',
+      'The read-only research tools and read-only subagents, without the coding preamble or the todo list: for questions, documentation lookups, and guides. MCP tools stay, each call behind its approval.',
+    scope: 'read · search · fetch · web search · subagents · MCP',
   },
 ]
 
@@ -161,89 +162,14 @@ const ecosystemGroups = [
         <div
           class="la-terminal"
           role="img"
-          aria-label="Illustrative local-agent terminal session (a demo, not a real run) showing a local Ollama model, finished tool cards with an edit's diff, and a command waiting for approval while the reply's head says it waits on you"
+          aria-label="Illustrative local-agent session in the Tuimark client (a demo, not a real run): the model thinks, reads packages/runtime/src/provider.ts, raises its timeout in an edit whose card shows the diff, then a test command waits in an approval dialog, with the composer ready to queue a message"
           aria-describedby="terminal-caption"
         >
-          <div aria-hidden="true">
-            <div class="la-terminal-bar">
-              <span>Local Agent · qwen3.5:4b</span>
-              <span class="la-terminal-mode">build</span>
-            </div>
-
-            <div class="la-terminal-context">
-              <div>
-                <span>model</span>
-                <strong>qwen3.5:4b</strong>
-                <small>local · Ollama</small>
-              </div>
-              <div>
-                <span>context</span>
-                <strong>2.1k/32k</strong>
-                <small class="la-ctx-meter"><i></i></small>
-              </div>
-            </div>
-
-            <div class="la-terminal-body">
-              <div class="la-terminal-message la-play" style="--step: 0">
-                <span class="la-terminal-head">
-                  <span class="la-terminal-speaker">assistant</span>
-                  <!-- The reply's head, as the client draws it: a spinner while
-                       the turn works, still while the approval below waits. -->
-                  <span class="la-head">
-                    <span class="la-head-run">
-                      <span class="la-spin"><span><i>⠋</i><i>⠙</i><i>⠹</i><i>⠸</i><i>⠼</i><i>⠴</i><i>⠦</i><i>⠧</i><i>⠇</i><i>⠏</i></span></span>
-                      thinking · 4s
-                    </span>
-                    <span class="la-head-wait"><span class="la-still">⠿</span> waiting for your approval · 6s</span>
-                  </span>
-                </span>
-                <p>I’ll inspect the provider boundary, then run the focused checks.</p>
-              </div>
-
-              <div class="la-tool-line la-play" style="--step: 1">
-                <span class="la-tool-mark">✓</span>
-                <span><strong>Read</strong> packages/runtime/src/provider.ts</span>
-                <small>0.2s</small>
-              </div>
-              <div class="la-tool-line la-tool-line-diff la-play" style="--step: 2">
-                <span class="la-tool-mark">✓</span>
-                <span><strong>Edit</strong> packages/runtime/src/provider.ts</span>
-                <small>0.4s</small>
-                <code class="la-diff-line la-diff-del">- const timeoutMs = 5_000;</code>
-                <code class="la-diff-line la-diff-add">+ const timeoutMs = 15_000;</code>
-              </div>
-
-              <div class="la-approval-card la-play" style="--step: 3">
-                <div class="la-approval-head">
-                  <span>Run command?</span>
-                  <strong>Runs exactly as written: there is no shell.</strong>
-                </div>
-                <code>$ bun test packages/runtime/src/provider.test.ts</code>
-                <div class="la-approval-options">
-                  <span>[y] once</span>
-                  <span>[a] this session</span>
-                  <span>[n] deny</span>
-                  <span>esc deny</span>
-                </div>
-              </div>
-
-              <div class="la-composer-line">
-                <span>&gt;</span>
-                <span class="la-composer-placeholder">Message the model</span>
-                <span class="la-cursor" aria-hidden="true"></span>
-              </div>
-            </div>
-
-            <div class="la-terminal-footer">
-              <span>Waiting for approval</span>
-              <span>y allow · a session · ! always · n deny</span>
-            </div>
-          </div>
+          <HeroTerminal />
         </div>
         <figcaption id="terminal-caption">
-          An illustrative build session in the Tuimark client: a demo, not a real run. Each tool card
-          says how it ended and what an edit changed; a command waits for your decision before it runs,
-          and the reply's head says the turn is waiting on you.
+          A demo turn, drawn from the Tuimark client's own render of it: each tool card says how it
+          ended and what an edit changed, and a command waits for your decision before it runs.
         </figcaption>
       </figure>
     </section>
@@ -421,6 +347,10 @@ const ecosystemGroups = [
             <div>
               <dt>Allow for session</dt>
               <dd>a · this session</dd>
+            </div>
+            <div>
+              <dt>Always allow</dt>
+              <dd>! · a saved rule for exactly this</dd>
             </div>
             <div>
               <dt>Deny</dt>

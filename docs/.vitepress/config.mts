@@ -3,6 +3,8 @@ import { defineConfig } from 'vitepress'
 const siteURL = 'https://local-agent.dev'
 const repositoryURL = 'https://github.com/abdul-hamid-achik/local-agent'
 const socialImageURL = `${siteURL}/social-card.png`
+const socialImageAlt =
+  'local-agent, a local coding agent with explicit authority: an approval card waits for y allow, a session, ! always or n deny, beside its build, plan and chat intents'
 const defaultDescription =
   'An experimental local-first coding agent in your terminal with Ollama, host-enforced plan and build modes, approval-gated effects, MCP integrations, and opt-in sessions.'
 
@@ -127,7 +129,7 @@ export default defineConfig({
         'meta',
         {
           property: 'og:image:alt',
-          content: 'local-agent local-first coding agent for Ollama with Normal, Plan, and Auto modes',
+          content: socialImageAlt,
         },
       ],
       ['meta', { name: 'twitter:card', content: 'summary_large_image' }],
@@ -138,7 +140,7 @@ export default defineConfig({
         'meta',
         {
           name: 'twitter:image:alt',
-          content: 'local-agent local-first coding agent for Ollama with Normal, Plan, and Auto modes',
+          content: socialImageAlt,
         },
       ],
     ]

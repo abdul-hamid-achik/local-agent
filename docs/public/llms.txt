@@ -13,7 +13,7 @@ GitHub Releases; this site documents the current client.
 ## Documentation
 
 - [Getting started](https://local-agent.dev/getting-started): Install Ollama and local-agent, then begin a local coding session.
-- [Modes](https://local-agent.dev/modes): plan and build intents, host-enforced authority, approvals.
+- [Modes](https://local-agent.dev/modes): build, plan and chat intents, host-enforced authority, approvals.
 - [Ollama models](https://local-agent.dev/ollama-models): Default model, context limits, admission checks.
 - [Providers](https://local-agent.dev/providers): Local Ollama and the Chalupa environment profile.
 - [Sessions](https://local-agent.dev/sessions): Experimental opt-in session database, resume, and inspection.

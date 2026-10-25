@@ -41,7 +41,8 @@
     "tui:build": "bun run --cwd apps/tui-playground build",
     "test:integration": "glyph run specs/bun/*.yml --parallel 1 --format md --progress never",
     "test:integration:tuimark": "glyph run specs/tuimark/*.yml --parallel 1 --format md --progress never",
-    "site:check-links": "bun scripts/site-links.ts"
+    "site:check-links": "bun scripts/site-links.ts",
+    "site:hero": "bun apps/cli/src/tuimark/hero.ts"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.12",

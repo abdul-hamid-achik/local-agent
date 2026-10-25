@@ -61,18 +61,23 @@ Read README.md and summarize the setup steps.
 ```
 
 The session starts in **build** intent. When the model proposes a file edit,
-write, or command, an approval card appears. Decide with:
+write, or command, an approval card appears. In the Tuimark client, the
+default, decide with:
 
 | Key | Decision |
 |---|---|
 | `y` | Approve once |
-| `a` | Approve this for the rest of the session |
-| `n` | Deny |
-| `esc` | Cancel the approval and the turn |
+| `a` | Approve this and matching calls for the rest of the session |
+| `!` | Always: save a rule for exactly this call to `.local-agent/permissions.json` |
+| `n` or `esc` | Deny; the turn goes on, and the model is told the call was not approved |
 
-For `write`, `edit`, and `run_command` proposals the card shows a diff; the
-arrow keys scroll it. Commands run exactly as written with your permissions —
-there is no shell.
+The status line names only the keys the card takes: `a` and `!` are left
+out where they would not act (see
+[Interactive approval](/safety#interactive-approval)). The Vue client takes
+`y`, and `n`, `enter` or `esc` to deny.
+For `write` and `edit` the card shows a diff, for `run_command` the exact
+command; the arrow keys, `pgup`/`pgdn` and `home`/`end` scroll it. Commands
+run exactly as written with your permissions — there is no shell.
 
 Every tool call leaves a card in the transcript. The card names the tool
 (Read, Edit, Command, or `MCP · server · tool` for an MCP call), marks how
@@ -91,6 +96,13 @@ question waits on you, the head stands still, and that wait is not counted.
 The status bar keeps the same facts at rest and during a turn: the mode,
 the MCP servers, and after a turn how long it took and how fast it went
 (`last 1m 06s · 32 tok/s`).
+
+In the Tuimark client you can keep typing while a turn runs: `enter` queues
+the message, and it is sent when the turn ends. One message waits at a time (a further send is
+added to it), and the status bar says `1 queued`. `up` in an empty composer
+takes it back to edit while the turn goes on; `esc` cancels the turn and
+gives it back to the composer, after anything typed since. `/help` lists the
+commands and the keys, grouped by where they work.
 
 `/copy`, or `ctrl+y`, puts the last reply on the clipboard; `/copy code`
 copies its last code block. It uses `pbcopy` on macOS, or `wl-copy`,
@@ -132,6 +144,6 @@ bun run dev --theme sepia
 
 ## Where to go next
 
-- [Modes](/modes) — plan and build intents and how approval differs
+- [Modes](/modes) — build, plan, and chat intents and how approval differs
 - [Reference](/reference) — flags, slash commands, and keymap
 - [Configuration](/configuration) — model, context, providers, and environment

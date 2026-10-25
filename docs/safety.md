@@ -115,8 +115,16 @@ commands. Press:
 - `y` — allow this call once;
 - `a` — allow this call and matching ones for the rest of the session (the
   Tuimark client offers no grant for a command that
-  [names a secret path](#commands-that-name-a-secret-path));
-- `n` or `esc` — deny.
+  [names a secret path](#commands-that-name-a-secret-path), for a preview
+  too long to show whole, or for a command while the sandbox is on);
+- `!` — always: save a rule for exactly this call (see
+  [Persistent rules](#persistent-rules)); not offered for a command that
+  names a secret path or for a preview too long to show whole;
+- `n` or `esc` — deny; the turn goes on, and the model is told the call was
+  not approved.
+
+`a` and `!` are the Tuimark client's keys; the Vue client takes `y`, and `n`,
+`enter` or `esc` to deny.
 
 `a` grants narrowly, and the dialog spells out the scope before you press it:
 
