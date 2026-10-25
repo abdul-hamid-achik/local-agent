@@ -35,6 +35,7 @@ import {
   MAX_HISTORY_MESSAGES,
   type McpConnection,
   type Message,
+  namesSecretPath,
   type OllamaAdmission,
   type OpenAILocalAdmission,
   type PermissionFile,
@@ -49,6 +50,7 @@ import {
   proposeRule,
   type Question,
   type RecoveryItem,
+  ruleVerdict,
   runAgent,
   type Session,
   type SessionContext,
@@ -148,7 +150,6 @@ import {
   mcpParts,
   NO_DETAILS_STATUS,
   NO_HEAD,
-  namesSecret,
   noApproval,
   noDetails,
   noPanel,
@@ -776,7 +777,7 @@ export class TuimarkClient {
         return undefined;
       }
       // A command that names a secret path is let out by its own card only.
-      if (this.proposal && namesSecret(this.proposal)) {
+      if (this.proposal && namesSecretPath(this.proposal)) {
         await this.write([
           { path: "status", value: secretStatus(this.proposal) },
         ]);
@@ -810,7 +811,7 @@ export class TuimarkClient {
         return undefined;
       }
       // Nor does one become a standing rule.
-      if (namesSecret(this.proposal)) {
+      if (namesSecretPath(this.proposal)) {
         await this.write([
           { path: "status", value: secretStatus(this.proposal) },
         ]);
@@ -3303,13 +3304,11 @@ export class TuimarkClient {
     signal.throwIfAborted();
     // The workspace's permission file outranks everything interactive: a
     // deny rule refuses (even a session grant), an allow rule approves
-    // without a card. It applies in every intent, as in the other clients:
+    // without a card. It is ruleVerdict, the step every client takes first,
+    // and it applies in every intent:
     // the runtime refuses plan and chat mutations before this runs (no rule
     // widens that), but chat still offers MCP calls.
-    const verdict = evaluate(
-      (await this.fileRules()).rules,
-      permissionRequest(proposal),
-    );
+    const verdict = ruleVerdict((await this.fileRules()).rules, proposal);
     if (verdict.effect === "deny") {
       this.flash(oneLine(`denied by rule: ${verdict.rule?.pattern}`));
       return false;
@@ -3320,7 +3319,7 @@ export class TuimarkClient {
     // workspace. An ask rule still shows the card.
     // A command that names a path the file tools refuse always gets its
     // card, which says so: no allow rule, grant or sandbox spares it.
-    const secret = namesSecret(proposal);
+    const secret = namesSecretPath(proposal);
     let sandboxLost = false;
     if (
       this.sandbox &&
@@ -3347,7 +3346,9 @@ export class TuimarkClient {
         },
       ]);
     }
-    if (verdict.effect === "allow" && !sandboxLost && !secret) {
+    // ruleVerdict already makes a secret path's allow an ask; `secret`
+    // still stops a session grant below.
+    if (verdict.effect === "allow" && !sandboxLost) {
       this.flash(oneLine(`allowed by rule: ${verdict.rule?.pattern}`));
       return true;
     }

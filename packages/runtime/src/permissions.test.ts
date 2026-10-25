@@ -20,11 +20,13 @@ import {
   clearRules,
   evaluate,
   loadPermissionFile,
+  namesSecretPath,
   type PermissionRequest,
   type PermissionRule,
   permissionRequest,
   proposeRule,
   readPermissionFile,
+  ruleVerdict,
   trustRules,
   trustStorePath,
   workspaceRules,
@@ -486,6 +488,22 @@ test("an allow rule does not spare the card of a command that names a secret pat
   expect(await verdict(["cat", "/home/x/.ssh/id_rsa"])).toBe("ask");
   // A deny rule still denies.
   expect(await verdict(["rm", ".env"])).toBe("deny");
+  // ruleVerdict is that step on rules in hand, as the Tuimark client holds
+  // them: the file is not needed.
+  const allowCat = [rule("allow", "run_command", "cat *")];
+  const command = (argv: string[]) => createCommandProposal(argv, root, 1000);
+  const readme = await command(["cat", "README.md"]);
+  const env = await command(["cat", ".env"]);
+  expect(namesSecretPath(readme)).toBe(false);
+  expect(namesSecretPath(env)).toBe(true);
+  expect(ruleVerdict(allowCat, readme)).toMatchObject({ effect: "allow" });
+  expect(ruleVerdict(allowCat, env)).toEqual({ effect: "ask" });
+  expect(
+    ruleVerdict([rule("deny", "run_command", "cat *")], env),
+  ).toMatchObject({ effect: "deny" });
+  expect(ruleVerdict(allowCat, await command(["ls"]))).toEqual({
+    effect: "ask",
+  });
 });
 
 test("'always' trusts only the rule it adds, never the planted ones beside it", async () => {

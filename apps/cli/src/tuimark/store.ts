@@ -5,6 +5,7 @@
 import {
   type ApprovalRequest,
   COMMAND_WRAPPERS,
+  namesSecretPath,
   type Provider,
   type ProviderProbe,
   placementWarning,
@@ -1040,7 +1041,7 @@ export function grantHint(
   sandboxOn = false,
 ): string {
   if (truncated) return "preview truncated: session grant unavailable";
-  if (namesSecret(proposal))
+  if (namesSecretPath(proposal))
     return proposal.kind === "command" &&
       secretPathNotes(proposal.secretPaths).paths.length === 0
       ? "too many paths to check: session grant and always rule unavailable"
@@ -1067,7 +1068,7 @@ export function grantsOffered(
   truncated: boolean,
   sandboxOn = false,
 ): { session: boolean; always: boolean } {
-  const unread = truncated || namesSecret(proposal);
+  const unread = truncated || namesSecretPath(proposal);
   return {
     session: !unread && !(sandboxOn && proposal.kind === "command"),
     always: !unread,
@@ -1089,14 +1090,6 @@ export function armedStatus(
   return `Waiting for approval · ${keys.join(" · ")}`;
 }
 
-/**
- * A command with an argument that names a path the file tools refuse, or
- * with too many path words to check each for a link to one.
- */
-export function namesSecret(proposal: ApprovalRequest): boolean {
-  return proposal.kind === "command" && !!proposal.secretPaths?.length;
-}
-
 /** The card's sentences for a command's secretPaths (see secretPathNotes). */
 function secretSentences(secretPaths: readonly string[] | undefined): string {
   const { paths, unchecked } = secretPathNotes(secretPaths);
@@ -1111,7 +1104,7 @@ function secretSentences(secretPaths: readonly string[] | undefined): string {
   }`;
 }
 
-/** The status for an `a` or `!` that namesSecret refuses. */
+/** The status for an `a` or `!` that namesSecretPath refuses. */
 export function secretStatus(proposal: ApprovalRequest): string {
   return proposal.kind === "command" &&
     secretPathNotes(proposal.secretPaths).paths.length === 0

@@ -962,11 +962,37 @@ export function permissionRequest(
 }
 
 /**
+ * A command with an argument that names a path the file tools refuse, or
+ * with too many path words to check each for a link to one (see
+ * ApprovedCommandProposal.secretPaths).
+ */
+export function namesSecretPath(proposal: ApprovalRequest): boolean {
+  return proposal.kind === "command" && !!proposal.secretPaths?.length;
+}
+
+/**
+ * A proposal's verdict under the workspace file's rules: the step every client
+ * takes before its own answer (a card, a headless flag, the sandbox). A deny
+ * refuses, an allow approves, and an ask is left to the client. A command
+ * that names a secret path (see ApprovedCommandProposal) is never waved
+ * through by an allow rule: it asks, so its card can say so.
+ */
+export function ruleVerdict(
+  rules: readonly PermissionRule[],
+  proposal: ApprovalRequest,
+): PermissionVerdict {
+  const verdict = evaluate(rules, permissionRequest(proposal));
+  return verdict.effect === "allow" && namesSecretPath(proposal)
+    ? { effect: "ask" }
+    : verdict;
+}
+
+/**
  * The workspace file's rules as every client consults them, read fresh on
- * each call (an edit to the file applies to the next proposal): `verdict`
- * runs before a client's own approval path, and `deniedRead` is the
- * runtime's hook for the reads that never ask. A warning (an untrusted or
- * broken file) reaches `onWarning` once per distinct text.
+ * each call (an edit to the file applies to the next proposal): `verdict` is
+ * ruleVerdict on the file as it is now, and `deniedRead` is the runtime's
+ * hook for the reads that never ask. A warning (an untrusted or broken file)
+ * reaches `onWarning` once per distinct text.
  */
 export function workspaceRules(
   workspaceRoot: string,
@@ -985,16 +1011,7 @@ export function workspaceRules(
     return loaded.rules;
   };
   return {
-    verdict: async (proposal) => {
-      const verdict = evaluate(await rules(), permissionRequest(proposal));
-      // A command that names a secret path (see ApprovedCommandProposal) is
-      // never waved through by an allow rule: it asks, so its card can say so.
-      return verdict.effect === "allow" &&
-        proposal.kind === "command" &&
-        proposal.secretPaths?.length
-        ? { effect: "ask" }
-        : verdict;
-    },
+    verdict: async (proposal) => ruleVerdict(await rules(), proposal),
     deniedRead: async (request) => {
       const verdict = evaluate(await rules(), request);
       return verdict.effect === "deny"

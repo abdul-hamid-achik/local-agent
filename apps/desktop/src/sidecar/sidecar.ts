@@ -312,8 +312,9 @@ async function handleAgentStart(id: number, params: unknown): Promise<void> {
         }
       });
 
-    // The workspace's permission file applies here as in every client:
-    // deny refuses before any card, a trusted allow skips it.
+    // The workspace's permission file applies here as in every client
+    // (ruleVerdict): deny refuses before any card, a trusted allow skips it
+    // unless the command names a secret path, and an ask shows the card.
     const fileRules = workspaceRules(workspace.root);
     for await (const event of runAgent(provider, messages, {
       workspace,

@@ -525,10 +525,13 @@ A resumed session first closes the calls it was interrupted before running.`);
                 // Headless precedence: the workspace's permission file is
                 // the user's explicit, durable intent, so it outranks the
                 // --approve-* flags in BOTH directions — a trusted allow
-                // rule approves even with the flag off, a deny rule refuses
-                // even with the flag on. Everything else asks the flags.
-                // Allow rules this user never trusted (a cloned repo's) are
-                // left out by loadPermissionFile.
+                // rule approves even with the flag off (not a command that
+                // names a secret path: ruleVerdict makes that an ask), a
+                // deny rule refuses even with the flag on, and an ask rule
+                // refuses: it wants a person, and unattended there is none.
+                // Everything else asks the flags. Allow rules this user
+                // never trusted (a cloned repo's) are left out by
+                // loadPermissionFile.
                 deniedRead: fileRules.deniedRead,
                 // A run reloads its history from the session, so a long
                 // turn may shorten it (and says so below).
@@ -543,20 +546,20 @@ A resumed session first closes the calls it was interrupted before running.`);
                     process.stderr.write(
                       `${terminalText(`${proposal.kind === "command" ? commandLine(proposal.argv) : ""}${secret}`)}\n`,
                     );
+                  if (verdict.effect === "deny") return false;
+                  if (verdict.effect === "ask" && verdict.rule) {
+                    process.stderr.write(
+                      `${terminalText(`refused by ask rule: ${verdict.rule.pattern} (a headless run has no one to ask)`)}\n`,
+                    );
+                    return false;
+                  }
                   // --sandbox-commands: no command runs outside the sandbox.
-                  // A deny rule refuses; an ask rule wants a person, and
-                  // unattended there is none, nor for a secret path, which
-                  // the sandbox can read; an allow rule runs confined too,
-                  // since outside it could run what a sandboxed command
-                  // wrote in the workspace.
+                  // A secret path is refused, since the sandbox can read it;
+                  // an allow rule runs confined too, since outside it could
+                  // run what a sandboxed command wrote in the workspace.
                   if (proposal.kind === "command" && values["sandbox-commands"])
-                    return verdict.effect === "deny" ||
-                      (verdict.effect === "ask" && verdict.rule) ||
-                      secret
-                      ? false
-                      : "sandbox";
-                  if (verdict.effect !== "ask")
-                    return verdict.effect === "allow";
+                    return secret ? false : "sandbox";
+                  if (verdict.effect === "allow") return true;
                   return proposal.kind === "edit" || proposal.kind === "write"
                     ? values["approve-edits"]
                     : proposal.kind === "command"

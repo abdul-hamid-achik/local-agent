@@ -260,7 +260,10 @@ test("--sandbox-commands runs every command confined, refuses deny and ask rules
       expect(await Bun.file(join(root, "in.txt")).exists()).toBe(false);
       return;
     }
-    expect(run.stderr).toBe("");
+    // The ask rule's refusal says why; nothing else is said.
+    expect(run.stderr).toBe(
+      "refused by ask rule: git * (a headless run has no one to ask)\n",
+    );
     expect(run.code).toBe(0);
     expect(run.results.map((result) => result.status)).toEqual([
       "succeeded",
