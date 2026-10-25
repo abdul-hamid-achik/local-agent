@@ -1,12 +1,19 @@
 import { expect, test } from "vitest";
-import { approvalPreview, shellQuote, tokensPerSecond } from "#cli/preview";
+import { approvalPreview, tokensPerSecond } from "#cli/preview";
 
-test("shellQuote quotes only what a shell would need quoted", () => {
-  expect(shellQuote("tests/a-b_c.test.ts")).toBe("tests/a-b_c.test.ts");
-  expect(shellQuote("a b")).toBe("'a b'");
-  expect(shellQuote("it's")).toBe("'it'\\''s'");
-  expect(shellQuote("")).toBe("''");
-  expect(shellQuote("a|b")).toBe("'a|b'");
+test("a command approval shows each argument as it runs: no line break, escape or override hides in it", () => {
+  const preview = approvalPreview(
+    {
+      kind: "command",
+      argv: ["rm", "-rf", "build\nok", "x\u001b[2Kdone", "\u202etxt.exe", ""],
+      cwd: "/w",
+      timeoutMs: 1000,
+    },
+    "/w",
+  );
+  expect(preview.split("\n")[0]).toBe(
+    "$ rm -rf $'build\\nok' $'x\\x1b[2Kdone' $'\\u202etxt.exe' ''",
+  );
 });
 
 test("a command approval is one command line, then where, how long, and with what permissions", () => {

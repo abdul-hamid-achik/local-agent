@@ -9,7 +9,7 @@
       <span v-if="proposal.kind === 'mcp' && proposal.gateway" class="dim">via {{ proposal.gateway }}</span>
     </div>
     <pre v-if="proposal.kind === 'edit' || proposal.kind === 'write'" class="diff">{{ proposal.diff }}</pre>
-    <pre v-if="proposal.kind === 'command'">[{{ proposal.cwd }}]$ {{ argvText }}</pre>
+    <pre v-if="proposal.kind === 'command'">[{{ proposal.cwd }}]$ {{ proposal.command_line }}</pre>
     <div v-if="proposal.kind === 'command' && proposal.secret_paths?.length" class="dim">
       names a path the workspace treats as secret: {{ proposal.secret_paths.join(", ") }}
     </div>
@@ -38,12 +38,6 @@ type Proposal = Extract<AgentStreamEvent, { type: "approval_requested" }>["propo
 
 const props = defineProps<{ proposal: Proposal; status: ApprovalStatus }>();
 defineEmits<{ decide: [allowed: boolean] }>();
-
-const argvText = computed(() =>
-  props.proposal.kind === "command"
-    ? props.proposal.argv.map((arg) => (arg.includes(" ") ? JSON.stringify(arg) : arg)).join(" ")
-    : "",
-);
 
 const statusText = computed(() =>
   props.status === "ended" ? "not decided: the run is no longer waiting" : props.status,

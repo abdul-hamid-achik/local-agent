@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import {
   mkdir,
   mkdtemp,
@@ -14,11 +14,13 @@ import { join } from "node:path";
 import { afterEach, expect, test, vi } from "vitest";
 import {
   type ApprovedCommandProposal,
+  commandLine,
   createCommandProposal,
   executeApprovedCommand,
   killLiveCommandGroups,
   parseArgv,
   secretPathNotes,
+  shellWord,
   splitCommandLine,
 } from "./command";
 
@@ -449,6 +451,47 @@ test("more path words than are checked for links flags the command instead of pa
     paths: ["notes.txt -> .env"],
   });
   expect(secretPathNotes(undefined)).toEqual({ paths: [] });
+});
+
+test("shellWord shows an argument as a shell reads it, hidden characters as escapes", () => {
+  expect(shellWord("tests/a-b_c.test.ts")).toBe("tests/a-b_c.test.ts");
+  expect(shellWord("a b")).toBe("'a b'");
+  expect(shellWord("it's")).toBe("'it'\\''s'");
+  expect(shellWord("")).toBe("''");
+  expect(shellWord("a|b")).toBe("'a|b'");
+  expect(shellWord("é 🙂")).toBe("'é 🙂'");
+  // A line break, an escape sequence, a direction override, a space that is
+  // not one, a tab next to a quote, and a tag character outside the BMP.
+  expect(shellWord("a\nb")).toBe("$'a\\nb'");
+  expect(shellWord("x\u001b[2Ky")).toBe("$'x\\x1b[2Ky'");
+  expect(shellWord("\u202eevil")).toBe("$'\\u202eevil'");
+  expect(shellWord("zero\u200bwidth")).toBe("$'zero\\u200bwidth'");
+  expect(shellWord("nb\u00a0sp")).toBe("$'nb\\u00a0sp'");
+  expect(shellWord("it's\tok\\")).toBe("$'it\\'s\\tok\\\\'");
+  expect(shellWord("\u{e0001}tag")).toBe("$'\\U000e0001tag'");
+  expect(commandLine(["rm", "-rf", "a b", ""])).toBe("rm -rf 'a b' ''");
+});
+
+test("what shellWord shows, bash reads back as the very argument", () => {
+  const values = [
+    "a b",
+    "it's",
+    "",
+    "a\nb",
+    "x\u001b[2Ky",
+    "\u202eevil",
+    "zero\u200bwidth",
+    "nb\u00a0sp",
+    "\u0085nel",
+    "a\u2028b",
+    "tab\there 'q' \\ $HOME `x`",
+    "é 🙂",
+    "\u{e0001}tag",
+  ];
+  for (const value of values) {
+    const read = execFileSync("bash", ["-c", `printf %s ${shellWord(value)}`]);
+    expect(read.equals(Buffer.from(value)), JSON.stringify(value)).toBe(true);
+  }
 });
 
 function alive(pid: number): boolean {

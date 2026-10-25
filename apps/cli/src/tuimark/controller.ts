@@ -51,6 +51,7 @@ import {
   type SessionContext,
   StepLimitError,
   sandboxUnavailable,
+  commandLine as shellLine,
   tooLongToSend,
   trustRules,
   trustStorePath,
@@ -3233,7 +3234,7 @@ export class TuimarkClient {
     ) {
       const why = this.sandboxProblem();
       if (why === undefined) {
-        this.flash(oneLine(`sandboxed: ${proposal.argv.join(" ")}`));
+        this.flash(oneLine(`sandboxed: ${shellLine(proposal.argv)}`));
         return "sandbox";
       }
       // It stopped being available: off, and this command asks, whatever

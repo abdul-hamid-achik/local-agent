@@ -2,6 +2,7 @@ import { parseArgs } from "node:util";
 import {
   admitOllamaModel,
   admitOpenAILocalModel,
+  commandLine,
   connectMcpServers,
   DEFAULT_OLLAMA_MODEL,
   defaultMcpConfigPath,
@@ -540,7 +541,7 @@ A resumed session first closes the calls it was interrupted before running.`);
                   const secret = secretNote(proposal);
                   if (secret)
                     process.stderr.write(
-                      `${terminalText(`${proposal.kind === "command" ? proposal.argv.join(" ") : ""}${secret}`)}\n`,
+                      `${terminalText(`${proposal.kind === "command" ? commandLine(proposal.argv) : ""}${secret}`)}\n`,
                     );
                   // --sandbox-commands: no command runs outside the sandbox.
                   // A deny rule refuses; an ask rule wants a person, and

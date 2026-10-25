@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { historyProblem } from "#runtime/agent";
+import { commandLine } from "#runtime/command";
 import type { Message, ToolCall } from "#runtime/index";
 import type {
   Disposition,
@@ -288,7 +289,7 @@ export function recoveryItems(
     const call = calls.get(`${row.canonical_call_id}\0${row.tool_name}`);
     const argv = call?.function.arguments.argv;
     const summary = Array.isArray(argv)
-      ? argv.map(String).join(" ")
+      ? commandLine(argv.map(String))
       : call
         ? JSON.stringify(call.function.arguments)
         : "";

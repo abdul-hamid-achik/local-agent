@@ -129,9 +129,11 @@ export type AgentStreamEvent =
         | {
             kind: "command";
             argv: string[];
+            /** argv as shell words: what to show, so what is shown is what runs (see the runtime's shellWord). */
+            command_line: string;
             timeout_ms: number;
             cwd: string;
-            /** Arguments that name a path the file tools treat as secret. */
+            /** Arguments that name a path the file tools treat as secret, as shell words. */
             secret_paths?: string[];
             /** Its path words, when there are too many to check each for a link to a secret. */
             unchecked_path_words?: number;

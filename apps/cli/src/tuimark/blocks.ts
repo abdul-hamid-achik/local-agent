@@ -16,7 +16,12 @@
 // Every flag is always present (true or false) because the markup has no
 // equality test and `if` / `class:NAME` on a missing member report B002 / B003.
 
-import { changeLines, type Message, type ToolCall } from "@local-agent/runtime";
+import {
+  changeLines,
+  commandLine,
+  type Message,
+  type ToolCall,
+} from "@local-agent/runtime";
 import { terminalText } from "#cli/text";
 import { goalNotice } from "#cli/tuimark/goal";
 
@@ -1356,7 +1361,7 @@ function callLine(call: ToolCall | undefined): { text: string; path: boolean } {
       break;
   }
   if (typeof args.path === "string") return line(args.path, true);
-  if (Array.isArray(args.argv)) return line(args.argv.map(String).join(" "));
+  if (Array.isArray(args.argv)) return line(commandLine(args.argv.map(String)));
   return line(JSON.stringify(args));
 }
 

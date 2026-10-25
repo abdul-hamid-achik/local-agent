@@ -60,7 +60,13 @@ function sidecar() {
       emit(runId, {
         type: "approval_requested",
         token,
-        proposal: { kind: "command", argv: ["ls"], timeout_ms: 1000, cwd: "/" },
+        proposal: {
+          kind: "command",
+          argv: ["ls"],
+          command_line: "ls",
+          timeout_ms: 1000,
+          cwd: "/",
+        },
       });
     },
     /** A new sidecar process: it knows none of the old one's runs. */

@@ -3,18 +3,12 @@
 
 import {
   type ApprovalRequest,
+  commandLine,
   type Message,
   secretPathNotes,
+  shellWord,
 } from "@local-agent/runtime";
 import { terminalText } from "#cli/text";
-
-/** One argument as a POSIX shell would need it written, for display only (nothing is run through a shell). */
-export function shellQuote(argument: string): string {
-  if (argument === "") return "''";
-  return /^[A-Za-z0-9_@%+=:,./-]+$/u.test(argument)
-    ? argument
-    : `'${argument.replaceAll("'", "'\\''")}'`;
-}
 
 /** The directory a command runs in, as the approval says it: relative to the workspace when known. */
 function commandWhere(cwd: string, root?: string): string {
@@ -38,7 +32,7 @@ export function approvalPreview(
       `${proposal.inner && proposal.gateway ? `${proposal.inner} via ${proposal.gateway}` : proposal.name}\n${proposal.argumentsJson}\nMCP effects are not verified by transport success.`,
     );
   return terminalText(
-    `$ ${proposal.argv.map(shellQuote).join(" ")}\nin ${commandWhere(proposal.cwd, root)} · timeout ${proposal.timeoutMs / 1000}s · runs with your permissions${secretNote(proposal)}`,
+    `$ ${commandLine(proposal.argv)}\nin ${commandWhere(proposal.cwd, root)} · timeout ${proposal.timeoutMs / 1000}s · runs with your permissions${secretNote(proposal)}`,
   );
 }
 
@@ -51,7 +45,7 @@ export function secretNote(proposal: ApprovalRequest): string {
   const { paths, unchecked } = secretPathNotes(proposal.secretPaths);
   return `${
     paths.length
-      ? `\nnames a path the workspace treats as secret: ${paths.map(shellQuote).join(", ")}`
+      ? `\nnames a path the workspace treats as secret: ${paths.map(shellWord).join(", ")}`
       : ""
   }${
     unchecked === undefined

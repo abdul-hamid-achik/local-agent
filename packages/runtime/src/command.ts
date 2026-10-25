@@ -194,6 +194,53 @@ export async function createCommandProposal(
   return proposal;
 }
 
+// A character that would not show as itself: controls (an escape sequence
+// starts with one), format characters (zero-width, direction overrides),
+// separators that look like a space or a line break, private-use,
+// unassigned and lone surrogate code points.
+const HIDDEN =
+  /[\p{Cc}\p{Cf}\p{Cs}\p{Co}\p{Cn}\p{Zl}\p{Zp}\u00a0\u1680\u2000-\u200a\u202f\u205f\u3000]/u;
+const ESCAPES: Readonly<Record<string, string>> = {
+  "\\": "\\\\",
+  "'": "\\'",
+  "\n": "\\n",
+  "\t": "\\t",
+  "\r": "\\r",
+};
+
+function escaped(char: string): string {
+  const known = ESCAPES[char];
+  if (known) return known;
+  if (!HIDDEN.test(char)) return char;
+  const code = char.codePointAt(0) ?? 0;
+  const hex = code.toString(16);
+  // \x is a byte: past ASCII, \u names the character, as UTF-8.
+  return code < 0x80
+    ? `\\x${hex.padStart(2, "0")}`
+    : code <= 0xffff
+      ? `\\u${hex.padStart(4, "0")}`
+      : `\\U${hex.padStart(8, "0")}`;
+}
+
+/**
+ * One argument as a POSIX shell would read it back, for display only
+ * (nothing is run through a shell): bare when it needs no quoting, in single
+ * quotes otherwise, and in ANSI-C quotes (`$'…'`, as bash and zsh read them)
+ * when it holds a character that would not show as itself, which is then
+ * written as its escape. What an approval shows is what runs.
+ */
+export function shellWord(argument: string): string {
+  if (argument === "") return "''";
+  if (/^[A-Za-z0-9_@%+=:,./-]+$/u.test(argument)) return argument;
+  if (!HIDDEN.test(argument)) return `'${argument.replaceAll("'", "'\\''")}'`;
+  return `$'${Array.from(argument, escaped).join("")}'`;
+}
+
+/** A command's argv as one line of shell words (see shellWord). */
+export function commandLine(argv: readonly string[]): string {
+  return argv.map(shellWord).join(" ");
+}
+
 const MAX_LINK_CHECKS = 64;
 /** The secretPaths entry for path words past the link check: a reason, not a path. */
 const UNCHECKED = /^(\d+) path words, only \d+ checked$/;

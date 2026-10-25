@@ -11,6 +11,7 @@ import { join, relative, resolve } from "node:path";
 import {
   type ApprovalRequest,
   admitOllamaModel,
+  commandLine,
   connectMcpServers,
   inspectRecovery,
   type McpConnection,
@@ -22,6 +23,7 @@ import {
   type SessionContext,
   SessionStore,
   secretPathNotes,
+  shellWord,
   Workspace,
   workspaceRules,
 } from "@local-agent/runtime";
@@ -65,14 +67,17 @@ function fail(id: number, error: unknown): void {
   });
 }
 
-/** A command's secretPaths as the card's fields (see secretPathNotes). */
+/**
+ * A command's secretPaths as the card's fields (see secretPathNotes), each
+ * path as a shell word, as the command line shows it.
+ */
 function secretFields(secretPaths: readonly string[] | undefined): {
   secret_paths?: string[];
   unchecked_path_words?: number;
 } {
   const { paths, unchecked } = secretPathNotes(secretPaths);
   return {
-    ...(paths.length ? { secret_paths: paths } : {}),
+    ...(paths.length ? { secret_paths: paths.map(shellWord) } : {}),
     ...(unchecked === undefined ? {} : { unchecked_path_words: unchecked }),
   };
 }
@@ -282,6 +287,7 @@ async function handleAgentStart(id: number, params: unknown): Promise<void> {
             proposal: {
               kind: "command",
               argv: [...proposal.argv],
+              command_line: commandLine(proposal.argv),
               timeout_ms: proposal.timeoutMs,
               cwd: proposal.cwd,
               ...secretFields(proposal.secretPaths),

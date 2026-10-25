@@ -881,6 +881,7 @@ test("an allowed command that names a secret path still asks, and the card carri
     expect((card.event as { proposal: unknown }).proposal).toMatchObject({
       kind: "command",
       argv: ["cat", "--file=.env"],
+      command_line: "cat --file=.env",
       secret_paths: [".env"],
     });
   } finally {
