@@ -8,6 +8,7 @@
 │ │  /mouse on|off toggle mouse reporting (fullscreen)                       │ ┃
 │ │  /copy [code] copy the last reply, or its last code block (ctrl+y)       │ ┃
 │ │  /compact shorten old tool results now, to free context                  │ ┃
+│ │  /context [SIZE|auto] show or set the context size (64k, auto)           │ ┃
 │ │  /clear start over with an empty conversation (same as /new)             │ ┃
 │ │  /permissions [clear|trust] show, clear or trust grants and rules        │ ┃
 │ │  /sandbox on|off run commands confined (macOS), without a card           │ ┃
@@ -23,9 +24,8 @@
 │ │  /export [json] write the conversation to a markdown or JSON file        │ ┃
 │ │  /mcp show connected MCP servers and their tools                         │ ┃
 │ │  /goal [OBJECTIVE|stop] run turns toward an objective until done or a …  │ ┃
-│ │  Keys                                                                    │ ┃
-└─│  enter       send · shift/alt+enter new line                             │─┘
-╭─│  shift-drag  select text (mouse reporting is on)                         │─╮
-│ │  ^P          commands                                                    │ │
-╰─│  esc         cancel the turn, and a running goal                         │─╯
+└─│  Keys                                                                    │─┘
+╭─│  enter       send · shift/alt+enter new line                             │─╮
+│ │  shift-drag  select text (mouse reporting is on)                         │ │
+╰─│  ^P          commands                                                    │─╯
  b╰──────────────────────────────────────────────────────────────────────────╯  

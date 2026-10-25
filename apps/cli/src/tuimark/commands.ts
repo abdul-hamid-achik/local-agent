@@ -102,6 +102,12 @@ export interface CommandOutcome {
   /** Set by `/model NAME`: the controller validates it, then switches. */
   model?: string;
   /**
+   * Set by `/context [SIZE|auto]`: what was typed after it, "" for none. The
+   * controller shows the size, or checks the new one against the model and
+   * the memory before the next turn asks for it.
+   */
+  context?: string;
+  /**
    * Set by `/find TEXT`: the query, whole, exactly as typed after /find.
    * The controller searches the workspace's saved sessions with it.
    */
@@ -128,7 +134,7 @@ export interface CommandOutcome {
 }
 
 export const HELP_STATUS =
-  "/mode plan|build|chat · /model [NAME] · /theme dark|light|auto · /mouse on|off · /copy [code] · /compact · /permissions [clear|trust] · /sandbox on|off · /details [N] · /diff · /status · /sessions · /new · /clear · /recover · /find TEXT · /search TEXT · /export [json] · /mcp · /goal OBJECTIVE · /help · esc cancel · ctrl+c exit";
+  "/mode plan|build|chat · /model [NAME] · /context [SIZE|auto] · /theme dark|light|auto · /mouse on|off · /copy [code] · /compact · /permissions [clear|trust] · /sandbox on|off · /details [N] · /diff · /status · /sessions · /new · /clear · /recover · /find TEXT · /search TEXT · /export [json] · /mcp · /goal OBJECTIVE · /help · esc cancel · ctrl+c exit";
 
 /** Inline has no mouse (the engine ignores it there): the controller refuses with this. */
 export const MOUSE_INLINE_STATUS = "Mouse is not available in inline mode";
@@ -226,6 +232,17 @@ export function runSlash(text: string, state: CommandState): CommandOutcome {
     // The controller validates the name against the Ollama inventory
     // before it switches; the flash only says a check is running.
     return { status: `Switching model to ${requested}…`, model: requested };
+  }
+  const context = command.match(/^\/context(?:\s+(\S+))?\s*$/i);
+  if (context) {
+    const requested = context[1] ?? "";
+    // The controller holds the size and its plan, and checks a new one.
+    return {
+      status: requested
+        ? `Setting the context size to ${requested}…`
+        : "Context size",
+      context: requested,
+    };
   }
   const permissions = command.match(/^\/permissions(?:\s+(.+?))?\s*$/i);
   if (permissions) {
@@ -447,6 +464,12 @@ export const SLASH_COMMANDS: readonly SlashCommand[] = [
     insert: "/compact",
   },
   {
+    name: "/context",
+    usage: "/context [SIZE|auto]",
+    description: "show or set the context size (64k, auto)",
+    insert: "/context ",
+  },
+  {
     name: "/clear",
     usage: "/clear",
     description: "start over with an empty conversation (same as /new)",
@@ -648,6 +671,7 @@ export const PALETTE: readonly PaletteItem[] = [
   { id: "status", label: "Status: effective config", hint: "/status" },
   { id: "provider", label: "Provider: check the endpoint", hint: "/provider" },
   { id: "model", label: "Model: show current", hint: "/model" },
+  { id: "context", label: "Context: show size", hint: "/context" },
   { id: "find", label: "Find in saved sessions", hint: "/find" },
   { id: "search", label: "Search this conversation", hint: "/search" },
   { id: "sessions", label: "Sessions: switch session", hint: "/sessions" },

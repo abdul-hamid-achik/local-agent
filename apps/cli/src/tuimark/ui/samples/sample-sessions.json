@@ -491,6 +491,11 @@
         "hint": "/model"
       },
       {
+        "id": "context",
+        "label": "Context: show size",
+        "hint": "/context"
+      },
+      {
         "id": "find",
         "label": "Find in saved sessions",
         "hint": "/find"
@@ -588,6 +593,11 @@
         "id": "/compact",
         "cmd": "/compact",
         "desc": "shorten old tool results now, to free context"
+      },
+      {
+        "id": "/context",
+        "cmd": "/context [SIZE|auto]",
+        "desc": "show or set the context size (64k, auto)"
       },
       {
         "id": "/clear",

@@ -3081,6 +3081,7 @@ test("typing / opens the command popup; it filters, moves and completes", async 
     "/mouse",
     "/copy",
     "/compact",
+    "/context",
     "/clear",
     "/permissions",
     "/sandbox",
@@ -3300,6 +3301,7 @@ test("the help overlay's store carries the slash commands", () => {
     "/mouse on|off",
     "/copy [code]",
     "/compact",
+    "/context [SIZE|auto]",
     "/clear",
     "/permissions [clear|trust]",
     "/sandbox on|off",
@@ -5597,6 +5599,268 @@ test("/model to a model on Ollama's MLX runner keeps the planned size and says i
   await client.idle();
   expect(providers.at(-1)?.context_warning).toBeUndefined();
   expect(providers.at(-1)?.context_plan).toMatch(/^planned: its KV cache/);
+});
+
+test("/context sets the size the next turn asks for, auto plans it again, and /model keeps a chosen one", async () => {
+  const GIB = 1024 ** 3;
+  const asked: Provider[] = [];
+  const providers: Provider[] = [];
+  const admitModel = async (candidate: Provider) => {
+    asked.push(candidate);
+    return {
+      ...validated(candidate.model),
+      sizeBytes: 3.3 * GIB,
+      nativeContext: 131_072,
+      kvBytesPerToken: 32_768,
+    } as OllamaAdmission;
+  };
+  const run: ConstructorParameters<typeof TuimarkClient>[0]["run"] = (
+    provider,
+    messages,
+    options,
+  ) => {
+    providers.push(provider);
+    return reply("ok")({ options, messages });
+  };
+  const { ui, client } = setup(reply("ok"), {
+    admitModel,
+    run,
+    totalMemory: () => 16 * GIB,
+  });
+  await ui.fire("send", "/context");
+  expect(store(ui).status).toBe(
+    "Context size: 8192. Use /context SIZE (64k) or /context auto",
+  );
+  expect(asked).toEqual([]);
+
+  store(ui).draft = "/context 64k";
+  await ui.fire("send", "/context 64k");
+  // The current model, asked only for its facts.
+  expect(asked.at(-1)).toMatchObject({ model: "fixture", context_size: 512 });
+  expect(store(ui).status).toBe(
+    "Context size 65536; the model reloads at it on the next turn",
+  );
+  expect(store(ui).draft).toBe("");
+  expect(store(ui).header.ctx_label).toBe("0/64k");
+  await ui.fire("send", "hi");
+  await client.idle();
+  expect(providers.at(-1)).toMatchObject({
+    model: "fixture",
+    context_size: 65_536,
+    context_explicit: true,
+    context_plan:
+      "set by /context; its KV cache takes 2.0 GiB of the 5.2 GiB left after the weights and headroom",
+  });
+
+  // A chosen size stays across /model, and its note names where it came from.
+  await ui.fire("send", "/model qwen3.5:4b");
+  await ui.fire("send", "hi");
+  await client.idle();
+  expect(providers.at(-1)).toMatchObject({
+    model: "qwen3.5:4b",
+    context_size: 65_536,
+    context_plan: expect.stringMatching(/^set by \/context; /),
+  });
+
+  await ui.fire("send", "/context auto");
+  expect(store(ui).status).toBe(
+    "Context size 32768; the model reloads at it on the next turn",
+  );
+  await ui.fire("send", "hi");
+  await client.idle();
+  expect(providers.at(-1)).toMatchObject({
+    context_size: 32_768,
+    context_explicit: false,
+    context_plan: expect.stringMatching(/^planned: /),
+  });
+  await ui.fire("send", "/context 32k");
+  expect(store(ui).status).toBe("Context size stays 32768");
+
+  // Past what the model takes, or a size that is no size: refused, the line kept.
+  store(ui).draft = "/context 256k";
+  await ui.fire("send", "/context 256k");
+  expect(store(ui).status).toBe(
+    "qwen3.5:4b takes at most 131072 tokens of context",
+  );
+  expect(store(ui).draft).toBe("/context 256k");
+  store(ui).draft = "/context lots";
+  await ui.fire("send", "/context lots");
+  expect(store(ui).status).toBe(
+    "/context must be a token count between 512 and 2097152, such as 32768 or 32k",
+  );
+  expect(store(ui).draft).toBe("/context lots");
+
+  // 128k takes 4.0 GiB of the 5.2 GiB left: no warning.
+  await ui.fire("send", "/context 128k");
+  expect(store(ui).status).toBe(
+    "Context size 131072; the model reloads at it on the next turn",
+  );
+
+  // Too large for this machine: kept, with the warning --context gives.
+  const wide = setup(reply("ok"), {
+    admitModel: async (candidate: Provider) =>
+      ({
+        ...validated(candidate.model),
+        sizeBytes: 3.3 * GIB,
+        nativeContext: 262_144,
+        kvBytesPerToken: 32_768,
+      }) as OllamaAdmission,
+    run,
+    totalMemory: () => 16 * GIB,
+  });
+  await wide.ui.fire("send", "/context 256k");
+  expect(store(wide.ui).status).toBe(
+    "Context size 262144; the model reloads at it on the next turn · context 262144 needs a 8.0 GiB KV cache, more than the 5.2 GiB left after the weights and headroom: Ollama may run part of the model on the CPU, or fail to load it",
+  );
+  await wide.ui.fire("send", "hi");
+  await wide.client.idle();
+  expect(providers.at(-1)).toMatchObject({
+    context_size: 262_144,
+    context_warning: expect.stringMatching(/^context 262144 needs/),
+  });
+});
+
+test("a turn sent while /context checks the model keeps the size it started with", async () => {
+  const GIB = 1024 ** 3;
+  let release: () => void = () => {};
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const providers: Provider[] = [];
+  const admitModel = async (candidate: Provider) => {
+    await gate;
+    return {
+      ...validated(candidate.model),
+      sizeBytes: 3.3 * GIB,
+      nativeContext: 131_072,
+      kvBytesPerToken: 32_768,
+    } as OllamaAdmission;
+  };
+  let finish: () => void = () => {};
+  const turn = new Promise<void>((resolve) => {
+    finish = resolve;
+  });
+  const { ui, client } = setup(reply("ok"), {
+    admitModel,
+    run: (provider, messages, options) => {
+      providers.push(provider);
+      return quiet(async () => {
+        await turn;
+      })({ options, messages });
+    },
+    totalMemory: () => 16 * GIB,
+  });
+  const setting = ui.fire("send", "/context 64k");
+  await ui.fire("send", "hi");
+  release();
+  await setting;
+  expect(providers.map((p) => p.context_size)).toEqual([8192]);
+  expect(store(ui).status).toBe(BUSY_STATUS);
+  finish();
+  await client.idle();
+  await ui.fire("send", "again");
+  await client.idle();
+  // Nothing was switched under the turn: the next one still asks for 8192.
+  expect(providers.at(-1)?.context_size).toBe(8192);
+});
+
+test("a turn sent while /model checks the model keeps the model it started on", async () => {
+  let release: () => void = () => {};
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const providers: Provider[] = [];
+  let finish: () => void = () => {};
+  const turn = new Promise<void>((resolve) => {
+    finish = resolve;
+  });
+  const { ui, client } = setup(reply("ok"), {
+    admitModel: async (candidate: Provider) => {
+      await gate;
+      return validated(candidate.model);
+    },
+    run: (provider, messages, options) => {
+      providers.push(provider);
+      return quiet(async () => {
+        await turn;
+      })({ options, messages });
+    },
+  });
+  const switching = ui.fire("send", "/model qwen3.5:4b");
+  await ui.fire("send", "hi");
+  release();
+  await switching;
+  expect(store(ui).status).toBe(BUSY_STATUS);
+  expect(store(ui).header.model).toBe("fixture");
+  finish();
+  await client.idle();
+  expect(providers.map((p) => p.model)).toEqual(["fixture"]);
+});
+
+test("a /model refusal over a size set with /context names /context", async () => {
+  const GIB = 1024 ** 3;
+  const { ui } = setup(reply("ok"), {
+    admitModel: async (candidate: Provider) =>
+      candidate.model === "small"
+        ? {
+            status: "rejected",
+            kind: "policy",
+            message: `Ollama model small cannot satisfy context_size ${candidate.context_size}; its native context is 32768, so use --context 32768 or less`,
+          }
+        : ({
+            ...validated(candidate.model),
+            sizeBytes: 3.3 * GIB,
+            nativeContext: 131_072,
+            kvBytesPerToken: 32_768,
+          } as OllamaAdmission),
+    totalMemory: () => 16 * GIB,
+  });
+  await ui.fire("send", "/context 64k");
+  await ui.fire("send", "/model small");
+  expect(store(ui).status).toBe(
+    "Ollama model small cannot satisfy context_size 65536; its native context is 32768, so use /context 32768 or less",
+  );
+});
+
+test("/context is refused while a turn runs, and where the size is not this client's", async () => {
+  let release: () => void = () => {};
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const asked: Provider[] = [];
+  const admitModel = async (candidate: Provider) => {
+    asked.push(candidate);
+    return validated(candidate.model);
+  };
+  const busy = setup(
+    quiet(async () => {
+      await gate;
+    }),
+    { admitModel },
+  );
+  await busy.ui.fire("send", "work");
+  await busy.ui.fire("send", "/context 64k");
+  expect(store(busy.ui).status).toBe(BUSY_STATUS);
+  release();
+  await busy.client.idle();
+
+  const remote = setup(reply("ok"), {
+    admitModel,
+    provider: { ...provider, type: "ollama_remote" } as Provider,
+  });
+  await remote.ui.fire("send", "/context 64k");
+  expect(store(remote.ui).status).toBe(
+    "The context size is set by Chalupa: it places the model, and its memory with it",
+  );
+  const openai = setup(reply("ok"), {
+    admitModel,
+    provider: { ...provider, type: "openai_local" } as Provider,
+  });
+  await openai.ui.fire("send", "/context 64k");
+  expect(store(openai.ui).status).toBe(
+    "An OpenAI-compatible server keeps its own context size; restart with --context to change the window local-agent keeps to",
+  );
+  expect(asked).toEqual([]);
 });
 
 test("a model the Ollama inventory rejects is refused: no switch, no header write", async () => {

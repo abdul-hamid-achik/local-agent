@@ -44,6 +44,7 @@ import {
   type PermissionRule,
   type Provider,
   type ProviderProbe,
+  parseContextSize,
   permissionRequest,
   permissionsPath,
   placementWarning,
@@ -1356,6 +1357,8 @@ export class TuimarkClient {
   private readonly placementRead = new Set<string>();
   /** The warning of a placement read not shown yet (see startPlacement). */
   private placement?: Promise<string | undefined>;
+  /** "/context" once a size was set with it, so /model's note names it. */
+  private contextSetBy?: string;
 
   /**
    * Once a model's first reply is done (it is loaded then), one read-only
@@ -1941,6 +1944,12 @@ export class TuimarkClient {
     }
     // The process is quitting: nothing is switched.
     if (this.options.signal.aborted) return false;
+    // A message sent while the check ran started a turn on this model;
+    // switching under that turn would leave the two out of step.
+    if (this.busy || this.proposal || this.queued !== undefined) {
+      await this.write([{ path: "status", value: BUSY_STATUS }]);
+      return false;
+    }
     // An OpenAI-compatible server that answers without a model list is
     // taken at its word, as at launch: a chat request fails loudly on a
     // model it does not serve, and the status says the name was not
@@ -1951,7 +1960,13 @@ export class TuimarkClient {
         ? admission.message
         : undefined;
     if (admission.status !== "validated" && unchecked === undefined) {
-      await this.write([{ path: "status", value: oneLine(admission.message) }]);
+      // The runtime's advice names the launch flag; a size set with /context
+      // is changed with it.
+      const message =
+        this.contextSetBy === "/context"
+          ? admission.message.replace("use --context ", "use /context ")
+          : admission.message;
+      await this.write([{ path: "status", value: oneLine(message) }]);
       return false;
     }
     const model = admission.status === "validated" ? admission.model : name;
@@ -1969,7 +1984,11 @@ export class TuimarkClient {
     const plan = planned && facts ? planContextSize(facts) : undefined;
     const note =
       !planned && this.provider.type === "ollama" && facts
-        ? explicitContextNote(facts, this.provider.context_size)
+        ? explicitContextNote(
+            facts,
+            this.provider.context_size,
+            this.contextSetBy,
+          )
         : undefined;
     // A planned size warns only on Ollama's MLX runner.
     const warning = plan?.warning ?? note?.warning;
@@ -1996,6 +2015,129 @@ export class TuimarkClient {
         value: said ? oneLine(`${changed} · ${said}`) : changed,
       },
       { path: "header.model", value: clip(cleanText(model), 40) },
+      ...this.ctxWrites(this.ctx.current),
+    ]);
+    return true;
+  }
+
+  /**
+   * `/context [SIZE|auto]`: the context size the next turn asks Ollama for.
+   * A size is taken as --context takes one (its KV cost, and a warning when
+   * it needs more than the memory left); `auto` plans it again, as a run
+   * that set none. Ollama reloads the model at the new size on the next
+   * turn, and reads the conversation again from its start then.
+   */
+  private async setContext(requested: string): Promise<boolean> {
+    const status = (value: string) =>
+      this.write([{ path: "status", value: oneLine(value) }]);
+    if (!requested) {
+      const plan = this.provider.context_plan;
+      await status(
+        `Context size: ${this.provider.context_size}${plan ? ` · ${plan}` : ""}. Use /context SIZE (64k) or /context auto`,
+      );
+      return true;
+    }
+    if (this.busy || this.proposal || this.queued !== undefined) {
+      await status(BUSY_STATUS);
+      return false;
+    }
+    if (this.modelPending) {
+      await status(MODEL_CHECKING_STATUS);
+      return false;
+    }
+    // Only a local Ollama loads the model at a size this client asks for.
+    if (this.provider.type === "ollama_remote") {
+      await status(
+        "The context size is set by Chalupa: it places the model, and its memory with it",
+      );
+      return false;
+    }
+    if (this.provider.type !== "ollama") {
+      await status(
+        "An OpenAI-compatible server keeps its own context size; restart with --context to change the window local-agent keeps to",
+      );
+      return false;
+    }
+    const auto = requested.toLowerCase() === "auto";
+    let size = 0;
+    if (!auto) {
+      try {
+        size = parseContextSize(requested, "/context");
+      } catch (error) {
+        await status(error instanceof Error ? error.message : String(error));
+        return false;
+      }
+    }
+    const admit = this.options.admitModel ?? admitOllamaModel;
+    let admission: OllamaAdmission | OpenAILocalAdmission;
+    try {
+      // Asked only for its facts, as /model asks for a planned size.
+      admission = await admit(
+        { ...this.provider, context_size: 512 },
+        this.options.signal,
+      );
+    } catch (error) {
+      await status(
+        error instanceof Error ? error.message : "Model check failed",
+      );
+      return false;
+    }
+    if (this.options.signal.aborted) return false;
+    // A message sent while the check ran started a turn at the old size;
+    // changing it under that turn would leave the two out of step.
+    if (this.busy || this.proposal || this.queued !== undefined) {
+      await status(BUSY_STATUS);
+      return false;
+    }
+    if (!sized(admission)) {
+      await status(
+        "message" in admission
+          ? admission.message
+          : "The model does not report its size",
+      );
+      return false;
+    }
+    const facts = {
+      nativeContext: admission.nativeContext,
+      weightsBytes: admission.sizeBytes,
+      kvBytesPerToken: admission.kvBytesPerToken,
+      totalMemory: this.options.totalMemory?.() ?? totalmem(),
+      mlx: admission.mlx,
+    };
+    const native = facts.nativeContext;
+    if (!auto && native !== undefined && size > native) {
+      await status(
+        `${clip(cleanText(this.provider.model), 60)} takes at most ${native} tokens of context`,
+      );
+      return false;
+    }
+    const set = auto
+      ? planContextSize(facts)
+      : {
+          context: size,
+          ...explicitContextNote(facts, size, "/context"),
+        };
+    const { context_warning: _, ...rest } = this.provider;
+    const before = this.provider.context_size;
+    this.contextSetBy = auto ? undefined : "/context";
+    // A warning about the old load (only N% in GPU) no longer holds.
+    this.placement = undefined;
+    this.provider = {
+      ...rest,
+      context_size: set.context,
+      context_explicit: !auto,
+      context_plan: set.reason,
+      ...(set.warning ? { context_warning: set.warning } : {}),
+    };
+    const head =
+      set.context === before
+        ? `Context size stays ${set.context}`
+        : `Context size ${set.context}; the model reloads at it on the next turn`;
+    await this.write([
+      {
+        path: "status",
+        value: oneLine(set.warning ? `${head} · ${set.warning}` : head),
+      },
       ...this.ctxWrites(this.ctx.current),
     ]);
     return true;
@@ -3480,11 +3622,11 @@ export class TuimarkClient {
       sandbox: this.sandbox,
       ...(rules !== undefined ? { rules } : {}),
     });
-    // `/model` runs on controller state and can still be refused there (a
-    // model admission refuses): its line is cleared only once accepted, so
-    // a refused one can be fixed. `/details N` likewise keeps a number no
-    // receipt answers to. Bare `/details` leaves nothing to fix, even with
-    // no tool output yet: its line goes at once.
+    // `/model` and `/context SIZE` run on controller state and can still be
+    // refused there (a model admission refuses): their line is cleared only
+    // once accepted, so a refused one can be fixed. `/details N` likewise
+    // keeps a number no receipt answers to. Bare `/details` leaves nothing
+    // to fix, even with no tool output yet: its line goes at once.
     const numbered =
       typeof outcome.details === "number" ? outcome.details : undefined;
     const clearDraft = () => this.write([{ path: "draft", value: "" }]);
@@ -3492,6 +3634,7 @@ export class TuimarkClient {
       sent &&
       !outcome.unknown &&
       outcome.model === undefined &&
+      !outcome.context &&
       numbered === undefined
     )
       await clearDraft();
@@ -3537,6 +3680,10 @@ export class TuimarkClient {
     }
     if (outcome.model !== undefined) {
       if ((await this.switchModel(outcome.model)) && sent) await clearDraft();
+      return;
+    }
+    if (outcome.context !== undefined) {
+      if ((await this.setContext(outcome.context)) && sent) await clearDraft();
       return;
     }
     if (outcome.copy) {

@@ -29,6 +29,7 @@ export {
   type Provider,
   type ProviderOptions,
   ProviderSchema,
+  parseContextSize,
   providerLocality,
   providerStreamIdleTimeoutMs,
   resolveProvider,

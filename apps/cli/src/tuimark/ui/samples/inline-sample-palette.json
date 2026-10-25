@@ -176,6 +176,11 @@
         "desc": "shorten old tool results now, to free context"
       },
       {
+        "id": "/context",
+        "cmd": "/context [SIZE|auto]",
+        "desc": "show or set the context size (64k, auto)"
+      },
+      {
         "id": "/clear",
         "cmd": "/clear",
         "desc": "start over with an empty conversation (same as /new)"

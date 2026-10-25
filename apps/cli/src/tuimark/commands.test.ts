@@ -216,6 +216,7 @@ test("each palette row's hint runs the command its label names", () => {
     status: { statusPanel: true },
     provider: { providerPanel: true },
     model: { status: "Current model: unknown. Use /model NAME to switch" },
+    context: { context: "" },
     find: { status: "Search the saved sessions. Use /find TEXT" },
     search: { search: "" },
     sessions: { sessions: true },
@@ -286,6 +287,7 @@ test("/new and /clear are /sessions new: the conversation starts over", () => {
   expect(slashMatches("/c")?.map((c) => c.name)).toEqual([
     "/copy",
     "/compact",
+    "/context",
     "/clear",
   ]);
   // The palette's row for it is found by "new" too.
@@ -329,6 +331,7 @@ test("the slash catalog lists exactly the commands the parser knows", () => {
     "/mouse",
     "/copy",
     "/compact",
+    "/context",
     "/clear",
     "/permissions",
     "/sandbox",
@@ -388,6 +391,7 @@ test("the slash catalog lists exactly the commands the parser knows", () => {
     "/mouse on|off",
     "/copy [code]",
     "/compact",
+    "/context [SIZE|auto]",
     "/clear",
     "/permissions [clear|trust]",
     "/sandbox on|off",
@@ -580,5 +584,21 @@ test("/copy and /copy code ask the controller for the last reply or its last cod
   expect(slashMatches("/co")?.map((c) => c.name)).toEqual([
     "/copy",
     "/compact",
+    "/context",
   ]);
+});
+
+test("/context hands the controller what was typed, any case, nothing for none", () => {
+  const state = { intent: "build", mcp: { servers: 0, tools: 0 } } as const;
+  expect(runSlash("/context", state)).toEqual({
+    status: "Context size",
+    context: "",
+  });
+  expect(runSlash("/CONTEXT 64k ", state)).toEqual({
+    status: "Setting the context size to 64k…",
+    context: "64k",
+  });
+  expect(runSlash("/context auto", state).context).toBe("auto");
+  // Two words are no size: the command is unknown, not a truncated size.
+  expect(runSlash("/context 64k please", state).context).toBeUndefined();
 });

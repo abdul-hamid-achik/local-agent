@@ -97,11 +97,12 @@ function fitContext(facts: {
 }
 
 /**
- * What a size the user set (--context, LOCAL_AGENT_CONTEXT) costs: it is
- * kept, and a warning says when its KV cache needs more than the memory
- * left after the weights and headroom, the planner's own budget (Ollama
- * then runs part of the model on the CPU, or fails to load it). On the
- * MLX runner it warns that the size reserves nothing.
+ * What a size the user set (--context, LOCAL_AGENT_CONTEXT, or the Tuimark
+ * client's /context, named by `setBy`) costs: it is kept, and a warning says
+ * when its KV cache needs more than the memory left after the weights and
+ * headroom, the planner's own budget (Ollama then runs part of the model on
+ * the CPU, or fails to load it). On the MLX runner it warns that the size
+ * reserves nothing.
  */
 export function explicitContextNote(
   facts: {
@@ -111,16 +112,16 @@ export function explicitContextNote(
     mlx?: boolean;
   },
   context: number,
+  setBy = "--context or LOCAL_AGENT_CONTEXT",
 ): { reason: string; warning?: string } {
   // Nothing is reserved on MLX, so its cost cannot be told from the size.
   if (facts.mlx)
     return {
-      reason: `set by --context or LOCAL_AGENT_CONTEXT; ${MLX_NOTE}`,
+      reason: `set by ${setBy}; ${MLX_NOTE}`,
       warning: MLX_WARNING,
     };
   const kv = facts.kvBytesPerToken;
-  if (kv === undefined)
-    return { reason: "set by --context or LOCAL_AGENT_CONTEXT" };
+  if (kv === undefined) return { reason: `set by ${setBy}` };
   const need = context * kv;
   const left = Math.max(
     0,
@@ -128,11 +129,11 @@ export function explicitContextNote(
   );
   if (need <= left)
     return {
-      reason: `set by --context or LOCAL_AGENT_CONTEXT; its KV cache takes ${gib(need)} of the ${gib(left)} left after the weights and headroom`,
+      reason: `set by ${setBy}; its KV cache takes ${gib(need)} of the ${gib(left)} left after the weights and headroom`,
     };
   const warning = `context ${context} needs a ${gib(need)} KV cache, more than the ${gib(left)} left after the weights and headroom: Ollama may run part of the model on the CPU, or fail to load it`;
   return {
-    reason: `set by --context or LOCAL_AGENT_CONTEXT; ${warning}`,
+    reason: `set by ${setBy}; ${warning}`,
     warning,
   };
 }
