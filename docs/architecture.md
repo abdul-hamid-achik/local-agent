@@ -28,7 +28,7 @@ apps/cli (composition) -----> packages/runtime (inference + host authority)
 
 ## Tuimark client
 
-The default interactive client lives in `apps/cli/src/tuimark`. It does not render cells itself; it emits a declarative document that the `tuimark` host binary renders. The SDK is the npm package `@thelacanians/tuimark`, pinned to release 0.5.1; the binary comes from `TUIMARK_BINARY` or is downloaded checksum-verified. Tuimark is [open source](https://github.com/abdul-hamid-achik/tuimark). If no `--ui` is given and the binary is missing, or `TUIMARK_BINARY` names one older than 0.5.1 or one whose `--version` names no version, Local Agent falls back to the Vue client with a note on stderr that says why.
+The default interactive client lives in `apps/cli/src/tuimark`. It does not render cells itself; it emits a declarative document that the `tuimark` host binary renders. The SDK is the npm package `@thelacanians/tuimark`, pinned to release 0.5.2; the binary comes from `TUIMARK_BINARY` or is downloaded checksum-verified. Tuimark is [open source](https://github.com/abdul-hamid-achik/tuimark). If no `--ui` is given and the binary is missing, or `TUIMARK_BINARY` names one older than 0.5.1 or one whose `--version` names no version, Local Agent falls back to the Vue client with a note on stderr that says why.
 
 ## Presentations
 

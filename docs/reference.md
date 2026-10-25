@@ -80,7 +80,7 @@ the authoritative short list.
 - **headless**: selected by `--mode headless`, `--prompt`, or `--json`.
 
 The tuimark binary is taken from `TUIMARK_BINARY` if set; otherwise a pinned
-release (0.5.1) is downloaded and checksum-verified. With no `--ui`, the run
+release (0.5.2) is downloaded and checksum-verified. With no `--ui`, the run
 falls back to vue with a note on stderr that says why when the binary is
 missing, or when `TUIMARK_BINARY` names one older than 0.5.1 or one whose
 `--version` names no version (it is asked for at most 5 seconds; the pinned

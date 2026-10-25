@@ -56,8 +56,10 @@ export const MIN_TUIMARK = "0.5.1";
 /**
  * The tuimark release the client downloads when TUIMARK_BINARY is not set,
  * named here so the binary matches the SDK this client was checked against.
+ * 0.5.2 changes no language: it fixes OSC 8 links whose data-bound URL
+ * changes under unchanged text, and kitty images.
  */
-export const PINNED_TUIMARK = "0.5.1";
+export const PINNED_TUIMARK = "0.5.2";
 
 /**
  * The SDK's resolution (TUIMARK_BINARY, the cache, a checked download) for

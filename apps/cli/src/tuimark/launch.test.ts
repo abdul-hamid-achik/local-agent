@@ -160,9 +160,10 @@ async function until(ok: () => boolean) {
   if (!ok()) throw new Error(`until: still false after 1 s: ${ok}`);
 }
 
-test("the pinned release is the minimum, not the pre-release the SDK is packed as", () => {
-  expect(PINNED_TUIMARK).toBe("0.5.1");
-  expect(PINNED_TUIMARK).toBe(MIN_TUIMARK);
+test("the pinned release is a release at or above the minimum, not the pre-release the SDK is packed as", () => {
+  expect(PINNED_TUIMARK).toBe("0.5.2");
+  expect(PINNED_TUIMARK).toMatch(/^\d+\.\d+\.\d+$/);
+  expect(versionAtLeast(PINNED_TUIMARK, MIN_TUIMARK)).toBe(true);
 });
 
 test("the pinned release is the exact SDK version the CLI depends on", async () => {
