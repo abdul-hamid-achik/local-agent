@@ -300,6 +300,8 @@ const HTML_BLOCK_TAGS: Record<string, true> = {
   article: true,
   aside: true,
   blockquote: true,
+  // The title is a line of its own, never glued to the page's first words.
+  body: true,
   br: true,
   dd: true,
   div: true,
@@ -320,6 +322,8 @@ const HTML_BLOCK_TAGS: Record<string, true> = {
   pre: true,
   section: true,
   table: true,
+  td: true,
+  th: true,
   tr: true,
   ul: true,
 };
@@ -526,8 +530,15 @@ function botChallengeError(url: string, status: number): Error {
   );
 }
 
-/** URL or alt words that mark decorative image chrome. */
-const IMAGE_CHROME = /(logo|icon|sprite|avatar|favicon|emoji|badge)/i;
+/** Words that mark decorative image chrome, whole ("silicon" is no icon). */
+const IMAGE_CHROME =
+  /(?<![a-z])(?:logo|icon|sprite|avatar|favicon|emoji|badge)s?(?![a-z])/i;
+
+/** Whether a URL's path or an alt text names chrome art; the host and query
+ * are not looked at, and camelCase ("siteLogo") counts as two words. */
+function isImageChrome(text: string): boolean {
+  return IMAGE_CHROME.test(text.replace(/([a-z])([A-Z])/g, "$1 $2"));
+}
 
 /** Below this score a link is chrome: short text, one path segment. */
 const LINK_MIN_SCORE = 4;
@@ -541,7 +552,7 @@ function linkScore(url: string, text: string, base: URL): number {
   if (segments.length >= 2) score += 10;
   if (/\/(wiki|wikis|guide|guides|walkthrough)\b/.test(parsed.pathname))
     score += 20;
-  if (segments.length === 1 && segments[0] === "") score = 0;
+  if (segments.length === 0) score = 0;
   return score;
 }
 
@@ -621,7 +632,7 @@ async function extractHtmlAssets(
         // Chrome art never helps a reader: logos, icons, sprites, avatars,
         // and images smaller than 200px on their longest known side — the
         // srcset descriptor counts, so a 96px preview of a 2000px map stays.
-        if (IMAGE_CHROME.test(url) || IMAGE_CHROME.test(alt)) return;
+        if (isImageChrome(new URL(url).pathname) || isImageChrome(alt)) return;
         const known = Math.max(width ?? 0, height ?? 0, best.width ?? 0);
         if (known > 0 && known < 200) return;
         const area =
@@ -905,6 +916,9 @@ function decodeEntities(text: string): string {
 }
 
 const IMAGE_MAX_BYTES = LIMITS.imageBytes;
+/** A few KiB of PNG can claim billions of pixels; the vision backend would
+ * decode every one. Past this the claim is refused, whatever the byte size. */
+const IMAGE_MAX_PIXELS = 100_000_000;
 const PNG_SIGNATURE = Buffer.from([
   0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
 ]);
@@ -965,6 +979,11 @@ function jpegDimensions(bytes: Buffer): { width: number; height: number } {
     if (bytes[offset] !== 0xff)
       throw new Error("read_image: malformed JPEG marker structure");
     const marker = bytes[offset + 1] ?? 0;
+    // Any marker may be preceded by 0xFF fill bytes: the fill is not a marker.
+    if (marker === 0xff) {
+      offset += 1;
+      continue;
+    }
     // Standalone markers carry no length field.
     if (
       marker === 0xd8 ||
@@ -1043,6 +1062,10 @@ async function readWorkspaceImage(
     !height
   )
     throw new Error(`read_image: ${path} has no usable dimensions`);
+  if (width * height > IMAGE_MAX_PIXELS)
+    throw new Error(
+      `read_image: ${path} is ${width}x${height}, too many pixels (at most ${IMAGE_MAX_PIXELS})`,
+    );
   return {
     base64: bytes.toString("base64"),
     width,
@@ -2482,6 +2505,10 @@ async function* agentTurn(
                 `fetch: ${finalUrl} is not a PNG, JPEG, WebP or GIF image (the content is checked, not the content type)`,
               );
             const { width, height } = kind.dimensions(bytes);
+            if (width * height > IMAGE_MAX_PIXELS)
+              throw new Error(
+                `fetch: ${finalUrl} is ${width}x${height}, too many pixels (at most ${IMAGE_MAX_PIXELS})`,
+              );
             const descriptor = `image ${width}x${height} ${kind.format} from ${finalUrl}`;
             if (capabilities.includes("vision")) {
               images.push(bytes.toString("base64"));

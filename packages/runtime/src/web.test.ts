@@ -896,6 +896,101 @@ test("fetch appends a bounded extracted footer of top links and images", async (
   }
 });
 
+test("fetch refuses a downloaded image whose pixel count is a decompression bomb", async () => {
+  const bomb = Buffer.alloc(24);
+  TINY_PNG.copy(bomb, 0, 0, 24);
+  bomb.writeUInt32BE(60_000, 16);
+  bomb.writeUInt32BE(60_000, 20);
+  stubFetch((url) =>
+    url === "http://img.example/bomb.png"
+      ? new Response(bomb, { headers: { "content-type": "image/png" } })
+      : undefined,
+  );
+  const run = await session([
+    { name: "fetch", arguments: { url: "http://img.example/bomb.png" } },
+  ]);
+  try {
+    expect(run.results.map((result) => result.status)).toEqual(["failed"]);
+    expect(run.output(0)).toMatch(/60000x60000.*too many pixels/);
+    expect(run.toolMessages[0]?.images).toBeUndefined();
+  } finally {
+    restoreFetch();
+    await run.cleanup();
+  }
+});
+
+test("fetch keeps images whose URL or alt only contains a chrome word inside another word", async () => {
+  stubFetch((url) =>
+    url === "http://page.example/maps"
+      ? htmlPage(`<html><body><h1>Maps</h1>
+<img src="https://logo-cdn.example/maps/silicon-valley.png" alt="Silicon Valley region" width="800" height="600">
+<img src="/img/site-logo.png" alt="Home" width="400" height="300">
+<img src="/img/siteLogo2x.png" alt="Home" width="400" height="300">
+<img src="/img/hero.png" alt="Company logo" width="400" height="300">
+</body></html>`)
+      : undefined,
+  );
+  const run = await session([
+    { name: "fetch", arguments: { url: "http://page.example/maps" } },
+  ]);
+  try {
+    const output = run.output(0);
+    expect(output).toContain("images: 1");
+    expect(output).toContain(
+      "1. https://logo-cdn.example/maps/silicon-valley.png 800x600",
+    );
+    expect(output).not.toContain("site-logo");
+    expect(output).not.toContain("siteLogo");
+    expect(output).not.toContain("hero.png");
+  } finally {
+    restoreFetch();
+    await run.cleanup();
+  }
+});
+
+test("fetch ranks a root link of another site as chrome too", async () => {
+  stubFetch((url) =>
+    url === "http://page.example/article"
+      ? htmlPage(`<html><body><h1>Guide</h1>
+<a href="https://else.example/">Elsewhere homepage of the project</a>
+<a href="https://else.example/guides/boss">Elsewhere boss guide</a>
+</body></html>`)
+      : undefined,
+  );
+  const run = await session([
+    { name: "fetch", arguments: { url: "http://page.example/article" } },
+  ]);
+  try {
+    const output = run.output(0);
+    expect(output).toContain("links: 1");
+    expect(output).toContain("1. https://else.example/guides/boss");
+    expect(output).not.toContain("https://else.example/ ");
+  } finally {
+    restoreFetch();
+    await run.cleanup();
+  }
+});
+
+test("fetch keeps table cells apart and the page title on a line of its own", async () => {
+  stubFetch((url) =>
+    url === "http://page.example/table"
+      ? htmlPage(
+          `<html><head><title>Boss table</title></head><body>Stats<table><tr><th>Name</th><th>HP</th></tr><tr><td>Orc</td><td>40</td></tr></table></body></html>`,
+        )
+      : undefined,
+  );
+  const run = await session([
+    { name: "fetch", arguments: { url: "http://page.example/table" } },
+  ]);
+  try {
+    const output = run.output(0);
+    expect(output).toContain("Boss table\nStats\n\nName\nHP\n\nOrc\n40");
+  } finally {
+    restoreFetch();
+    await run.cleanup();
+  }
+});
+
 test("fetch sends browser headers and a same-origin referer on image requests", async () => {
   stubFetch((url) => {
     if (url === "http://img.example/pic.png")

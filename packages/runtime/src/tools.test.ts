@@ -486,6 +486,62 @@ test("read_image refuses images over 5 MiB and paths outside the workspace", asy
   }
 });
 
+test("read_image skips JPEG 0xFF fill bytes before a marker", async () => {
+  // Any marker may be preceded by 0xFF padding; the fill is not a marker.
+  const jpeg = Buffer.alloc(24);
+  jpeg.set([0xff, 0xd8, 0xff, 0xff, 0xff, 0xc0], 0);
+  jpeg.writeUInt16BE(17, 6);
+  jpeg[8] = 8;
+  jpeg.writeUInt16BE(5, 9);
+  jpeg.writeUInt16BE(7, 11);
+  const run = await session(
+    [{ name: "read_image", arguments: { path: "padded.jpg" } }],
+    "build",
+    () => true,
+    {
+      capabilities: ["completion", "tools", "vision"],
+      seed: (root) => writeFile(join(root, "padded.jpg"), jpeg),
+    },
+  );
+  try {
+    expect(run.results[0]?.output).toBe(
+      "image 7x5 JPEG from padded.jpg (attached)",
+    );
+  } finally {
+    await run.cleanup();
+  }
+});
+
+test("read_image refuses an image whose pixel count is a decompression bomb", async () => {
+  const run = await session(
+    [
+      { name: "read_image", arguments: { path: "bomb.png" } },
+      { name: "read_image", arguments: { path: "wide.png" } },
+    ],
+    "build",
+    () => true,
+    {
+      capabilities: ["completion", "tools", "vision"],
+      seed: async (root) => {
+        await writeFile(join(root, "bomb.png"), fakePng(60_000, 60_000));
+        await writeFile(join(root, "wide.png"), fakePng(10_000, 10_000));
+      },
+    },
+  );
+  try {
+    expect(run.results.map((result) => result.status)).toEqual([
+      "failed",
+      "succeeded",
+    ]);
+    expect(run.results[0]?.output).toMatch(/60000x60000.*too many pixels/);
+    expect(run.results[1]?.output).toBe(
+      "image 10000x10000 PNG from wide.png (attached)",
+    );
+  } finally {
+    await run.cleanup();
+  }
+});
+
 test("read_image fails fast with the vision requirement on a text-only model", async () => {
   const run = await session(
     [{ name: "read_image", arguments: { path: "shot.png" } }],
