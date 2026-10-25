@@ -334,9 +334,11 @@ test("fetch keeps final output within the context's per-result limit", async () 
     expect(output.length).toBeLessThanOrEqual(12_288);
     expect(output).toContain("…(output truncated at 12288 chars)");
     // The byte-count header reports the returned body, not the full download.
+    const note = "…(output truncated at 12288 chars)";
+    const shown = output.slice(output.indexOf("\n\n") + 2, -note.length);
     const header = Number(output.match(/^(\d+) bytes from /)?.[1]);
-    expect(header).toBeGreaterThan(0);
-    expect(header).toBeLessThan(200_000 * 5);
+    expect(header).toBe(Buffer.byteLength(shown, "utf8"));
+    expect(header).toBeLessThan(12_288);
   } finally {
     restoreFetch();
     await run.cleanup();
@@ -793,7 +795,6 @@ test("fetch attaches image/png downloads for vision models with a short descript
     true,
   );
   try {
-    console.log("OUTPUT:", JSON.stringify(run.results[0]));
     expect(run.results.map((result) => result.status)).toEqual(["succeeded"]);
     expect(run.output(0)).toBe(
       "image 1x1 PNG from http://img.example/pic.png (attached)",
@@ -1850,6 +1851,85 @@ test("fetch decodes entities in page text in a single pass", async () => {
     expect(run.output(0)).toContain("Lines:\n  x > 1");
   } finally {
     restoreFetch();
+    await run.cleanup();
+  }
+});
+
+test("a DuckDuckGo answer is read to a cap, not to its end", async () => {
+  delete process.env.LOCAL_AGENT_SEARXNG_URL;
+  const chunk = new TextEncoder().encode(`${"x".repeat(63 * 1024)}\n`);
+  let pulled = 0;
+  // A page that never ends: a result first, then padding without limit.
+  const endless = new Response(
+    new ReadableStream({
+      start(controller) {
+        controller.enqueue(
+          new TextEncoder().encode(
+            `<html><body><table><tr><td><a href="/l/?uddg=https%3A%2F%2Fbun.sh%2Fdocs%2Ftest">Bun docs</a></td></tr></table><!--`,
+          ),
+        );
+      },
+      pull(controller) {
+        // The fixture stops itself far past the cap, so an unbounded read
+        // ends the test by size instead of hanging it.
+        if (++pulled > 400) return controller.close();
+        controller.enqueue(chunk);
+      },
+    }),
+    { headers: { "content-type": "text/html" } },
+  );
+  stubFetch((url) =>
+    url.startsWith("https://lite.duckduckgo.com/lite/") ? endless : undefined,
+  );
+  const run = await session([
+    { name: "web_search", arguments: { query: "bun test" } },
+  ]);
+  try {
+    expect(run.results.map((result) => result.status)).toEqual(["succeeded"]);
+    expect(run.output(0)).toContain("1. Bun docs");
+    // 256 KiB is about four 63 KiB chunks; the stream may run a few ahead of
+    // the reader, nowhere near the 400 it holds.
+    expect(pulled).toBeLessThan(20);
+  } finally {
+    restoreFetch();
+    await run.cleanup();
+  }
+});
+
+test("a SearXNG answer past the cap is unavailable, and the next provider is asked", async () => {
+  const searxng = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    // Valid JSON, about 300 KiB of it: read whole it would parse and answer.
+    fetch: () =>
+      Response.json({
+        results: [
+          { title: "Huge", url: "https://huge.example/", content: "x" },
+          ...Array.from({ length: 3000 }, (_, index) => ({
+            title: `Filler ${index}`,
+            url: `https://filler.example/${index}`,
+            content: "y".repeat(80),
+          })),
+        ],
+      }),
+  });
+  process.env.LOCAL_AGENT_SEARXNG_URL = searxng.url.origin;
+  stubFetch((url) =>
+    url.startsWith("https://lite.duckduckgo.com/lite/")
+      ? ddgHtmlResponse()
+      : undefined,
+  );
+  const run = await session([
+    { name: "web_search", arguments: { query: "bun test" } },
+  ]);
+  try {
+    expect(run.results.map((result) => result.status)).toEqual(["succeeded"]);
+    expect(run.output(0)).not.toContain("Huge");
+    expect(run.output(0).trimEnd().endsWith("via duckduckgo")).toBe(true);
+  } finally {
+    restoreFetch();
+    delete process.env.LOCAL_AGENT_SEARXNG_URL;
+    await searxng.stop(true);
     await run.cleanup();
   }
 });

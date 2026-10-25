@@ -84,7 +84,11 @@ const flag = z
     z.enum(["true", "false"]).transform((value) => value === "true"),
   ])
   .nullish();
-// The read-only tools ignore keys they do not know (`recursive`, ...) instead of failing the call.
+// list, search, fetch and web_search ignore keys they do not know (`recursive`,
+// ...) instead of failing the call. The other tools are strict: read, edit,
+// write, task and run_command refuse an unknown key, so an argument the model
+// invented is never silently dropped from a call that changes something or
+// starts work, and the refusal names it for the next try.
 const ListArgs = z.object({ path: optionalText(4096) });
 const SearchArgs = z.object({
   pattern: z.string().min(1).max(500),
@@ -158,6 +162,10 @@ const AskUserArgs = z
       args.options.length,
     "Option ids must be unique",
   );
+const TODO_MAX_ITEMS = 50;
+// The schema the model is shown carries the same bound. (Ollama's Tool type
+// does not list maxItems, though JSON Schema and the servers do.)
+const TODO_LIST_BOUND = { maxItems: TODO_MAX_ITEMS };
 const TodoItem = z.object({
   content: z.string().min(1).max(200),
   status: z.enum(["pending", "in_progress", "done"]),
@@ -166,7 +174,7 @@ const TodoItem = z.object({
 const TodoWriteArgs = z.object({
   todos: z
     .array(TodoItem)
-    .max(50)
+    .max(TODO_MAX_ITEMS)
     .refine(
       (todos) =>
         todos.filter((todo) => todo.status === "in_progress").length <= 1,
@@ -188,6 +196,8 @@ const FETCH_MAX_BYTES = LIMITS.fetchBytes;
 // loop keeps the hop count bounded.
 const FETCH_MAX_REDIRECTS = 5;
 const SEARXNG_TIMEOUT_MS = 10_000;
+/** A search answer is a page of links; past this the rest is never read. */
+const SEARCH_MAX_BYTES = 256 * 1024;
 const BROWSER_UA =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36";
 /** Every fetch request presents as a normal browser. The referer is added in
@@ -728,7 +738,10 @@ async function searxngSearch(
   }
   if (response.status !== 200) return null;
   try {
-    const payload = (await response.json()) as {
+    // A JSON answer cut at the cap cannot parse: unavailable, like any junk.
+    const { text, truncated } = await readCapped(response, SEARCH_MAX_BYTES);
+    if (truncated) return null;
+    const payload = JSON.parse(text) as {
       results?: { title?: string; url?: string; content?: string }[];
     };
     // A JSON answer without a results list is not SearXNG saying "nothing".
@@ -850,7 +863,8 @@ async function duckduckgoSearch(
       });
       // Read under the same deadline: a body that stalls or resets is a failed
       // attempt like a failed request, not an error for the whole search.
-      if (response.status === 200) body = await response.text();
+      if (response.status === 200)
+        body = (await readCapped(response, SEARCH_MAX_BYTES)).text;
     } catch {
       signal.throwIfAborted();
       response = null;
@@ -1270,12 +1284,13 @@ const tools: Tool[] = [
     function: {
       name: "todo_write",
       description:
-        "Replace the current todo list (send the full list every call; it overwrites the previous one). Each item is a short task with status pending, in_progress or done; keep at most one item in_progress and update statuses as work proceeds.",
+        "Replace the current todo list (send the full list every call; it overwrites the previous one). Each item is a short task with status pending, in_progress or done; keep at most one item in_progress and update statuses as work proceeds. At most 50 items.",
       parameters: {
         type: "object",
         properties: {
           todos: {
             type: "array",
+            ...TODO_LIST_BOUND,
             items: {
               type: "object",
               properties: {
@@ -1358,7 +1373,9 @@ const tools: Tool[] = [
     },
   },
 ];
-/** Tools with no external effects; plan intent offers these and nothing else. */
+/** Tools that write nothing and run no command; plan intent offers these and
+ * nothing else. fetch and web_search still make outbound requests (and task
+ * hands a subagent the same), so plan is read-only, not network-isolated. */
 const READ_ONLY_TOOLS = new Set([
   "read",
   "read_image",
@@ -2727,11 +2744,10 @@ async function* agentTurn(
             (todo) => `- ${markers[todo.status]} ${todo.content}`,
           );
           for (const todo of args.todos) counts[todo.status]++;
-          output =
-            [
-              ...lines,
-              `${args.todos.length} todos: ${counts.done} done, ${counts.in_progress} in progress, ${counts.pending} pending`,
-            ].join("\n") || "0 todos: 0 done, 0 in progress, 0 pending";
+          output = [
+            ...lines,
+            `${args.todos.length} todos: ${counts.done} done, ${counts.in_progress} in progress, ${counts.pending} pending`,
+          ].join("\n");
         } else if (name === "write") {
           if (effectsDenied) {
             status = "denied";
@@ -3151,17 +3167,19 @@ async function* agentTurn(
       } finally {
         wake = undefined;
         await Promise.all(tasks);
+        // Abort leaves partial results above; durable state lands in call
+        // order so history and the revision CAS stay deterministic. It lands
+        // here, not after the try, so a consumer that stops reading (return)
+        // mid-batch still leaves every call that ran with its result: the
+        // session never keeps a tool call without one.
+        for (const [index, ctx] of contexts.entries())
+          commit(ctx, outcomes[index]!);
       }
-      // Abort leaves partial results above; durable state lands in call
-      // order so history and the revision CAS stay deterministic.
-      for (const [index, ctx] of contexts.entries()) {
-        const oc = outcomes[index]!;
-        commit(ctx, oc);
+      for (const oc of outcomes)
         if (oc.uncertain)
           throw new Error(
             "Tool outcome is uncertain; review the workspace before continuing",
           );
-      }
     }
     signal.throwIfAborted();
   }

@@ -528,8 +528,14 @@ test.each(["allow", "deny", "plan", "truncated", "cancel"] as const)(
         ))
           events.push(event);
       };
-      if (decision === "truncated" || decision === "cancel")
-        await expect(collect()).rejects.toThrow();
+      // Each failure is the one the case is about, not any exception: a
+      // regression that breaks the run earlier must not pass as these.
+      if (decision === "truncated")
+        await expect(collect()).rejects.toThrow(
+          "Did not receive done or success response in stream",
+        );
+      else if (decision === "cancel")
+        await expect(collect()).rejects.toMatchObject({ name: "AbortError" });
       else await collect();
       expect(
         events.filter((event) => event.type === "tool_start"),
@@ -900,6 +906,67 @@ test("a failing read-only call does not sink its parallel siblings", async () =>
     ).toContain("Workspace entry cannot be opened");
   } finally {
     await run.cleanup();
+  }
+});
+
+test("a consumer that stops reading mid-batch leaves every call that ran with its saved result", async () => {
+  const root = await mkdtemp(join(tmpdir(), "local-agent-batch-return-"));
+  await writeFile(join(root, "a.txt"), "alpha\n");
+  await writeFile(join(root, "b.txt"), "beta\n");
+  using workspace = await Workspace.create(root);
+  const store = await SessionStore.open(join(root, "session.sqlite"));
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    async fetch(request) {
+      const path = new URL(request.url).pathname;
+      if (path === "/api/tags")
+        return Response.json({ models: [{ name: "fixture", size: 1000 }] });
+      if (path === "/api/show")
+        return Response.json({
+          capabilities: ["completion", "tools"],
+          model_info: { "fixture.context_length": 16384 },
+        });
+      const body = (await request.json()) as { messages: { role: string }[] };
+      const message = body.messages.some((m) => m.role === "tool")
+        ? { role: "assistant", content: "Done" }
+        : {
+            role: "assistant",
+            content: "",
+            tool_calls: ["a.txt", "b.txt"].map((file, index) => ({
+              id: `call-${index}`,
+              function: { name: "read", arguments: { path: file } },
+            })),
+          };
+      return new Response(`${JSON.stringify({ message, done: true })}\n`);
+    },
+  });
+  try {
+    const session = { store, state: await store.createSession(root) };
+    // Stops at the first result, with the batch still emitting.
+    for await (const event of runAgent(
+      resolveProvider({ OLLAMA_HOST: server.url.origin }, "fixture"),
+      [{ role: "user", content: "go" }],
+      {
+        workspace,
+        session,
+        signal: AbortSignal.timeout(5000),
+        approve: async () => true,
+      },
+    ))
+      if (event.type === "tool_result") break;
+    const saved = await store.loadSession(session.state.publicId, root);
+    expect(
+      saved.messages.flatMap((message) =>
+        message.role === "tool" ? [message.tool_call_id] : [],
+      ),
+    ).toEqual(["call-0", "call-1"]);
+    // Nothing is left to recover: the next run starts without a hazard.
+    expect(store.listHazards(saved.id, saved.workspaceId)).toHaveLength(0);
+  } finally {
+    await server.stop(true);
+    store.close();
+    await rm(root, { recursive: true, force: true });
   }
 });
 

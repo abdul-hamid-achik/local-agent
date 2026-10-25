@@ -239,6 +239,8 @@ test("list and search need no approval; write and run_command do, and show what 
       { name: "list", arguments: { path: "src" } },
       {
         name: "search",
+        // The strings small models send, and a key the schema lacks: both
+        // tolerated (the booleans the schema declares are tested below).
         arguments: { pattern: "mean", regex: "false", recursive: true },
       },
       { name: "read", arguments: { path: "/src/stats.ts" } },
@@ -289,6 +291,44 @@ test("list and search need no approval; write and run_command do, and show what 
     });
     // The shell string was refused before any approval, with the reason.
     expect(run.results[6]?.output).toContain("no shell");
+  } finally {
+    await run.cleanup();
+  }
+});
+
+test("search takes the booleans its schema declares, and the strings small models send", async () => {
+  const flags = (regex: unknown, ignore_case: unknown, pattern: string) => ({
+    name: "search",
+    arguments: { pattern, regex, ignore_case },
+  });
+  const run = await session(
+    [
+      // regex: true is a pattern; false (or left out) is the text itself.
+      flags(true, false, "mea."),
+      flags(false, false, "mea."),
+      // ignore_case: true matches across case; false does not.
+      flags(false, true, "MEAN"),
+      flags(false, false, "MEAN"),
+      // The strings are read the same way.
+      flags("true", "false", "mea."),
+      flags("false", "true", "MEAN"),
+    ],
+    "build",
+    () => true,
+  );
+  try {
+    const hit = "src/stats.ts:1: export const mean = 1;";
+    expect(run.results.map((result) => result.status)).toEqual(
+      Array(6).fill("succeeded"),
+    );
+    expect(run.results.map((result) => result.output)).toEqual([
+      hit,
+      "No matches",
+      hit,
+      "No matches",
+      hit,
+      hit,
+    ]);
   } finally {
     await run.cleanup();
   }
@@ -507,6 +547,98 @@ test("read_image skips JPEG 0xFF fill bytes before a marker", async () => {
     expect(run.results[0]?.output).toBe(
       "image 7x5 JPEG from padded.jpg (attached)",
     );
+  } finally {
+    await run.cleanup();
+  }
+});
+
+test("read_image refuses truncated and malformed headers with its own message, never a buffer RangeError", async () => {
+  const jpeg = (...bytes: number[]) => Buffer.from([0xff, 0xd8, ...bytes]);
+  const sof = (width: number, height: number) => {
+    const frame = Buffer.alloc(19);
+    frame.set([0xff, 0xc0, 0x00, 0x11, 0x08], 0);
+    frame.writeUInt16BE(height, 5);
+    frame.writeUInt16BE(width, 7);
+    return frame;
+  };
+  const gif = (size: number, width: number, height: number) => {
+    const bytes = Buffer.alloc(size);
+    bytes.write("GIF89a", 0, "latin1");
+    if (size >= 10) {
+      bytes.writeUInt16LE(width, 6);
+      bytes.writeUInt16LE(height, 8);
+    }
+    return bytes;
+  };
+  const webp = (chunk: string, size = 30) => {
+    const bytes = Buffer.alloc(size);
+    bytes.write("RIFF", 0, "latin1");
+    bytes.write("WEBP", 8, "latin1");
+    bytes.write(chunk, 12, "latin1");
+    return bytes;
+  };
+  const notAnImage = /not a PNG, JPEG, WebP or GIF image/;
+  const noFrame = /JPEG has no frame header before its image data/;
+  const noDimensions = /has no usable dimensions/;
+  const malformed = /malformed JPEG marker structure/;
+  const cases: [name: string, bytes: Buffer, message: RegExp][] = [
+    // JPEG: the marker walk stops short of the frame header in every way.
+    ["no-sof.jpg", jpeg(0xff, 0xe0, 0, 4, 0, 0, 0xff, 0xd9, 0, 0, 0), noFrame],
+    ["scan-first.jpg", jpeg(0xff, 0xda, 0, 4, 0, 0, 0, 0, 0, 0, 0), noFrame],
+    ["marker-cut.jpg", jpeg(0xff, 0xe0, 0x00), noFrame],
+    [
+      "frame-cut.jpg",
+      Buffer.concat([jpeg(), sof(5, 7)]).subarray(0, 11),
+      noFrame,
+    ],
+    // A segment length under 2 cannot hold its own length field: the walk
+    // lands inside it, and says so rather than looping or reading on.
+    [
+      "zero-length.jpg",
+      jpeg(0xff, 0xe0, 0, 0, 0xff, 0xe0, 0, 0, 0xff, 0xe0, 0, 0, 0),
+      malformed,
+    ],
+    [
+      "off-marker.jpg",
+      jpeg(0xff, 0xe0, 0, 4, 0, 0, 0x12, 0x34, ...Array(12).fill(0)),
+      malformed,
+    ],
+    ["zero-size.jpg", Buffer.concat([jpeg(), sof(0, 0)]), noDimensions],
+    // GIF, PNG and WebP: a header cut short is not the format, a header that
+    // claims no pixels has none, and an unknown WebP chunk is named.
+    ["cut.gif", gif(9, 4, 2), notAnImage],
+    ["zero.gif", gif(13, 0, 0), noDimensions],
+    ["cut.png", fakePng(3, 2).subarray(0, 20), notAnImage],
+    ["zero.png", fakePng(0, 0), noDimensions],
+    ["cut.webp", webp("VP8L", 29), notAnImage],
+    ["zero.webp", webp("VP8 "), noDimensions],
+    ["other.webp", webp("ABCD"), /unsupported WebP chunk ABCD/],
+  ];
+  const run = await session(
+    cases.map(([name]) => ({
+      name: "read_image",
+      arguments: { path: name },
+    })),
+    "build",
+    () => true,
+    {
+      capabilities: ["completion", "tools", "vision"],
+      seed: async (root) => {
+        for (const [name, bytes] of cases)
+          await writeFile(join(root, name), bytes);
+      },
+    },
+  );
+  try {
+    expect(run.results.map((result) => result.status)).toEqual(
+      cases.map(() => "failed"),
+    );
+    for (const [index, [name, , message]] of cases.entries()) {
+      const output = run.results[index]?.output ?? "";
+      expect(output, name).toMatch(message);
+      // The tool's own words, not the exception a bad Buffer read throws.
+      expect(output, name).toMatch(/^read_image: /);
+    }
   } finally {
     await run.cleanup();
   }

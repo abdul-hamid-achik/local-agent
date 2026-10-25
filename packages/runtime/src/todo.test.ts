@@ -168,6 +168,49 @@ test("todo_write rejects empty content and over 50 items", async () => {
   }
 });
 
+test("todo_write tells the model its 50-item bound, and the bound holds", async () => {
+  const run = await session([
+    {
+      name: "todo_write",
+      arguments: {
+        todos: Array.from({ length: 50 }, (_, i) => ({
+          content: `task ${i}`,
+          status: "pending",
+        })),
+      },
+    },
+  ]);
+  try {
+    const tool = run.bodies[0]?.tools.find(
+      (entry) => entry.function.name === "todo_write",
+    ) as unknown as {
+      function: {
+        description: string;
+        parameters: { properties: { todos: { maxItems?: number } } };
+      };
+    };
+    // What the model is shown is what the arguments are checked against.
+    expect(tool.function.parameters.properties.todos.maxItems).toBe(50);
+    expect(tool.function.description).toContain("At most 50 items");
+    expect(run.results[0]?.status).toBe("succeeded");
+    expect(run.output(0)).toContain(
+      "50 todos: 0 done, 0 in progress, 50 pending",
+    );
+  } finally {
+    await run.cleanup();
+  }
+});
+
+test("todo_write with an empty list clears the todos and says so", async () => {
+  const run = await session([{ name: "todo_write", arguments: { todos: [] } }]);
+  try {
+    expect(run.results[0]?.status).toBe("succeeded");
+    expect(run.output(0)).toBe("0 todos: 0 done, 0 in progress, 0 pending");
+  } finally {
+    await run.cleanup();
+  }
+});
+
 test("todo_write is offered for both plan and build intents", async () => {
   const plan = await session([], "plan");
   try {
