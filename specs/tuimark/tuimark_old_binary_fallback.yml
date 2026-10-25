@@ -25,9 +25,18 @@ steps:
         screen:
             contains: "stream complete"
         timeoutMs: 15000
+    # The Vue client redraws the finished reply once, and for one frame
+    # (about 17 ms) its prose is blank; a ctrl+c inside it would leave that
+    # frame as the final screen. Quit once the reply's first and last lines
+    # are both on it and the screen has then been quiet: a redraw inside
+    # that window restarts it, and the outcome below reads the settled frame.
     - wait:
         screen:
-            contains: "Enter send"
+            matches: "(?s)Here is a bounded retry.*stream complete"
+        timeoutMs: 3000
+    - wait:
+        idle:
+            quietForMs: 500
         timeoutMs: 10000
     - press: ctrl+c
     - wait:
