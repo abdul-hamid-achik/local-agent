@@ -282,7 +282,7 @@
         <!-- The in-flight assistant message, from the moment a turn starts: its
              head is the one place the UI says what the turn is doing (head.*: a
              spinner the engine animates, or a still glyph while the turn waits on
-             you, then the phase and the elapsed time, dim). The reasoning, dim,
+             you, then the phase and the elapsed time, muted). The reasoning, muted,
              shows under the head until the answer starts: the stream appends to
              thinking.runs and the scroll shows the last three rows of it. A reply
              is live.blocks (final, appended to) and live.tail (the block being

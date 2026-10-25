@@ -1,6 +1,14 @@
 /* local-agent's own styling, loaded after the kit (kit/theme.tcss, kit/kit.tcss).
- * Tokens come from the kit; the syntax colors are this file's. */
+ * Tokens come from the kit; the syntax colors are this file's. The kit
+ * tokens re-declared here are the ones that miss 4.5:1 on bg, panel, raised
+ * or sel; muted moves with subtle so the two still rank (themes.test.ts).
+ * Text that carries content is never dim: a terminal renders dim as it likes,
+ * so no contrast check can see it. */
 :root {
+  --muted: #939ca5;
+  --subtle: #8a929c;
+  --danger: #f85c55;
+
   --kw: #ff7b72;
   --str: #a5d6ff;
   --num: #79c0ff;
@@ -10,12 +18,21 @@
 }
 @media (theme: light) {
   :root {
+    /* The kit's light muted, again: the dark one above would win otherwise. */
+    --muted: #59636e;
+    --subtle: #626b78;
+    --accent: #0967d5;
+    --ok: #197a35;
+    --warn: #916100;
+    --danger: #ce232e;
+    --code: #7d49de;
+
     --kw: #cf222e;
     --str: #0a3069;
     --num: #0550ae;
-    --com: #6e7781;
-    --user: #1a7f37;
-    --tool: #9a6700;
+    --com: #636b74;
+    --user: #197a35;
+    --tool: #916100;
   }
 }
 
@@ -96,9 +113,9 @@
 .la-code { height: auto; layout: column; background: $panel; padding: 0 1; }
 /* A table has no label row to set it off from a table or code block above. */
 .la-code.table { margin: 1 0 0 0; }
-.la-lang { color: $muted; dim: true; }
+.la-lang { color: $muted; }
 .la-codetext, .la-out, .la-think { height: auto; }
-.la-think { padding: 0 0 0 2; color: $muted; italic: true; dim: true; }
+.la-think { padding: 0 0 0 2; color: $muted; italic: true; }
 .la-thinkbox { height: auto; max-height: 3; width: 1fr; }
 
 /* Inline runs (blocks.ts inlineRuns) and code tokens: a span is styled by the
@@ -107,11 +124,12 @@ span.b { bold: true; }
 span.i { italic: true; }
 span.code { color: $code; }
 span.link { underline: true; color: $accent; }
-span.url, span.strike { dim: true; }
+span.url { color: $muted; }
+span.strike { dim: true; }
 span.kw { color: $kw; }
 span.str { color: $str; }
 span.num { color: $num; }
-span.think { color: $muted; italic: true; dim: true; }
+span.think { color: $muted; italic: true; }
 span.com, span.note { color: $com; italic: true; }
 span.err { color: $danger; bold: true; }
 /* The change an edit made, on its card (blocks.ts changeRows). */

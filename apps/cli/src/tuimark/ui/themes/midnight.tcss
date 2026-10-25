@@ -9,7 +9,7 @@
   --bg: #0a0e1a;
   --fg: #dbe4f3;
   --muted: #8a97b8;
-  --subtle: #66739a;
+  --subtle: #858fae;
   --border: #232c45;
   --panel: #101627;
   --raised: #17203a;
@@ -29,7 +29,7 @@
   --kw: #ff7a93;
   --str: #9ece6a;
   --num: #ff9e64;
-  --com: #66739a;
+  --com: #858fae;
   --user: #4aba8f;
   --tool: #e0af68;
 }

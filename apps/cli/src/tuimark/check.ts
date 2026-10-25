@@ -409,6 +409,36 @@ for (const d of extraDumps) {
   );
 }
 
+// The dark goldens are text too, so they cannot see app.tcss re-declare the
+// kit's dark muted, subtle and danger (for contrast, themes.test.ts). The
+// palette sample paints all three: with app.tcss's values, never the kit's.
+{
+  const json = parsed(
+    tuimark([
+      "dump",
+      "app.tui",
+      "--data",
+      "samples/sample-palette.json",
+      "--cols",
+      "80",
+      "--rows",
+      "24",
+      "--styles",
+      "--format",
+      "json",
+    ]).out,
+  ) as { styles: unknown; errors: unknown[] };
+  if (json.errors.length > 0)
+    failures.push(`dump palette dark: ${JSON.stringify(json.errors)}`);
+  const styles = JSON.stringify(json.styles);
+  for (const ours of ["#939ca5", "#8a929c", "#f85c55"])
+    if (!styles.includes(ours))
+      failures.push(`dump palette dark: app.tcss's ${ours} is not painted`);
+  for (const kits of ["#6e7681", "#f85149"])
+    if (styles.includes(kits))
+      failures.push(`dump palette dark: the kit's ${kits} is painted`);
+}
+
 // 4: every action fires, from the sample where its key is live. The event
 // list is compared exactly: an extra event (a dialog_confirm next to the
 // dialog_cancel that esc must fire) is a failure.
