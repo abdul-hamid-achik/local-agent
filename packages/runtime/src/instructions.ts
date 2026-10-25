@@ -52,14 +52,30 @@ function defuseMarkers(content: string): string {
   return body;
 }
 
+const INSTRUCTION_BYTES = 64 * 1024;
+const BOM_BYTES = 3;
+const TOO_LARGE = "AGENTS.md exceeds the 64 KiB instruction limit";
+
 /** Project guidance is bounded and read through the same pinned file authority. */
 export async function projectInstructions(
   workspace: Workspace,
 ): Promise<string> {
-  const content = await workspace.readOptional("AGENTS.md");
+  // A larger file is refused as its size is read, not after it is decoded.
+  // The cap leaves room for a BOM, which the limit below does not count.
+  let content: string | undefined;
+  try {
+    content = await workspace.readOptional(
+      "AGENTS.md",
+      INSTRUCTION_BYTES + BOM_BYTES,
+    );
+  } catch (error) {
+    if (error instanceof Error && error.message === "File exceeds size limit")
+      throw new Error(TOO_LARGE);
+    throw error;
+  }
   if (content === undefined) return "";
-  if (Buffer.byteLength(content, "utf8") > 64 * 1024)
-    throw new Error("AGENTS.md exceeds the 64 KiB instruction limit");
+  if (Buffer.byteLength(content, "utf8") > INSTRUCTION_BYTES)
+    throw new Error(TOO_LARGE);
   // Guidance, not authority: a cloned repository chooses this text. It sits
   // after the host rules, and says so, so it cannot pass as one of them.
   // A marker line inside the file would close the frame early; its leading

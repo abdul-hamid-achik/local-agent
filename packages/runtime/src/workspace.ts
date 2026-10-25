@@ -30,6 +30,7 @@ import {
   openAt,
   openRoot,
   renameAt,
+  renameAtNoReplace,
   unlinkAt,
   withParent,
   withParentCreating,
@@ -296,13 +297,20 @@ export class Workspace implements Disposable {
     this.close();
   }
 
-  async read(path: string): Promise<string> {
-    return this.at(path, (parent, name) => snapshot(parent, name).text);
+  /** A file's text; `maxBytes` (at most the usual limit) refuses a larger file before it is read. */
+  async read(path: string, maxBytes = MAX_FILE_BYTES): Promise<string> {
+    return this.at(
+      path,
+      (parent, name) => snapshot(parent, name, maxBytes).text,
+    );
   }
 
-  async readOptional(path: string): Promise<string | undefined> {
+  async readOptional(
+    path: string,
+    maxBytes = MAX_FILE_BYTES,
+  ): Promise<string | undefined> {
     try {
-      return await this.read(path);
+      return await this.read(path, maxBytes);
     } catch (error) {
       if (error instanceof Error && "code" in error && error.code === "ENOENT")
         return undefined;
@@ -374,7 +382,7 @@ export class Workspace implements Disposable {
 
   private publishEdit(proposal: WorkspaceEditProposal, change: Change): void {
     const expectedParent = proposal && this.proposals.get(proposal);
-    if (!expectedParent)
+    if (!expectedParent || proposal.kind !== "edit")
       throw new Error(
         "Edit proposal was not issued by this workspace or was already used",
       );
@@ -516,6 +524,8 @@ export class Workspace implements Disposable {
 
   private exists(relative: string): boolean {
     try {
+      // A secret is not confirmed to be there, not even to suggest its name.
+      this.reject(relative);
       withParent(this.fd, relative, (parent, name) => {
         closeSync(openAt(parent, name, constants.O_RDONLY));
       });
@@ -602,6 +612,8 @@ export class Workspace implements Disposable {
       files: 0,
       stopped: undefined,
       deadline: Date.now() + SEARCH_MILLISECONDS,
+      cut: 0,
+      deep: false,
     };
     const kind = relative
       ? withParent(this.fd, relative, (parent, name) => {
@@ -634,6 +646,14 @@ export class Workspace implements Disposable {
         `… more matches not shown (first ${SEARCH_MATCH_LIMIT} listed); narrow the pattern or the path`,
       );
     if (state.stopped) lines.push(`… ${state.stopped}; narrow the path`);
+    if (state.cut)
+      lines.push(
+        `… ${state.cut} ${state.cut === 1 ? "line" : "lines"} past ${SEARCH_SCAN_CHARS} characters searched only up to there`,
+      );
+    if (state.deep)
+      lines.push(
+        `… directories deeper than ${SEARCH_DEPTH} levels not searched`,
+      );
     return lines.length ? lines.join("\n") : "No matches";
   }
 
@@ -709,7 +729,10 @@ export class Workspace implements Disposable {
       if (state.more || state.stopped) return;
       const child = relative ? `${relative}/${entry.name}` : entry.name;
       if (entry.isDirectory()) {
-        if (depth >= SEARCH_DEPTH) continue;
+        if (depth >= SEARCH_DEPTH) {
+          state.deep = true;
+          continue;
+        }
         let opened: number;
         try {
           opened = openAt(fd, entry.name, DIRECTORY_FLAGS);
@@ -763,7 +786,10 @@ export class Workspace implements Disposable {
         return;
       }
       const line = raw.endsWith("\r") ? raw.slice(0, -1) : raw;
-      if (!state.test(line.slice(0, SEARCH_SCAN_CHARS))) continue;
+      if (!state.test(line.slice(0, SEARCH_SCAN_CHARS))) {
+        if (line.length > SEARCH_SCAN_CHARS) state.cut++;
+        continue;
+      }
       if (state.matches.length >= SEARCH_MATCH_LIMIT) {
         state.more = true;
         return;
@@ -913,7 +939,10 @@ export class Workspace implements Disposable {
           closeSync(fd);
         }
         verify();
-        renameAt(parent, tempName, name);
+        // A new file is published only where nothing is: the kernel checks
+        // and renames in one step, so one created since `verify` survives.
+        if (proposal.created) renameAtNoReplace(parent, tempName, name);
+        else renameAt(parent, tempName, name);
         change.published = true;
         temporary = false;
         fsyncSync(parent);
@@ -938,6 +967,10 @@ type SearchState = {
   files: number;
   stopped: string | undefined;
   deadline: number;
+  /** Lines with no match in their first SEARCH_SCAN_CHARS, and more after. */
+  cut: number;
+  /** Whether a directory below SEARCH_DEPTH was left unsearched. */
+  deep: boolean;
 };
 
 function matcher(
@@ -947,9 +980,11 @@ function matcher(
   if (options.regex) {
     let expression: RegExp;
     try {
-      // grep-style `a\|b` means alternation here too.
+      // grep-style `a\|b` means alternation here too. An escaped backslash
+      // before the bar (`a\\|b`) is a backslash and a plain alternation, as
+      // in the pattern's own syntax.
       expression = new RegExp(
-        pattern.replaceAll("\\|", "|"),
+        pattern.replace(/(?<!\\)((?:\\\\)*)\\\|/gu, "$1|"),
         options.ignoreCase ? "i" : "",
       );
     } catch (error) {

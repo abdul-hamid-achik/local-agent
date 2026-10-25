@@ -227,6 +227,81 @@ export function renameAt(parent: number, source: string, target: string): void {
     throw new Error("Workspace replacement could not be published");
 }
 
+let noReplaceSymbol:
+  | ((dirfd: number, from: Buffer, to: Buffer) => number)
+  | null
+  | undefined;
+
+/**
+ * Like `renameAt`, but fails with EEXIST rather than replace what `target`
+ * already is: the kernel checks and publishes in one step, so a file created
+ * after the caller looked cannot be lost. macOS has `renameatx_np` with
+ * RENAME_EXCL, Linux `renameat2` with RENAME_NOREPLACE; they are looked up on
+ * their own, as `fstatat` is, and where one is missing (an old libc) or the
+ * file system does not support the flag, this is `renameAt`, which replaces.
+ */
+export function renameAtNoReplace(
+  parent: number,
+  source: string,
+  target: string,
+): void {
+  const from = component(source);
+  const to = component(target);
+  if (noReplaceSymbol === undefined) {
+    noReplaceSymbol = null;
+    const darwin = process.platform === "darwin";
+    const candidates = darwin
+      ? ["/usr/lib/libSystem.B.dylib"]
+      : [
+          "libc.so.6",
+          `/lib/ld-musl-${process.arch === "arm64" ? "aarch64" : "x86_64"}.so.1`,
+        ];
+    for (const path of candidates) {
+      try {
+        const args = ["int", "ptr", "int", "ptr", "u32"] as const;
+        if (darwin) {
+          const { symbols } = dlopen(path, {
+            renameatx_np: { args, returns: "int" },
+          });
+          // RENAME_EXCL
+          noReplaceSymbol = (dirfd, a, b) =>
+            symbols.renameatx_np(dirfd, ptr(a), dirfd, ptr(b), 0x4);
+        } else {
+          const { symbols } = dlopen(path, {
+            renameat2: { args, returns: "int" },
+          });
+          // RENAME_NOREPLACE
+          noReplaceSymbol = (dirfd, a, b) =>
+            symbols.renameat2(dirfd, ptr(a), dirfd, ptr(b), 0x1);
+        }
+        break;
+      } catch {
+        // Try the next library.
+      }
+    }
+  }
+  if (!noReplaceSymbol) {
+    renameAt(parent, source, target);
+    return;
+  }
+  if (noReplaceSymbol(parent, from, to) === 0) return;
+  const code = errno();
+  if (code === 17)
+    throw Object.assign(
+      new Error("File was created since write was prepared"),
+      {
+        code: "EEXIST",
+        errno: code,
+      },
+    );
+  // EINVAL, ENOSYS and ENOTSUP: the kernel or file system lacks the flag.
+  const unsupported =
+    process.platform === "darwin" ? [22, 45, 78] : [22, 38, 95];
+  if (!unsupported.includes(code))
+    throw new Error("Workspace replacement could not be published");
+  renameAt(parent, source, target);
+}
+
 /**
  * Like `withParent`, but creates the missing directories of the path (relative
  * to the pinned parent, never following a symbolic link), naming each in

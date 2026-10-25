@@ -3,6 +3,7 @@ import {
   constants,
   existsSync,
   mkdtempSync,
+  readFileSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -10,7 +11,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, test, vi } from "vitest";
-import { openAt, openRoot } from "#runtime/workspace_native";
+import { openAt, openRoot, renameAtNoReplace } from "#runtime/workspace_native";
 
 // Lets a test make the explicit fchmod fail, and act at that moment.
 const hooks = vi.hoisted(() => ({
@@ -112,4 +113,19 @@ test("a failed fchmod leaves alone an entry that has been replaced since", () =>
     "fchmod failed",
   );
   expect(existsSync(join(dir, "swapped"))).toBe(true);
+});
+
+test("renameAtNoReplace renames onto nothing, and refuses to replace what is there", () => {
+  const { dir, root } = directory();
+  writeFileSync(join(dir, "temporary"), "mine");
+  renameAtNoReplace(root, "temporary", "target");
+  expect(existsSync(join(dir, "temporary"))).toBe(false);
+  expect(readFileSync(join(dir, "target"), "utf8")).toBe("mine");
+  writeFileSync(join(dir, "second"), "late");
+  expect(() => renameAtNoReplace(root, "second", "target")).toThrow(
+    expect.objectContaining({ code: "EEXIST" }),
+  );
+  // Neither file was touched.
+  expect(readFileSync(join(dir, "target"), "utf8")).toBe("mine");
+  expect(readFileSync(join(dir, "second"), "utf8")).toBe("late");
 });

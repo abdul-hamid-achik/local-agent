@@ -179,8 +179,16 @@ export const ProviderSchema = z
       .max(Number.MAX_SAFE_INTEGER)
       .optional(),
     stream_idle_timeout: z.string().trim().optional(),
-    /** Parsed milliseconds for the root chat client's request watchdog. */
-    stream_idle_timeout_ms: z.number().int().positive().optional(),
+    /**
+     * The request watchdog in milliseconds: parsed from stream_idle_timeout
+     * (ollama_remote), or set directly on an openai_local profile.
+     */
+    stream_idle_timeout_ms: z
+      .number()
+      .int()
+      .positive()
+      .max(maxStreamIdleTimeoutMs)
+      .optional(),
     /** Some local servers require a dummy bearer token; optional for loopback servers. */
     api_key: z.string().trim().min(1).max(4096).optional(),
     /**
@@ -236,6 +244,20 @@ export const ProviderSchema = z
         });
     }
     if (profile.type === "ollama_remote") {
+      // Chalupa's endpoint is its tunnel, on loopback; any other host gets the
+      // prompts, and the code in them, only over TLS.
+      try {
+        const url = new URL(profile.base_url);
+        if (url.protocol === "http:" && !isLoopbackHost(url.hostname))
+          ctx.addIssue({
+            code: "custom",
+            path: ["base_url"],
+            message:
+              "ollama_remote sends prompts to base_url: use https, or a loopback tunnel",
+          });
+      } catch {
+        // checkOllamaOrigin has reported it.
+      }
       if (profile.max_model_bytes === undefined)
         ctx.addIssue({
           code: "custom",
@@ -251,10 +273,7 @@ export const ProviderSchema = z
     } else if (
       profile.max_model_bytes !== undefined ||
       profile.stream_idle_timeout !== undefined ||
-      profile.keep_alive !== undefined ||
-      (profile.stream_idle_timeout_ms !== undefined &&
-        profile.type !== "ollama" &&
-        profile.type !== "openai_local")
+      profile.keep_alive !== undefined
     )
       ctx.addIssue({
         code: "custom",
@@ -419,7 +438,8 @@ export function resolveProvider(
         ? {}
         : { context_size: context, context_explicit: true }),
       ...(think === undefined ? {} : { think }),
-      stream_idle_timeout_ms: defaultStreamIdleTimeoutMs,
+      stream_idle_timeout_ms:
+        profile.stream_idle_timeout_ms ?? defaultStreamIdleTimeoutMs,
     };
   }
   if (env.LOCAL_AGENT_PROVIDER && env.LOCAL_AGENT_PROVIDER !== "ollama")

@@ -203,6 +203,40 @@ describe("provider configuration boundary", () => {
     }),
   });
 
+  test.each([
+    "http://gpu.example:11434",
+    "http://203.0.113.7:11434",
+    "http://192.168.1.20:11434",
+    "http://[2001:db8::1]:11434",
+    "http://127.0.0.1.example:11434",
+  ])(
+    "a Chalupa profile never sends prompts over plain http to %s",
+    (base_url) => {
+      expect(() => resolveProvider(chalupa({ base_url }))).toThrow(
+        /base_url: ollama_remote sends prompts to base_url/,
+      );
+    },
+  );
+
+  test.each([
+    "https://gpu.example",
+    "http://127.0.0.1:11435",
+    "http://localhost:11435",
+    "http://[::1]:11435",
+  ])("a Chalupa profile may use %s", (base_url) => {
+    expect(resolveProvider(chalupa({ base_url })).base_url).toBe(base_url);
+  });
+
+  test("a Chalupa stream_idle_timeout_ms must agree with its stream_idle_timeout", () => {
+    expect(
+      resolveProvider(chalupa({ stream_idle_timeout_ms: 600_000 }))
+        .stream_idle_timeout_ms,
+    ).toBe(600_000);
+    expect(() =>
+      resolveProvider(chalupa({ stream_idle_timeout_ms: 1000 })),
+    ).toThrow(/stream_idle_timeout_ms: Must match stream_idle_timeout/);
+  });
+
   test("local Ollama defaults to the small model; flag and variable override it", () => {
     expect(DEFAULT_OLLAMA_MODEL).toBe("qwen3.5:4b-q4_K_M");
     expect(resolveProvider({}).model).toBe(DEFAULT_OLLAMA_MODEL);
@@ -303,6 +337,24 @@ describe("openai_local provider configuration", () => {
       resolveProvider(local("http://localhost:1234/v1", { api_key: "x" }))
         .api_key,
     ).toBe("x");
+  });
+
+  test("a stream_idle_timeout_ms on the profile is the watchdog, within what a timer can hold", () => {
+    const watchdog = (value: unknown) =>
+      resolveProvider(
+        local("http://127.0.0.1:8080/v1", { stream_idle_timeout_ms: value }),
+      ).stream_idle_timeout_ms;
+    expect(watchdog(600_000)).toBe(600_000);
+    // Without one, the default stands.
+    expect(watchdog(undefined)).toBe(300_000);
+    for (const bad of [0, -1, 1.5, "10m", 2_147_483_648])
+      expect(() => watchdog(bad)).toThrow(/stream_idle_timeout_ms/);
+    // A duration string belongs to the negotiated remote profile alone.
+    expect(() =>
+      resolveProvider(
+        local("http://127.0.0.1:8080/v1", { stream_idle_timeout: "10m" }),
+      ),
+    ).toThrow(/ollama_remote/);
   });
 
   test("rejects non-loopback base URLs unless LOCAL_AGENT_LOCAL_ONLY=false", () => {

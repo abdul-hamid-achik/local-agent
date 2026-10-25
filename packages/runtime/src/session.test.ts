@@ -5,7 +5,7 @@ import { mkdtemp, realpath, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { expect, test } from "vitest";
+import { expect, test, vi } from "vitest";
 import {
   ConversationFullError,
   type ExecutionEvent,
@@ -14,6 +14,17 @@ import {
   SessionStore,
   sha256,
 } from "./session";
+
+// Bytes the next public ids are drawn from, before real randomness resumes.
+const drawn = vi.hoisted(() => ({ bytes: [] as Buffer[] }));
+vi.mock("node:crypto", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:crypto")>();
+  return {
+    ...actual,
+    randomBytes: (size: number) =>
+      drawn.bytes.shift() ?? actual.randomBytes(size),
+  };
+});
 
 async function fixture() {
   const root = await mkdtemp(join(tmpdir(), "local-agent-session-"));
@@ -315,20 +326,57 @@ test("rejects independent idempotency collisions and changed v2 ordinal identity
   store.close();
 });
 
-test("serializes concurrent v1 migration openers", async () => {
+test("serializes concurrent v1 migration openers, each in its own process", async () => {
   const { db, workspace } = await fixture();
   await seedV1Database(db, await realpath(workspace));
-  const opened = await Promise.all([
-    SessionStore.open(db),
-    SessionStore.open(db),
-  ]);
-  const raw = (opened[0] as unknown as { db: Database }).db;
+  const modulePath = fileURLToPath(new URL("./session.ts", import.meta.url));
+  // Every opener waits for the same instant, once its modules are loaded, so
+  // the migrations contend for the database rather than queue behind imports.
+  const start = Date.now() + 1500;
+  const script = `
+    const { SessionStore } = await import(${JSON.stringify(modulePath)});
+    await Bun.sleep(Math.max(0, ${start} - Date.now()));
+    try {
+      (await SessionStore.open(${JSON.stringify(db)})).close();
+    } catch (error) {
+      console.error(String(error));
+      process.exit(1);
+    }
+  `;
+  const openers = Array.from({ length: 4 }, () =>
+    Bun.spawn([process.execPath, "-e", script], {
+      stdout: "ignore",
+      stderr: "pipe",
+    }),
+  );
+  const outcomes = await Promise.all(
+    openers.map(async (opener) => ({
+      code: await opener.exited,
+      stderr: await new Response(opener.stderr).text(),
+    })),
+  );
+  expect(outcomes).toEqual(openers.map(() => ({ code: 0, stderr: "" })));
+  const raw = new Database(db);
   expect(
     raw.query<{ version: number }, []>("SELECT version FROM schema_meta").get()
       ?.version,
   ).toBe(3);
-  for (const store of opened) store.close();
-});
+  expect(
+    raw
+      .query<{ name: string }, []>(
+        "SELECT name FROM pragma_table_info('execution_events') WHERE name IN ('provider_call_id', 'iteration', 'ordinal', 'kind')",
+      )
+      .all(),
+  ).toHaveLength(4);
+  expect(
+    raw
+      .query<{ name: string }, []>(
+        "SELECT name FROM sqlite_master WHERE name IN ('execution_events_logical_slot', 'execution_reconciliations')",
+      )
+      .all(),
+  ).toHaveLength(2);
+  raw.close();
+}, 30_000);
 
 test("commitOutcome rolls back its event when the state revision is stale", async () => {
   const { db, workspace } = await fixture();
@@ -717,7 +765,7 @@ test("raw SQL cannot rewrite or delete lifecycle rows and lock symlinks are refu
   reopened.close();
 });
 
-test("a crashed child releases the session lease", async () => {
+test("a killed child releases the session lease", async () => {
   const { db, workspace } = await fixture();
   const parent = await SessionStore.open(db);
   const session = await parent.createSession(workspace);
@@ -735,16 +783,23 @@ test("a crashed child releases the session lease", async () => {
   });
   const reader = child.stdout.getReader();
   let output = "";
+  let closed = false;
   for (let attempt = 0; attempt < 20 && !output.includes("locked"); attempt++) {
     const chunk = await reader.read();
-    if (chunk.done) break;
+    if (chunk.done) {
+      closed = true;
+      break;
+    }
     output += new TextDecoder().decode(chunk.value);
   }
-  expect(output).toContain("locked");
+  // A child that died before locking says why, not only that "locked" is missing.
+  const stderr = closed ? await new Response(child.stderr).text() : "";
+  expect(output, stderr).toContain("locked");
   await expect(parent.acquireLease(session.id, workspace)).rejects.toThrow(
     "busy",
   );
-  child.kill();
+  // SIGKILL: the child gets no chance to close the lock file itself.
+  child.kill("SIGKILL");
   await child.exited;
   const release = await parent.acquireLease(session.id, workspace);
   await release();
@@ -764,7 +819,10 @@ test("does not mutate an unknown database file", async () => {
   seed.close();
   const before = await (await import("node:fs/promises")).readFile(db);
   const beforeHash = createHash("sha256").update(before).digest("hex");
-  await expect(SessionStore.open(db)).rejects.toThrow();
+  // Refused for what it is, not for some other failure on the way in.
+  await expect(SessionStore.open(db)).rejects.toThrow(
+    "no such table: schema_meta",
+  );
   const after = await (await import("node:fs/promises")).readFile(db);
   const afterHash = createHash("sha256").update(after).digest("hex");
   expect(after).toEqual(before);
@@ -903,5 +961,50 @@ test("session summaries match the listing in order and count, without reading tr
       ]),
     ),
   ).toEqual({ [first.publicId]: 3, [second.publicId]: 1 });
+  store.close();
+});
+
+test("a public id never takes a byte that would favour the first characters", async () => {
+  const { db, workspace } = await fixture();
+  const store = await SessionStore.open(db);
+  // 252..255 are skipped: 256 is not a multiple of the 36 characters.
+  drawn.bytes.push(Buffer.from([252, 253, 254, 255, 0, 1, 2, 3, 4, 5, 6]));
+  expect((await store.createSession(workspace)).publicId).toBe("0123456");
+  store.close();
+});
+
+test("a public id another session has is drawn again, not an error", async () => {
+  const { db, workspace } = await fixture();
+  const store = await SessionStore.open(db);
+  const first = Buffer.from([0, 1, 2, 3, 4, 5, 6]);
+  drawn.bytes.push(first);
+  const taken = await store.createSession(workspace);
+  drawn.bytes.push(first, first, Buffer.from([7, 8, 9, 10, 11, 12, 13]));
+  const next = await store.createSession(workspace);
+  expect(next.publicId).toBe("789abcd");
+  expect(next.publicId).not.toBe(taken.publicId);
+  // It gives up after a few collisions, with the database's own error.
+  drawn.bytes.push(...Array.from({ length: 5 }, () => first));
+  await expect(store.createSession(workspace)).rejects.toThrow("UNIQUE");
+  store.close();
+});
+
+test("a session is decoded once to load, and what it returns is the caller's own", async () => {
+  const { db, workspace } = await fixture();
+  const store = await SessionStore.open(db);
+  const created = await store.createSession(workspace, [
+    { role: "user", content: "hello" },
+  ]);
+  const parse = vi.spyOn(JSON, "parse");
+  try {
+    const loaded = await store.loadSession(created.publicId, workspace);
+    expect(parse).toHaveBeenCalledTimes(1);
+    (loaded.messages[0] as { content: string }).content = "changed";
+  } finally {
+    parse.mockRestore();
+  }
+  expect(
+    (await store.loadSession(created.publicId, workspace)).messages,
+  ).toEqual([{ role: "user", content: "hello" }]);
   store.close();
 });

@@ -113,6 +113,11 @@ export type Reconciliation = Readonly<{
 }>;
 
 const alphabet = "0123456789abcdefghijklmnopqrstuvwxyz";
+const PUBLIC_ID_LENGTH = 7;
+/** 252 = 7 * 36: the bytes below it map evenly onto the alphabet. */
+const PUBLIC_ID_BYTE_LIMIT = 252;
+/** How many ids createSession draws before it gives up on a collision. */
+const PUBLIC_ID_ATTEMPTS = 5;
 
 /**
  * A conversation that cannot grow: more messages than one request carries,
@@ -318,20 +323,34 @@ export class SessionStore {
     messages: SessionMessage[] = [],
   ): Promise<Session> {
     const workspaceId = await canonicalWorkspace(workspace);
-    validateMessages(messages);
-    const publicId = newPublicId();
-    const result = this.db
-      .query(
-        "INSERT INTO sessions(public_id, workspace_id, state_json) VALUES (?, ?, ?)",
-      )
-      .run(publicId, workspaceId, encodeMessages(messages));
-    return {
-      id: Number(result.lastInsertRowid),
-      publicId,
-      workspaceId,
-      messages: clone(messages),
-      revision: 0,
-    };
+    const encoded = encodeMessages(messages);
+    for (let attempt = 1; ; attempt++) {
+      const publicId = newPublicId();
+      try {
+        const result = this.db
+          .query(
+            "INSERT INTO sessions(public_id, workspace_id, state_json) VALUES (?, ?, ?)",
+          )
+          .run(publicId, workspaceId, encoded);
+        return {
+          id: Number(result.lastInsertRowid),
+          publicId,
+          workspaceId,
+          messages: decodeMessages(encoded),
+          revision: 0,
+        };
+      } catch (error) {
+        // Another session has this id: draw another rather than fail.
+        if (
+          attempt >= PUBLIC_ID_ATTEMPTS ||
+          !(error instanceof Error) ||
+          !error.message.includes(
+            "UNIQUE constraint failed: sessions.public_id",
+          )
+        )
+          throw error;
+      }
+    }
   }
 
   async listSessions(workspace: string): Promise<Session[]> {
@@ -799,23 +818,18 @@ export type ReconciliationRow = {
 };
 
 function readSessionRow(row: SessionRow): Session {
+  // Decoding builds new objects: the caller owns them, nothing to copy.
   const messages = decodeMessages(row.state_json);
   return {
     id: row.id,
     publicId: row.public_id,
     workspaceId: row.workspace_id,
-    messages: clone(messages),
+    messages,
     revision: row.revision,
   };
 }
-function clone(messages: SessionMessage[]): SessionMessage[] {
-  return decodeMessages(encodeMessages(messages));
-}
 async function canonicalWorkspace(workspace: string): Promise<string> {
   return realpath(workspace);
-}
-function validateMessages(messages: SessionMessage[]): void {
-  encodeMessages(messages);
 }
 function encodeMessages(messages: SessionMessage[]): string {
   const parsed = MessageSchema.array().parse(messages);
@@ -898,8 +912,15 @@ function decodeMessages(encoded: string): SessionMessage[] {
   return MessageSchema.array().parse(JSON.parse(encoded));
 }
 function newPublicId(): string {
-  const bytes = randomBytes(7);
-  return [...bytes].map((byte) => alphabet[byte % alphabet.length]).join("");
+  let id = "";
+  while (id.length < PUBLIC_ID_LENGTH)
+    for (const byte of randomBytes(PUBLIC_ID_LENGTH)) {
+      // A byte past the last whole multiple of the alphabet would make the
+      // first characters likelier than the rest: draw another.
+      if (byte < PUBLIC_ID_BYTE_LIMIT && id.length < PUBLIC_ID_LENGTH)
+        id += alphabet[byte % alphabet.length];
+    }
+  return id;
 }
 const EventSchema = z.strictObject({
   sessionId: z.number().int().positive(),

@@ -142,6 +142,9 @@ const proposalCwdIdentity = new WeakMap<object, CwdIdentity>();
 const proposalEnvironment = new WeakMap<object, NodeJS.ProcessEnv>();
 const consumedProposals = new WeakSet<object>();
 
+/** What `createCommandProposal` takes as `extraEnv`: host-driven diagnostics need HOME. */
+const EXTRA_ENV = new Set(["HOME"]);
+
 /**
  * Validates and canonicalizes a host-approved command proposal.
  * This does not decide whether a command is allowed; that decision belongs to
@@ -175,6 +178,11 @@ export async function createCommandProposal(
     throw new Error("Command timeout must be a positive safe integer");
   if (typeof cwd !== "string" || cwd.length === 0 || cwd.includes("\0"))
     throw new Error("Command cwd must be a non-empty path without NUL bytes");
+  // The host adds to the child's environment only what is listed: a name that
+  // loads code before main (LD_PRELOAD, NODE_OPTIONS, PATH) is not its to add.
+  for (const name of Object.keys(extraEnv ?? {}))
+    if (!EXTRA_ENV.has(name))
+      throw new Error(`Command environment variable ${name} is not allowed`);
 
   const canonicalCwd = await realpath(cwd);
   const info = await stat(canonicalCwd, { bigint: true });

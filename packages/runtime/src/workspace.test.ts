@@ -1,4 +1,4 @@
-import { fsyncSync } from "node:fs";
+import { chmodSync, fsyncSync, writeFileSync } from "node:fs";
 import {
   link,
   mkdir,
@@ -7,6 +7,7 @@ import {
   readFile,
   rename,
   rm,
+  stat,
   symlink,
   writeFile,
 } from "node:fs/promises";
@@ -19,7 +20,11 @@ import {
   secretPathsIn,
   Workspace,
 } from "#runtime/workspace";
-import { renameAt, unlinkAt } from "#runtime/workspace_native";
+import {
+  renameAt,
+  renameAtNoReplace,
+  unlinkAt,
+} from "#runtime/workspace_native";
 
 vi.mock("node:fs", async (importOriginal) => {
   const fs = await importOriginal<typeof import("node:fs")>();
@@ -31,6 +36,7 @@ vi.mock("#runtime/workspace_native", async (importOriginal) => {
   return {
     ...native,
     renameAt: vi.fn(native.renameAt),
+    renameAtNoReplace: vi.fn(native.renameAtNoReplace),
     unlinkAt: vi.fn(native.unlinkAt),
   };
 });
@@ -41,6 +47,7 @@ afterEach(async () => {
   // A queued failure a test did not reach must not reach the next test.
   vi.mocked(fsyncSync).mockReset();
   vi.mocked(renameAt).mockReset();
+  vi.mocked(renameAtNoReplace).mockReset();
   vi.mocked(unlinkAt).mockReset();
   for (const workspace of workspaces.splice(0)) workspace.close();
   for (const root of roots.splice(0))
@@ -100,7 +107,14 @@ test("rejects symlink entries and symlinked parents", async () => {
   await symlink(join(outside, "secret.txt"), join(root, "link.txt"));
   await symlink(outside, join(root, "linked-dir"));
   await expect(workspace.read("link.txt")).rejects.toThrow("symbolic links");
-  await expect(workspace.read("linked-dir/secret.txt")).rejects.toThrow();
+  // Refused for the link, not for a path that is simply not there.
+  await expect(workspace.read("linked-dir/secret.txt")).rejects.toMatchObject({
+    message: expect.stringContaining("symbolic links"),
+    code: "EACCES",
+  });
+  await expect(workspace.read("absent-dir/secret.txt")).rejects.toMatchObject({
+    code: "ENOENT",
+  });
 });
 
 test("rejects a parent replaced by a symlink before apply", async () => {
@@ -183,7 +197,7 @@ test("a cleanup that fails keeps the error that stopped the change, and names wh
 test("a write that could not be published changed nothing but the directories it made, and says so", async () => {
   const { root, workspace } = await fixture();
   const proposal = await workspace.prepareWrite("made/deep/new.txt", "x");
-  vi.mocked(renameAt).mockImplementationOnce(() => {
+  vi.mocked(renameAtNoReplace).mockImplementationOnce(() => {
     throw new Error("Workspace replacement could not be published");
   });
   const error = await workspace.applyWrite(proposal).catch((e: unknown) => e);
@@ -205,6 +219,42 @@ test("requires a workspace-issued proposal and consumes it after one apply", asy
   await expect(workspace.applyEdit(proposal)).rejects.toThrow(
     "issued by this workspace",
   );
+});
+
+test("an edit is applied only as an edit, and a write proposal is not consumed by trying", async () => {
+  const { root, workspace } = await fixture();
+  const write = await workspace.prepareWrite("notes.md", "rewritten\n");
+  await expect(workspace.applyEdit(write as never)).rejects.toThrow(
+    "Edit proposal was not issued by this workspace",
+  );
+  expect(await readFile(join(root, "notes.md"), "utf8")).toBe("before\nkeep\n");
+  // Refused, not spent: it still applies as the write it is.
+  await workspace.applyWrite(write);
+  expect(await readFile(join(root, "notes.md"), "utf8")).toBe("rewritten\n");
+});
+
+test("a new file is never published over one created in the last instant", async () => {
+  const { root, workspace } = await fixture();
+  const proposal = await workspace.prepareWrite("fresh/new.txt", "mine");
+  const native = await vi.importActual<
+    typeof import("#runtime/workspace_native")
+  >("#runtime/workspace_native");
+  // Someone creates the file after the last check and before the rename.
+  vi.mocked(renameAtNoReplace).mockImplementationOnce(
+    (parent, source, target) => {
+      writeFileSync(join(root, "fresh", "new.txt"), "theirs");
+      native.renameAtNoReplace(parent, source, target);
+    },
+  );
+  const error = await workspace.applyWrite(proposal).catch((e: unknown) => e);
+  expect(error).toBeInstanceOf(NotAppliedError);
+  expect(error).toHaveProperty(
+    "message",
+    expect.stringContaining("created since"),
+  );
+  expect(await readFile(join(root, "fresh", "new.txt"), "utf8")).toBe("theirs");
+  // The temporary file went with the failed write.
+  expect(await readdir(join(root, "fresh"))).toEqual(["new.txt"]);
 });
 
 test("supports literal deletion without replacement metacharacter expansion", async () => {
@@ -496,6 +546,16 @@ test("rejects any other absolute path and suggests the relative one when it is o
   await expect(workspace.read("/workspace/new/b.ts")).rejects.toThrow(
     'Use "new/b.ts"',
   );
+  // A secret under a system-looking name is not confirmed by the suggestion.
+  await mkdir(join(root, "tmp"));
+  await writeFile(join(root, "tmp", ".env"), "TOKEN=1");
+  await writeFile(join(root, "tmp", "plain.txt"), "x");
+  const secret = await workspace.read("/tmp/.env").catch((e: Error) => e);
+  expect((secret as Error).message).toContain("is outside it");
+  expect((secret as Error).message).not.toContain("Use ");
+  await expect(workspace.read("/tmp/plain.txt")).rejects.toThrow(
+    'Use "tmp/plain.txt"',
+  );
   const outside = await workspace.read("/etc/passwd").catch((e: Error) => e);
   expect((outside as Error).message).toContain("is outside it");
   expect((outside as Error).message).not.toContain("Use ");
@@ -665,6 +725,41 @@ test("search finds literal and regular-expression matches as path:line: text, wi
   expect(await workspace.search("s.ugify")).toBe("No matches");
 });
 
+test("a regex search takes \\| for an alternation, and \\\\| for a backslash then one", async () => {
+  const { root, workspace } = await fixture();
+  await writeFile(join(root, "paths.txt"), "dir\\file\nzzz\nplain\n");
+  const search = (pattern: string) =>
+    workspace.search(pattern, { regex: true, path: "paths.txt" });
+  expect(await search("plain\\|zzz")).toBe(
+    "paths.txt:2: zzz\npaths.txt:3: plain",
+  );
+  // A backslash, or "zzz": not the text "|zzz".
+  expect(await search("\\\\|zzz")).toBe(
+    "paths.txt:1: dir\\file\npaths.txt:2: zzz",
+  );
+  expect(await search("\\\\\\|plain")).toBe(
+    "paths.txt:1: dir\\file\npaths.txt:3: plain",
+  );
+});
+
+test("search says when it did not look: a line past the scan limit, a directory past the depth", async () => {
+  const { root, workspace } = await fixture();
+  await writeFile(join(root, "minified.js"), `${"x".repeat(2500)}needle\n`);
+  expect(await workspace.search("needle")).toBe(
+    "… 1 line past 2000 characters searched only up to there",
+  );
+  // A line that matches within the limit is a match, not a gap.
+  await writeFile(join(root, "minified.js"), `needle${"x".repeat(2500)}\n`);
+  expect(await workspace.search("needle")).not.toContain("searched only");
+  await rm(join(root, "minified.js"));
+  const deep = join(root, ...Array.from({ length: 34 }, () => "d"));
+  await mkdir(deep, { recursive: true });
+  await writeFile(join(deep, "end.txt"), "needle\n");
+  expect(await workspace.search("needle")).toBe(
+    "… directories deeper than 32 levels not searched",
+  );
+});
+
 test("search caps matches and long lines", async () => {
   const { root, workspace } = await fixture();
   await writeFile(
@@ -732,6 +827,25 @@ test("write creates a file (and its directories) after approval, with a diff of 
   await expect(workspace.applyWrite(proposal)).rejects.toThrow(
     "issued by this workspace",
   );
+});
+
+test.each([
+  ["0600", 0o600],
+  ["0755", 0o755],
+  ["0640", 0o640],
+])("an edit or a write keeps the file's mode %s", async (_name, mode) => {
+  const { root, workspace } = await fixture();
+  const file = join(root, "notes.md");
+  chmodSync(file, mode);
+  await workspace.applyEdit(
+    await workspace.prepareEdit("notes.md", "before", "edited"),
+  );
+  expect((await stat(file)).mode & 0o777).toBe(mode);
+  await workspace.applyWrite(
+    await workspace.prepareWrite("notes.md", "wrote\n"),
+  );
+  expect((await stat(file)).mode & 0o777).toBe(mode);
+  expect(await readFile(file, "utf8")).toBe("wrote\n");
 });
 
 test("write replaces an existing file with a diff, and refuses stale, racing, excluded, or identical writes", async () => {

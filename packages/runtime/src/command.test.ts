@@ -197,6 +197,45 @@ test("returns output after cleaning descendants that inherit its pipes", async (
   expect(result.output).toContain("final-result");
 });
 
+test("a host environment addition is HOME alone, never a variable that loads code", async () => {
+  const root = await temp();
+  for (const name of [
+    "LD_PRELOAD",
+    "DYLD_INSERT_LIBRARIES",
+    "NODE_OPTIONS",
+    "PATH",
+  ])
+    await expect(
+      createCommandProposal(["true"], root, 1000, { [name]: "x" }),
+    ).rejects.toThrow(`${name} is not allowed`);
+  const proposal = await createCommandProposal(
+    [process.execPath, "-e", "process.stdout.write(process.env.HOME ?? '')"],
+    root,
+    5000,
+    { HOME: "/host/home" },
+  );
+  const result = await executeApprovedCommand(
+    proposal,
+    new AbortController().signal,
+  );
+  expect(result.output).toBe("/host/home");
+});
+
+test("a program that does not exist rejects with ENOENT, and its proposal is spent", async () => {
+  const root = await temp();
+  const proposal = await createCommandProposal(
+    ["__no_such_program__"],
+    root,
+    1000,
+  );
+  await expect(
+    executeApprovedCommand(proposal, new AbortController().signal),
+  ).rejects.toMatchObject({ code: "ENOENT" });
+  await expect(
+    executeApprovedCommand(proposal, new AbortController().signal),
+  ).rejects.toThrow();
+});
+
 test("bounds drain when a detached grandchild escapes the process group", async () => {
   const root = await temp();
   let escapedPid = 0;
@@ -220,11 +259,12 @@ test("bounds drain when a detached grandchild escapes the process group", async 
       proposal,
       new AbortController().signal,
     );
+    // Before any assertion can fail: the finally below kills what it names.
+    escapedPid = Number(await readFile(join(root, "escaped.pid"), "utf8"));
     expect(Date.now() - started).toBeLessThan(1500);
     expect(result.exitCode).toBe(0);
     expect(result.output).toContain("leader-done");
     expect(result.cleanupIncomplete).toBe(true);
-    escapedPid = Number(await readFile(join(root, "escaped.pid"), "utf8"));
   } finally {
     if (escapedPid > 0) {
       try {

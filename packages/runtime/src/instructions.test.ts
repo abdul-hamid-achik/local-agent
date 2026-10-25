@@ -1,7 +1,7 @@
 import { mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { expect, test } from "vitest";
+import { expect, test, vi } from "vitest";
 import {
   availablePrograms,
   hostInstructions,
@@ -29,6 +29,33 @@ test("loads bounded project instructions and refuses unsafe sources", async () =
       "symbolic links",
     );
   } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("an AGENTS.md past the limit is refused before it is read, whatever the file limit", async () => {
+  const root = await mkdtemp(join(tmpdir(), "local-agent-instructions-"));
+  const decode = vi.spyOn(TextDecoder.prototype, "decode");
+  try {
+    using workspace = await Workspace.create(root);
+    // Under the 8 MiB a file may be, over the 64 KiB guidance may be.
+    for (const size of [5 * 1024 * 1024, 9 * 1024 * 1024]) {
+      await writeFile(join(root, "AGENTS.md"), "x".repeat(size));
+      decode.mockClear();
+      await expect(projectInstructions(workspace)).rejects.toThrow(
+        "AGENTS.md exceeds the 64 KiB instruction limit",
+      );
+      expect(decode).not.toHaveBeenCalled();
+    }
+    // The limit counts text: a BOM does not push a file at the limit over it.
+    await writeFile(join(root, "AGENTS.md"), `\ufeff${"x".repeat(64 * 1024)}`);
+    expect(await projectInstructions(workspace)).toContain("x".repeat(100));
+    await writeFile(join(root, "AGENTS.md"), "x".repeat(64 * 1024 + 1));
+    await expect(projectInstructions(workspace)).rejects.toThrow(
+      "instruction limit",
+    );
+  } finally {
+    decode.mockRestore();
     await rm(root, { recursive: true, force: true });
   }
 });
