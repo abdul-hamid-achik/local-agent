@@ -27,6 +27,7 @@ import {
 } from "@local-agent/vue-tui";
 import { defineComponent, h, nextTick, onUnmounted, ref } from "vue";
 import { approvalPreview, messageText, tokensPerSecond } from "#cli/preview";
+import { terminalLine } from "#cli/text";
 
 const messageSyntax = SyntaxStyle.fromStyles({
   default: { fg: "#d8dee9" },
@@ -214,7 +215,7 @@ export function createTerminalRoot(
             }
             if (event.type === "tool_result") {
               // The name is the model's: a tool it made up reaches here too.
-              status.value = terminalText(`${event.name}: ${event.status}`);
+              status.value = terminalLine(`${event.name}: ${event.status}`);
               if (mode === "inline")
                 process.stdout.write(`\n${status.value}\n`);
             }
@@ -288,7 +289,7 @@ export function createTerminalRoot(
                               message.role === "user"
                                 ? "You"
                                 : message.role === "tool"
-                                  ? `Tool · ${terminalText(message.tool_name ?? "result")}`
+                                  ? `Tool · ${terminalLine(message.tool_name ?? "result")}`
                                   : "Assistant",
                             ),
                             message.role === "assistant"

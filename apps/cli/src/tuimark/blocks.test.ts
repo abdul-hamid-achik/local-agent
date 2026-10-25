@@ -537,6 +537,16 @@ test("a card names its tool as a reader says it", () => {
   expect(toolTitle("cortex__status")).toBe("MCP · cortex · status");
   expect(toolTitle("custom")).toBe("custom");
   expect(toolTitle("bad\u001b[31mname")).toBe("badname");
+  // A name the model chose starts no line of its own: a line break or a tab
+  // in it is one space, on the card, its title and its receipt alike.
+  expect(toolTitle("probe\nforged\tname")).toBe("probe forged name");
+  const named: Message = {
+    role: "tool",
+    tool_name: "probe\nforged",
+    content: JSON.stringify({ status: "failed", output: "no such tool" }),
+  };
+  expect(new ViewBuilder().fromMessage(named)?.card.name).toBe("probe forged");
+  expect(new ViewBuilder().receiptOf(named)?.name).toBe("probe forged");
   // Only the table's own keys are titles, never what objects inherit.
   for (const name of ["constructor", "toString", "__proto__", "valueOf"])
     expect(toolTitle(name)).toBe(name);

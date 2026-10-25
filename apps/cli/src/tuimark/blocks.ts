@@ -22,7 +22,7 @@ import {
   type Message,
   type ToolCall,
 } from "@local-agent/runtime";
-import { terminalText } from "#cli/text";
+import { terminalLine, terminalText } from "#cli/text";
 import { goalNotice } from "#cli/tuimark/goal";
 
 // ---------------------------------------------------------------- text hygiene
@@ -1260,7 +1260,7 @@ const TOOL_TITLES: Record<string, string> = {
 
 /** A card's title: the built-in tool's word, `MCP · server · tool`, or the name as it came. */
 export function toolTitle(name: string): string {
-  const clean = clip(cleanText(name), 80);
+  const clean = clip(terminalLine(name), 80);
   // Own keys only: a model can name a tool `constructor` or `__proto__`.
   if (Object.hasOwn(TOOL_TITLES, name)) return TOOL_TITLES[name] as string;
   const parts = mcpParts(clean);
@@ -1621,7 +1621,7 @@ function toolCard(
   const running =
     state === "running" || state === "requested" || state === "approval";
   return {
-    name: clip(cleanText(name), 80),
+    name: clip(terminalLine(name), 80),
     title: toolTitle(name),
     status: STATE_LABEL[state],
     mark: running ? "" : state === "succeeded" ? "✓" : bad ? "✗" : "!",
@@ -1856,7 +1856,7 @@ export class ViewBuilder {
       .map((row) => row.text)
       .join("\n");
     return {
-      name: clip(cleanText(name), 80),
+      name: clip(terminalLine(name), 80),
       status: STATE_LABEL[state],
       args: callSummary(call),
       output: capDetailsOutput(

@@ -501,17 +501,20 @@ test("what shellWord shows, bash and zsh read back as the very argument", () => 
   ];
   // macOS ships bash 3.2 as /bin/bash and zsh as the login shell; zsh may
   // not be installed elsewhere.
-  const shells = [
+  const shells: [string, ...string[]][] = [
     ["bash", "-c"],
     ["/bin/bash", "-c"],
   ];
   try {
     execFileSync("zsh", ["-f", "-c", ":"]);
     shells.push(["zsh", "-f", "-c"]);
-  } catch {}
+  } catch (error) {
+    // Only a missing zsh is skipped; one that fails to start is a failure.
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
   for (const [shell, ...flags] of shells)
     for (const value of values) {
-      const read = execFileSync(shell as string, [
+      const read = execFileSync(shell, [
         ...flags,
         `printf %s ${shellWord(value)}`,
       ]);

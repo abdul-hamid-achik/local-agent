@@ -46,6 +46,22 @@ describe("renderMarkdown", () => {
     );
   });
 
+  test("an indented fence opens, and its lines lose as much indent as it had", () => {
+    expect(renderMarkdown("  ```js\n    x\n y\n  ```")).toBe(
+      '<pre><code data-lang="js">  x\ny</code></pre>',
+    );
+    // Spaces only: a tab is the line's own.
+    expect(renderMarkdown("  ```\n\tx\n  ```")).toBe(
+      "<pre><code>\tx</code></pre>",
+    );
+  });
+
+  test("a fence after a list item ends the list, then the block", () => {
+    expect(renderMarkdown("- one\n```\ncode\n```\n- two")).toBe(
+      "<ul><li>one</li></ul><pre><code>code</code></pre><ul><li>two</li></ul>",
+    );
+  });
+
   test("an open fence runs to the end, as a reply still streaming does", () => {
     expect(renderMarkdown("```py\nprint(1)")).toBe(
       '<pre><code data-lang="py">print(1)</code></pre>',

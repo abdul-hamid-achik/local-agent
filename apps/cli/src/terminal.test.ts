@@ -375,7 +375,8 @@ test.each([
   ["/help", "/mode plan|build|chat"],
   ["/mcp", "MCP servers: 0"],
   ["/mode banana", "Unknown mode: banana"],
-  // What was typed comes back in the status line without its sequences.
+  // A paste reaches the status line as the composer took it: without the
+  // sequences it carried.
   ["/mode a\u001b]0;pwned\u0007b", "Unknown mode: ab"],
   [
     "/theme dark",
@@ -489,9 +490,9 @@ test("a send past what a message holds stays in the composer", async () => {
 test.each(["fullscreen", "inline"] as const)(
   "a tool name the model chose reaches the %s screen without its escape sequences",
   async (mode) => {
-    // An OSC title sequence and a bell inside the name of a tool that does
-    // not exist: the run reports it as an error under that name.
-    const name = "probe\u001b]0;pwned\u0007\u001b[2Jtool";
+    // An OSC title sequence, a bell and a line break inside the name of a
+    // tool that does not exist: the run reports it as an error under that name.
+    const name = "probe\u001b]0;pwned\u0007\u001b[2Jtool\nforged";
     const server = Bun.serve({
       hostname: "127.0.0.1",
       port: 0,
@@ -577,8 +578,11 @@ test.each(["fullscreen", "inline"] as const)(
       shown = written + terminal.captureCharFrame();
     }
     expect(shown).toContain("finished");
+    // On one line: the break in the name is a space.
     expect(shown).toContain(
-      mode === "inline" ? "probetool: failed" : "Tool · probetool",
+      mode === "inline"
+        ? "\nprobetool forged: failed\n"
+        : "Tool · probetool forged",
     );
     expect(shown).not.toContain("pwned");
     // biome-ignore lint/suspicious/noControlCharactersInRegex: the screen must hold none

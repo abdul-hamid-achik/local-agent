@@ -219,8 +219,8 @@ function escaped(char: string): string {
   const known = ESCAPES[char];
   if (known) return known;
   if (!HIDDEN.test(char)) return char;
-  // Byte by byte, as UTF-8: every shell that reads $'…' reads \xHH, while
-  // \u and \U are past bash 3.2, the /bin/bash macOS ships.
+  // Byte by byte, as UTF-8: bash 3.2 (the /bin/bash macOS ships), bash 5
+  // and zsh all read \xHH, while \u and \U are past bash 3.2.
   return Array.from(
     UTF8.encode(char),
     (byte) => `\\x${byte.toString(16).padStart(2, "0")}`,
@@ -232,7 +232,8 @@ function escaped(char: string): string {
  * (nothing is run through a shell): bare when it needs no quoting, in single
  * quotes otherwise, and in ANSI-C quotes (`$'…'`, as bash and zsh read them)
  * when it holds a character that would not show as itself, which is then
- * written as its escape (its UTF-8 bytes, past ASCII). What an approval shows is what runs.
+ * written as its escape (its UTF-8 bytes, past ASCII). What an approval
+ * shows is what runs.
  */
 export function shellWord(argument: string): string {
   if (argument === "") return "''";

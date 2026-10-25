@@ -20,6 +20,7 @@ export function renderMarkdown(source: string): string {
   const out: string[] = [];
   let inCode = false;
   let codeFence = "";
+  let codeIndent = 0;
   let codeLang = "";
   let codeBuf: string[] = [];
   let listOpen = false;
@@ -45,9 +46,9 @@ export function renderMarkdown(source: string): string {
     // and the first word after them names its language. Only a bare fence
     // of the same kind and at least as long closes it, so a longer fence
     // holds a shorter one; an open block runs to the end.
-    const fence = line.match(/^ {0,3}(`{3,}|~{3,})(.*)$/);
-    const marks = fence?.[1] ?? "";
-    const info = fence?.[2] ?? "";
+    const fence = line.match(/^( {0,3})(`{3,}|~{3,})(.*)$/);
+    const marks = fence?.[2] ?? "";
+    const info = fence?.[3] ?? "";
     if (inCode) {
       if (
         marks[0] === codeFence[0] &&
@@ -55,7 +56,13 @@ export function renderMarkdown(source: string): string {
         !info.trim()
       )
         closeCode();
-      else codeBuf.push(line);
+      // A line loses as much of its indent as the opening fence had.
+      else
+        codeBuf.push(
+          line.slice(
+            Math.min(codeIndent, line.length - line.replace(/^ +/, "").length),
+          ),
+        );
       continue;
     }
     // Backticks after a backtick fence make the line inline code instead.
@@ -63,6 +70,7 @@ export function renderMarkdown(source: string): string {
       closeList();
       inCode = true;
       codeFence = marks;
+      codeIndent = fence?.[1]?.length ?? 0;
       codeLang = info.trim().split(/\s+/)[0] ?? "";
       continue;
     }

@@ -27,6 +27,8 @@ function contrast(a: string, b: string): number {
 }
 
 test("every text color reads at WCAG AA on every background", () => {
+  // One theme: a second :root (a light theme, say) needs checks of its own.
+  expect(css.match(/:root\s*\{/g)).toHaveLength(1);
   const backgrounds = ["bg", "bg-soft", "bg-raised", "bg-hover"];
   for (const text of ["text", "text-dim", "text-faint"])
     for (const background of backgrounds) {

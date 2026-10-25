@@ -10,3 +10,12 @@ export function terminalText(text: string): string {
     "",
   );
 }
+
+/**
+ * terminalText for a field that is one line, such as a tool name the model
+ * chose: a line break or a tab in it would start a line of its own, so each
+ * run of whitespace is one space.
+ */
+export function terminalLine(text: string): string {
+  return terminalText(text).replace(/\s+/g, " ").trim();
+}
