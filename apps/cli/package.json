@@ -1,6 +1,6 @@
 {
   "name": "@local-agent/cli",
-  "version": "0.50.2",
+  "version": "0.50.3",
   "private": true,
   "type": "module",
   "bin": {
