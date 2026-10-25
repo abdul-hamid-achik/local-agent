@@ -2910,6 +2910,7 @@ test("typing / opens the command popup; it filters, moves and completes", async 
     "/theme",
     "/mouse",
     "/copy",
+    "/compact",
     "/permissions",
     "/sandbox",
     "/details",
@@ -3125,6 +3126,7 @@ test("the help overlay's store carries the slash commands", () => {
     "/theme dark|light|auto",
     "/mouse on|off",
     "/copy [code]",
+    "/compact",
     "/permissions [clear|trust]",
     "/sandbox on|off",
     "/details [N]",
@@ -4384,6 +4386,135 @@ test("/diff follows the conversation: a new session starts with nothing changed"
   await client.idle();
   await ui.fire("send", "/diff");
   expect(store(ui).status).toBe("No changes in this session");
+});
+
+/** Two finished exchanges, each with a read result worth shortening. */
+function readExchanges(size = 5_000): Message[] {
+  return [0, 1].flatMap((i): Message[] => [
+    { role: "user", content: `question ${i}` },
+    {
+      role: "assistant",
+      content: "",
+      tool_calls: [
+        { id: `r${i}`, function: { name: "read", arguments: { path: "a" } } },
+      ],
+    },
+    {
+      role: "tool",
+      tool_name: "read",
+      tool_call_id: `r${i}`,
+      content: JSON.stringify({
+        status: "succeeded",
+        output: "x".repeat(size),
+      }),
+    },
+    { role: "assistant", content: `answer ${i}` },
+  ]);
+}
+
+/** A session whose store records what is saved, as the real one's CAS does. */
+function savingSession(messages: Message[], refuse?: string) {
+  const saved: Message[][] = [];
+  const session = {
+    store: {
+      path: "/w/sessions.db",
+      saveStateCAS: (
+        _id: number,
+        _workspace: string,
+        revision: number,
+        next: Message[],
+      ) => {
+        if (refuse) throw new Error(refuse);
+        saved.push(next);
+        return { ...session.state, revision: revision + 1, messages: next };
+      },
+    },
+    state: {
+      id: 1,
+      workspaceId: "w",
+      revision: 1,
+      publicId: "abc123",
+      messages,
+    },
+  } as unknown as SessionContext;
+  return { session, saved };
+}
+
+test("/compact shortens the conversation now, saves it, and the next turn is sent the short one", async () => {
+  const { session, saved } = savingSession(readExchanges());
+  const { ui, client, seen } = setup(reply("ok"), { session });
+  await ui.fire("send", "/compact");
+  expect(saved).toHaveLength(1);
+  expect(store(ui).status).toMatch(
+    /^Compacted: 2 messages shortened · 1[01]\.\d KiB → [\d.]+ KiB saved$/,
+  );
+  expect(store(ui).draft).toBe("");
+  // The saved state and the session's own copy are the shortened history.
+  expect(saved[0]?.[2]?.content).toContain(" elided ");
+  expect(saved[0]?.[6]?.content).toContain(" elided ");
+  expect(session.state.messages).toEqual(saved[0]);
+  // The transcript says what happened, as the automatic compaction does.
+  const notice = store(ui).messages.at(-1);
+  expect(notice && viewText(notice)).toContain(
+    "Context compacted: 2 earlier messages shortened",
+  );
+  await ui.fire("send", "go on");
+  await client.idle();
+  const sent = seen[0]?.messages ?? [];
+  expect(sent.filter((line) => line.includes(" elided "))).toHaveLength(2);
+  expect(sent.some((line) => line.includes("x".repeat(1_000)))).toBe(false);
+  expect(sent.at(-1)).toBe("user:go on");
+});
+
+test("/compact with nothing to shorten says so and saves nothing", async () => {
+  const { session, saved } = savingSession(readExchanges(10));
+  const { ui } = setup(reply("ok"), { session });
+  await ui.fire("send", "/compact");
+  expect(store(ui).status).toBe(
+    "Nothing to compact: no earlier tool results, images or reasoning to shorten",
+  );
+  expect(saved).toEqual([]);
+  // An empty, temporary conversation has nothing either.
+  const none = setup(reply("ok"));
+  await none.ui.fire("send", "/compact");
+  expect(store(none.ui).status).toBe(
+    "Nothing to compact: no earlier tool results, images or reasoning to shorten",
+  );
+});
+
+test("/compact is refused while a turn runs, and when the session refuses the save the history is kept", async () => {
+  const { session } = savingSession(readExchanges());
+  let release: () => void = () => {};
+  const gate = new Promise<void>((r) => {
+    release = r;
+  });
+  const { ui, client, seen } = setup(
+    async function* () {
+      await gate;
+      yield { type: "message", message: { role: "assistant", content: "ok" } };
+    },
+    { session },
+  );
+  await ui.fire("send", "work");
+  await ui.fire("send", "/compact");
+  expect(store(ui).status).toBe(BUSY_STATUS);
+  release();
+  await client.idle();
+  expect(session.state.messages).toEqual(readExchanges());
+
+  const refusing = savingSession(
+    readExchanges(),
+    "session state revision conflict",
+  );
+  const other = setup(reply("ok"), { session: refusing.session });
+  await other.ui.fire("send", "/compact");
+  expect(store(other.ui).status).toBe("session state revision conflict");
+  await other.ui.fire("send", "again");
+  await other.client.idle();
+  expect(
+    other.seen[0]?.messages.some((line) => line.includes(" elided ")),
+  ).toBe(false);
+  expect(seen).toHaveLength(1);
 });
 
 test("/provider asks the endpoint once, read-only, and opens the panel over its answer", async () => {

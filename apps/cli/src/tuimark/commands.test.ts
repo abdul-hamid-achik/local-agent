@@ -211,6 +211,7 @@ test("each palette row's hint runs the command its label names", () => {
     "permissions-clear": { clearGrants: true },
     "permissions-trust": { trustRules: "review" },
     details: { details: true },
+    compact: { compact: true },
     diff: { diffPanel: true },
     status: { statusPanel: true },
     provider: { providerPanel: true },
@@ -264,6 +265,20 @@ test("/details asks the controller for the viewer over the latest receipt", () =
   expect(slashMatches("/d")?.map((c) => c.name)).toEqual(["/details", "/diff"]);
 });
 
+test("/compact asks the controller to shorten the conversation now", () => {
+  expect(runSlash("/compact", state)).toEqual({
+    status: "Compacting the conversation…",
+    compact: true,
+  });
+  expect(runSlash("/COMPACT", state).compact).toBe(true);
+  // No argument: a stray one is a typo to fix, not a silent /compact.
+  expect(runSlash("/compact now", state).unknown).toBe(true);
+  expect(paletteCommand("compact")).toBe("/compact");
+  expect(filterPalette("compact").map((r) => r.id)).toEqual(["compact"]);
+  expect(HELP_STATUS).toContain("/compact");
+  expect(helpRows().map((r) => r.cmd)).toContain("/compact");
+});
+
 test("/diff asks the controller for the panel over what the session changed", () => {
   expect(runSlash("/diff", state)).toEqual({
     status: "Changes",
@@ -286,6 +301,7 @@ test("the slash catalog lists exactly the commands the parser knows", () => {
     "/theme",
     "/mouse",
     "/copy",
+    "/compact",
     "/permissions",
     "/sandbox",
     "/details",
@@ -341,6 +357,7 @@ test("the slash catalog lists exactly the commands the parser knows", () => {
     "/theme dark|light|auto",
     "/mouse on|off",
     "/copy [code]",
+    "/compact",
     "/permissions [clear|trust]",
     "/sandbox on|off",
     "/details [N]",
@@ -503,5 +520,9 @@ test("/copy and /copy code ask the controller for the last reply or its last cod
     "copy",
     "copy-code",
   ]);
-  expect(slashMatches("/co")?.map((c) => c.name)).toEqual(["/copy"]);
+  // /copy stays the first match of "/co": completing it does what it did.
+  expect(slashMatches("/co")?.map((c) => c.name)).toEqual([
+    "/copy",
+    "/compact",
+  ]);
 });

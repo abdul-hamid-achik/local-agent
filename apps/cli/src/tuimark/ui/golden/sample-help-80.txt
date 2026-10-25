@@ -7,6 +7,7 @@
 │ │  /theme dark|light|auto set the session theme                            │ ┃
 │ │  /mouse on|off toggle mouse reporting (fullscreen)                       │ ┃
 │ │  /copy [code] copy the last reply, or its last code block (ctrl+y)       │ ┃
+│ │  /compact shorten old tool results now, to free context                  │ ┃
 │ │  /permissions [clear|trust] show, clear or trust grants and rules        │ ┃
 │ │  /sandbox on|off run commands confined (macOS), without a card           │ ┃
 │ │  /details [N] show tool output N, or the last                            │ ┃
@@ -23,9 +24,8 @@
 │ │  enter       send · shift/alt+enter new line                             │ ┃
 │ │  shift-drag  select text (mouse reporting is on)                         │ ┃
 │ │  ^P          commands                                                    │ ┃
-│ │  esc         cancel the turn, and a running goal                         │ ┃
-└─│  ctrl+c      clear the draft, cancel, then quit                          │─┘
-╭─│  ↑/↓         history                                                     │─╮
-│ │  ↑           edit a queued message (empty draft)                         │ │
-╰─│  pgup/pgdn   scroll the transcript                                       │─╯
+└─│  esc         cancel the turn, and a running goal                         │─┘
+╭─│  ctrl+c      clear the draft, cancel, then quit                          │─╮
+│ │  ↑/↓         history                                                     │ │
+╰─│  ↑           edit a queued message (empty draft)                         │─╯
  b╰──────────────────────────────────────────────────────────────────────────╯  

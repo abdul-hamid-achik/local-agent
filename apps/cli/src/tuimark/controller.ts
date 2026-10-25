@@ -27,6 +27,7 @@ import {
   chalupaModelRefusal,
   clearRules,
   commandLine,
+  compactNow,
   type Disposition,
   evaluate,
   explicitContextNote,
@@ -141,6 +142,7 @@ import {
   armedStatus,
   CtxMeter,
   compactedNotice,
+  compactNowStatus,
   contextLabel,
   contextPct,
   ctxFlags,
@@ -159,6 +161,7 @@ import {
   mcpParts,
   NO_DETAILS_STATUS,
   NO_HEAD,
+  NOTHING_TO_COMPACT_STATUS,
   noApproval,
   noDetails,
   noPanel,
@@ -1544,6 +1547,55 @@ export class TuimarkClient {
     } finally {
       this.switching = false;
     }
+  }
+
+  /**
+   * `/compact`: the conversation is shortened now (the runtime's
+   * compaction, run on demand) and saved to the session. Refused while a
+   * turn runs, a send is queued, an approval is open or a session load is
+   * in flight, like `/model`: a running turn owns the history and the
+   * session's revision. It is synchronous from the check to the swap, so
+   * nothing can start in between. The client's history and the session
+   * change together (the runtime moves `session.state` itself); when the
+   * runtime refuses, neither does and the status says why.
+   */
+  private async compactConversation(): Promise<void> {
+    if (
+      this.switching ||
+      this.busy ||
+      this.proposal ||
+      this.queued !== undefined
+    ) {
+      await this.write([{ path: "status", value: BUSY_STATUS }]);
+      return;
+    }
+    let done: ReturnType<typeof compactNow>;
+    try {
+      done = compactNow(this.history, this.session);
+    } catch (error) {
+      await this.write([
+        {
+          path: "status",
+          value: oneLine(
+            error instanceof Error ? error.message : "Unable to compact",
+          ),
+        },
+      ]);
+      return;
+    }
+    if (done.elided === 0) {
+      await this.write([{ path: "status", value: NOTHING_TO_COMPACT_STATUS }]);
+      return;
+    }
+    this.history.splice(0, this.history.length, ...done.messages);
+    const view = this.builder.notice(
+      compactedNotice(done, this.provider.context_size),
+    );
+    this.transcript.push(view);
+    if (this.inline) await this.commitView(view);
+    await this.publishMessages([
+      { path: "status", value: compactNowStatus(done) },
+    ]);
   }
 
   /**
@@ -3265,6 +3317,10 @@ export class TuimarkClient {
     }
     if (outcome.newSession) {
       await this.newSession();
+      return;
+    }
+    if (outcome.compact) {
+      await this.compactConversation();
       return;
     }
     if (outcome.exportTranscript) {

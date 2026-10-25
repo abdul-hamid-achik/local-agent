@@ -21,6 +21,7 @@ export {
   toolReference,
 } from "#runtime/agent";
 export { commandLine, secretPathNotes, shellWord } from "#runtime/command";
+export { type CompactedNow, compactNow } from "#runtime/compact";
 export {
   chalupaModelRefusal,
   DEFAULT_OLLAMA_MODEL,

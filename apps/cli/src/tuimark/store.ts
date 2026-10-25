@@ -452,6 +452,26 @@ export function compactedNotice(
   return `Context compacted: ${event.elided} earlier message${event.elided === 1 ? "" : "s"} shortened, about ${tokens(event.tokensBefore)} → ${tokens(event.tokensAfter)} of ${tokens(size)} tokens. The model can run those tools again.`;
 }
 
+/** `/compact` when no image, read result or old reasoning is left to shorten. */
+export const NOTHING_TO_COMPACT_STATUS =
+  "Nothing to compact: no earlier tool results, images or reasoning to shorten";
+
+/** A saved size in the units a person reads (the conversation's JSON). */
+function savedSize(bytes: number): string {
+  if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
+  if (bytes >= 1024) return `${(bytes / 1024).toFixed(1)} KiB`;
+  return `${bytes} B`;
+}
+
+/** The status after `/compact` shortened the conversation: how much, of what size. */
+export function compactNowStatus(done: {
+  elided: number;
+  bytesBefore: number;
+  bytesAfter: number;
+}): string {
+  return `Compacted: ${done.elided} message${done.elided === 1 ? "" : "s"} shortened · ${savedSize(done.bytesBefore)} → ${savedSize(done.bytesAfter)} saved`;
+}
+
 /** The notice when requests start leaving more of the oldest messages out. */
 export function windowedNotice(event: { left: number; sent: number }): string {
   const some = (n: number) => (n === 1 ? "message" : `${n} messages`);

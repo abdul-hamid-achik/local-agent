@@ -37,7 +37,7 @@ screen.approving > #app > #liveregion { display: none; }
  * terminal gives the region all its rows, and the help's scroll takes what
  * is left. */
 .la-space-palette { height: 16; }
-.la-space-help { height: 40; }
+.la-space-help { height: 41; }
 
 /* A modal is centered on the region, so the region holds its spacer alone
  * while one is open: anything else would sit under the modal's edges. A

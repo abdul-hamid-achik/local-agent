@@ -5,7 +5,8 @@
 // removed: every message keeps its place, role and tool-call identity, so
 // the history stays one a session can resume.
 
-import type { Message } from "#runtime/schemas";
+import { type Message, MessageSchema } from "#runtime/schemas";
+import type { SessionContext } from "#runtime/session";
 
 /** Compaction starts when the prompt passes this share of the window... */
 export const COMPACT_HIGH = 0.7;
@@ -320,4 +321,75 @@ export function compactState(
       message.images !== history[index]?.images,
   ).length;
   return { messages, elided, before, after };
+}
+
+/** What `compactNow` did to a conversation. */
+export type CompactedNow = {
+  /** The whole new history; a copy of `history` when nothing could be shortened. */
+  messages: Message[];
+  /** Messages whose content, images or reasoning were shortened. */
+  elided: number;
+  /** The history's saved size (its JSON, in UTF-8 bytes), before and after. */
+  bytesBefore: number;
+  bytesAfter: number;
+  /** The prompt's size, estimated as `compacted` events estimate it. */
+  tokensBefore: number;
+  tokensAfter: number;
+};
+
+/**
+ * Shortens a conversation now, on the caller's word, rather than when a
+ * request nears the window: everything compaction frees (images, results
+ * the model has read, old reasoning), from the start, keeping the current
+ * work whole (compactHistory). With `session`, the shortened history is
+ * saved to it at once (compare-and-swap, as a turn's checkpoint is) and
+ * `session.state` becomes the saved state, so the next turn finds the
+ * client's copy and the durable one the same. Nothing is saved when
+ * nothing can be shortened. Call it only between turns: a running turn
+ * owns the session.
+ *
+ * Throws, saving nothing, when `history` does not extend the session's
+ * saved messages (the caller's copy is not the session's) or the save is
+ * refused (another writer moved the session on).
+ */
+export function compactNow(
+  given: readonly Message[],
+  session?: SessionContext,
+): CompactedNow {
+  // As a turn reads it (runAgent), so the same copy compares equal to the
+  // saved state whatever order its fields were built in.
+  const history = MessageSchema.array().parse(given);
+  const { messages, elided, before, after } = compactState(history, 0, 0);
+  const estimate = (list: readonly Message[]) =>
+    Math.round(promptChars(list) / CHARS_PER_TOKEN);
+  if (elided === 0)
+    return {
+      messages: history.slice(),
+      elided: 0,
+      bytesBefore: before,
+      bytesAfter: before,
+      tokensBefore: estimate(history),
+      tokensAfter: estimate(history),
+    };
+  if (session) {
+    const saved = MessageSchema.array().parse(session.state.messages);
+    if (
+      JSON.stringify(history.slice(0, saved.length)) !== JSON.stringify(saved)
+    )
+      throw new Error("Session history differs from its durable state");
+    session.state = session.store.saveStateCAS(
+      session.state.id,
+      session.state.workspaceId,
+      session.state.revision,
+      messages,
+    );
+  }
+  return {
+    messages,
+    elided,
+    bytesBefore: before,
+    bytesAfter: after,
+    tokensBefore: estimate(history),
+    tokensAfter: estimate(messages),
+  };
 }

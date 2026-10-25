@@ -78,6 +78,11 @@ export interface CommandOutcome {
    * owns the receipts, so it writes the real status itself.
    */
   details?: true | number;
+  /**
+   * Set by `/compact`: shorten the conversation now. The controller owns
+   * the history and the session, so it writes the real status itself.
+   */
+  compact?: true;
   /** Set by `/diff`: open the panel over what this session changed. */
   diffPanel?: boolean;
   /** Set by `/status`: open the panel over the effective config. */
@@ -117,7 +122,7 @@ export interface CommandOutcome {
 }
 
 export const HELP_STATUS =
-  "/mode plan|build|chat · /model [NAME] · /theme dark|light|auto · /mouse on|off · /copy [code] · /permissions [clear|trust] · /sandbox on|off · /details [N] · /diff · /status · /sessions · /recover · /find TEXT · /export [json] · /mcp · /goal OBJECTIVE · /help · esc cancel · ctrl+c exit";
+  "/mode plan|build|chat · /model [NAME] · /theme dark|light|auto · /mouse on|off · /copy [code] · /compact · /permissions [clear|trust] · /sandbox on|off · /details [N] · /diff · /status · /sessions · /recover · /find TEXT · /export [json] · /mcp · /goal OBJECTIVE · /help · esc cancel · ctrl+c exit";
 
 /** Inline has no mouse (the engine ignores it there): the controller refuses with this. */
 export const MOUSE_INLINE_STATUS = "Mouse is not available in inline mode";
@@ -268,6 +273,8 @@ export function runSlash(text: string, state: CommandState): CommandOutcome {
       };
     return { status: `Tool output ${wanted}`, details: Number(wanted) };
   }
+  if (name === "/compact")
+    return { status: "Compacting the conversation…", compact: true };
   if (name === "/diff") return { status: "Changes", diffPanel: true };
   if (name === "/status") return { status: "Status", statusPanel: true };
   if (name === "/provider")
@@ -414,6 +421,12 @@ export const SLASH_COMMANDS: readonly SlashCommand[] = [
     usage: "/copy [code]",
     description: "copy the last reply, or its last code block (ctrl+y)",
     insert: "/copy",
+  },
+  {
+    name: "/compact",
+    usage: "/compact",
+    description: "shorten old tool results now, to free context",
+    insert: "/compact",
   },
   {
     name: "/permissions",
@@ -578,6 +591,11 @@ export const PALETTE: readonly PaletteItem[] = [
   { id: "mouse-off", label: "Mouse: off", hint: "/mouse off" },
   { id: "copy", label: "Copy: the last reply", hint: "/copy" },
   { id: "copy-code", label: "Copy: its last code block", hint: "/copy code" },
+  {
+    id: "compact",
+    label: "Compact: shorten old tool results",
+    hint: "/compact",
+  },
   { id: "permissions", label: "Permissions: show", hint: "/permissions" },
   {
     id: "permissions-clear",

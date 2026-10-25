@@ -163,6 +163,11 @@
         "desc": "copy the last reply, or its last code block (ctrl+y)"
       },
       {
+        "id": "/compact",
+        "cmd": "/compact",
+        "desc": "shorten old tool results now, to free context"
+      },
+      {
         "id": "/permissions",
         "cmd": "/permissions [clear|trust]",
         "desc": "show, clear or trust grants and rules"

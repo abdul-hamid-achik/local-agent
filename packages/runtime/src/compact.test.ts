@@ -6,6 +6,7 @@ import { type AgentEvent, runAgent, sessionProblem } from "#runtime/agent";
 import {
   carriedTodo,
   compactHistory,
+  compactNow,
   compactState,
   latestTodo,
   promptChars,
@@ -615,4 +616,138 @@ test("a carried todo list keeps what is in progress and the first pending items,
   expect(carriedTodo(list(["- [x] done", "1 todos: 1 done"]), 1_000)).toBe(
     undefined,
   );
+});
+
+test("compactNow shortens everything the model has read, whatever the state weighs, and says by how much", () => {
+  const history = exchanges(6, 5_000, 2_000);
+  expect(stateBytes(history)).toBeLessThan(STATE_SOFT_BYTES);
+  const done = compactNow(history);
+  // Every earlier result and image goes; the current question stays whole.
+  expect(done.elided).toBe(6);
+  expect(done.messages).toHaveLength(history.length);
+  expect(done.messages.at(-1)).toEqual(history.at(-1));
+  for (const index of [2, 6, 10, 14, 18, 22]) {
+    expect(done.messages[index]?.content).toContain(" elided ");
+    expect(done.messages[index]?.images).toBeUndefined();
+  }
+  expect(done.bytesBefore).toBe(stateBytes(history));
+  expect(done.bytesAfter).toBe(stateBytes(done.messages));
+  expect(done.bytesAfter).toBeLessThan(done.bytesBefore / 4);
+  expect(done.tokensAfter).toBeLessThan(done.tokensBefore);
+  // The caller's history is not changed; a second pass finds nothing.
+  expect(history[2]?.content).not.toContain(" elided ");
+  const again = compactNow(done.messages);
+  expect(again.elided).toBe(0);
+  expect(again.bytesAfter).toBe(again.bytesBefore);
+  expect(again.messages).toEqual(done.messages);
+});
+
+test("compactNow with a session saves the shortened history, and the next turn runs on it", async () => {
+  const root = await mkdtemp(join(tmpdir(), "local-agent-compact-now-"));
+  using workspace = await Workspace.create(root);
+  const store = await SessionStore.open(join(root, "session.sqlite"));
+  const { server, bodies } = ollama(["done"]);
+  try {
+    const created = await store.createSession(root);
+    const history = exchanges(4, 5_000);
+    const session = {
+      store,
+      state: store.saveStateCAS(
+        created.id,
+        created.workspaceId,
+        created.revision,
+        history,
+      ),
+    };
+    const before = session.state.revision;
+    const done = compactNow(history, session);
+    expect(done.elided).toBe(4);
+    expect(session.state.revision).toBeGreaterThan(before);
+    expect(session.state.messages).toEqual(done.messages);
+    const stored = await store.loadSession(session.state.publicId, root);
+    expect(stored.messages).toEqual(done.messages);
+    expect(sessionProblem(store, stored)).toBeUndefined();
+
+    // The client's copy is now the saved one: a turn accepts it, and the
+    // provider is sent the short notes, not the results.
+    const provider = resolveProvider(
+      { OLLAMA_HOST: server.url.origin },
+      "fixture",
+      { context: "8192" },
+    );
+    const events: AgentEvent[] = [];
+    for await (const event of runAgent(provider, done.messages, {
+      workspace,
+      session,
+      intent: "plan",
+      signal: AbortSignal.timeout(10_000),
+      approve: async () => true,
+      compact: true,
+    }))
+      events.push(event);
+    expect(events.at(-1)?.type).toBe("turn_complete");
+    const sent = bodies[0]?.messages ?? [];
+    expect(sent.some((message) => message.content.includes(" elided "))).toBe(
+      true,
+    );
+    expect(
+      sent.some((message) => message.content.includes("x".repeat(1_000))),
+    ).toBe(false);
+  } finally {
+    await server.stop(true);
+    store.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("compactNow saves nothing when nothing can be shortened, the copy is not the session's, or the session moved on", async () => {
+  const root = await mkdtemp(join(tmpdir(), "local-agent-compact-now-"));
+  const store = await SessionStore.open(join(root, "session.sqlite"));
+  try {
+    const created = await store.createSession(root);
+    const short = exchanges(2, 10);
+    const first = store.saveStateCAS(
+      created.id,
+      created.workspaceId,
+      created.revision,
+      short,
+    );
+    // Nothing to shorten: the revision stays.
+    const quiet = { store, state: first };
+    expect(compactNow(short, quiet).elided).toBe(0);
+    expect(quiet.state.revision).toBe(first.revision);
+
+    // A copy that is not the session's is refused, the session untouched.
+    expect(() => compactNow(exchanges(2, 5_000), quiet)).toThrow(
+      "Session history differs from its durable state",
+    );
+    expect(quiet.state.revision).toBe(first.revision);
+
+    // Another writer moved the session on: the save is refused, and so is
+    // the stale copy's change of state.
+    const big = exchanges(2, 5_000);
+    const stale = {
+      store,
+      state: store.saveStateCAS(
+        first.id,
+        first.workspaceId,
+        first.revision,
+        big,
+      ),
+    };
+    const moved = store.saveStateCAS(
+      stale.state.id,
+      stale.state.workspaceId,
+      stale.state.revision,
+      big,
+    );
+    expect(() => compactNow(big, stale)).toThrow();
+    expect(stale.state.revision).toBeLessThan(moved.revision);
+    const stored = await store.loadSession(moved.publicId, root);
+    expect(stored.revision).toBe(moved.revision);
+    expect(stored.messages).toEqual(big);
+  } finally {
+    store.close();
+    await rm(root, { recursive: true, force: true });
+  }
 });

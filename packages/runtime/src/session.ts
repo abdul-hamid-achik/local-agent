@@ -55,6 +55,9 @@ export type Session = Readonly<{
   messages: SessionMessage[];
   revision: number;
 }>;
+
+/** A session store and the session a run reads and saves. */
+export type SessionContext = { store: SessionStore; state: Session };
 /** A session without its transcript, for listings. */
 export type SessionSummary = Readonly<{
   id: number;

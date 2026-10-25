@@ -159,6 +159,11 @@
         "hint": "/copy code"
       },
       {
+        "id": "compact",
+        "label": "Compact: shorten old tool results",
+        "hint": "/compact"
+      },
+      {
         "id": "permissions",
         "label": "Permissions: show",
         "hint": "/permissions"
@@ -281,6 +286,11 @@
         "id": "/copy",
         "cmd": "/copy [code]",
         "desc": "copy the last reply, or its last code block (ctrl+y)"
+      },
+      {
+        "id": "/compact",
+        "cmd": "/compact",
+        "desc": "shorten old tool results now, to free context"
       },
       {
         "id": "/permissions",

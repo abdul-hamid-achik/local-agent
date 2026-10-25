@@ -47,6 +47,7 @@ import {
   type ExecutionEvent,
   resultThatFits,
   type Session,
+  type SessionContext,
   type SessionStore,
 } from "#runtime/session";
 import { chat, INVALID_ARGUMENTS } from "#runtime/transport";
@@ -1766,7 +1767,7 @@ export type AgentEvent =
     }
   | { type: "turn_complete"; messages: Message[] };
 
-export type SessionContext = { store: SessionStore; state: Session };
+export type { SessionContext };
 
 export type Approval = boolean | "sandbox";
 
