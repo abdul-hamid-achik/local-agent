@@ -1,0 +1,45 @@
+/*
+ * themes/dracula.tcss: a named palette adapted from Dracula
+ * (https://spec.draculatheme.com, MIT). The raised and selected surfaces
+ * blend the background toward Selection (#44475a), which itself is the
+ * border; muted blends Foreground toward Comment.
+ *
+ * Loaded last (after app.tcss) by the document --theme generates, so its
+ * :root tokens re-declare the kit's and app.tcss's. Tokens only: no rules,
+ * no @import. The host is pinned to dark for a named theme.
+ *
+ * Every text token reads at WCAG AA (4.5:1) on bg, panel, raised and
+ * sel, and fg, muted and subtle stay a visible step apart on bg. To get
+ * there, these source colors moved along their own hue:
+ *   --subtle  #6272a4 -> #90a2d7  (comment)
+ *   --danger  #ff6e6e -> #ff7a78  (bright_red)
+ *   --com     #6272a4 -> #90a2d7  (comment)
+ */
+:root {
+  --bg: #282a36;
+  --fg: #f8f8f2;
+  --muted: #b4bccf;
+  --subtle: #90a2d7;
+  --border: #44475a;
+  --panel: #21222c;
+  --raised: #333644;
+  --accent: #bd93f9;
+  --focus: #bd93f9;
+  --ok: #50fa7b;
+  --warn: #ffb86c;
+  --danger: #ff7a78;
+  --info: #8be9fd;
+  --sel: #363848;
+  --on-accent: #282a36;
+  --on-ok: #282a36;
+  --on-warn: #282a36;
+  --on-danger: #282a36;
+  --code: #50fa7b;
+
+  --kw: #ff79c6;
+  --str: #f1fa8c;
+  --num: #bd93f9;
+  --com: #90a2d7;
+  --user: #8be9fd;
+  --tool: #ffb86c;
+}

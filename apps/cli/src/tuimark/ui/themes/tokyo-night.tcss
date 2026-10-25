@@ -1,0 +1,45 @@
+/*
+ * themes/tokyo-night.tcss: a named palette adapted from Tokyo Night Night
+ * (https://github.com/folke/tokyonight.nvim, Apache-2.0). midnight is the
+ * client's own darker variant of these colors; this one keeps the source
+ * backgrounds.
+ *
+ * Loaded last (after app.tcss) by the document --theme generates, so its
+ * :root tokens re-declare the kit's and app.tcss's. Tokens only: no rules,
+ * no @import. The host is pinned to dark for a named theme.
+ *
+ * Every text token reads at WCAG AA (4.5:1) on bg, panel, raised and
+ * sel, and fg, muted and subtle stay a visible step apart on bg. To get
+ * there, these source colors moved along their own hue:
+ *   --subtle  #737aa2 -> #8e95bf  (dark5)
+ *   --kw      #9d7cd8 -> #a786e3  (purple)
+ *   --com     #737aa2 -> #8e95bf  (dark5)
+ */
+:root {
+  --bg: #1a1b26;
+  --fg: #c0caf5;
+  --muted: #a9b1d6;
+  --subtle: #8e95bf;
+  --border: #3b4261;
+  --panel: #16161e;
+  --raised: #292e42;
+  --accent: #7aa2f7;
+  --focus: #7aa2f7;
+  --ok: #9ece6a;
+  --warn: #e0af68;
+  --danger: #f7768e;
+  --info: #7dcfff;
+  --sel: #292e42;
+  --on-accent: #1a1b26;
+  --on-ok: #1a1b26;
+  --on-warn: #1a1b26;
+  --on-danger: #1a1b26;
+  --code: #bb9af7;
+
+  --kw: #a786e3;
+  --str: #9ece6a;
+  --num: #ff9e64;
+  --com: #8e95bf;
+  --user: #73daca;
+  --tool: #e0af68;
+}

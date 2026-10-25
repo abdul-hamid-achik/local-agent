@@ -1,0 +1,46 @@
+/*
+ * themes/catppuccin-frappe.tcss: a named palette adapted from Catppuccin
+ * Frappé (https://github.com/catppuccin/palette, MIT). The raised and
+ * selected surfaces blend base toward surface0, kept near base
+ * so the text colors keep their own values.
+ *
+ * Loaded last (after app.tcss) by the document --theme generates, so its
+ * :root tokens re-declare the kit's and app.tcss's. Tokens only: no rules,
+ * no @import. The host is pinned to dark for a named theme.
+ *
+ * Every text token reads at WCAG AA (4.5:1) on bg, panel, raised and
+ * sel, and fg, muted and subtle stay a visible step apart on bg. To get
+ * there, these source colors moved along their own hue:
+ *   --muted   #a5adce -> #acb5d6  (subtext0)
+ *   --subtle  #949cbb -> #a4accc  (overlay2)
+ *   --danger  #e78284 -> #f79092  (red)
+ *   --com     #949cbb -> #a4accc  (overlay2)
+ */
+:root {
+  --bg: #303446;
+  --fg: #c6d0f5;
+  --muted: #acb5d6;
+  --subtle: #a4accc;
+  --border: #51576d;
+  --panel: #292c3c;
+  --raised: #383c50;
+  --accent: #ca9ee6;
+  --focus: #ca9ee6;
+  --ok: #a6d189;
+  --warn: #e5c890;
+  --danger: #f79092;
+  --info: #99d1db;
+  --sel: #3c4053;
+  --on-accent: #303446;
+  --on-ok: #303446;
+  --on-warn: #303446;
+  --on-danger: #303446;
+  --code: #f4b8e4;
+
+  --kw: #ca9ee6;
+  --str: #a6d189;
+  --num: #ef9f76;
+  --com: #a4accc;
+  --user: #81c8be;
+  --tool: #e5c890;
+}

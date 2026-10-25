@@ -1,0 +1,44 @@
+/*
+ * themes/kanagawa.tcss: a named palette adapted from Kanagawa Wave
+ * (https://github.com/rebelot/kanagawa.nvim, MIT).
+ *
+ * Loaded last (after app.tcss) by the document --theme generates, so its
+ * :root tokens re-declare the kit's and app.tcss's. Tokens only: no rules,
+ * no @import. The host is pinned to dark for a named theme.
+ *
+ * Every text token reads at WCAG AA (4.5:1) on bg, panel, raised and
+ * sel, and fg, muted and subtle stay a visible step apart on bg. To get
+ * there, these source colors moved along their own hue:
+ *   --subtle  #938aa9 -> #978ead  (springViolet1)
+ *   --danger  #e46876 -> #e76b78  (waveRed)
+ *   --kw      #957fb8 -> #9f89c2  (oniViolet)
+ *   --com     #727169 -> #94938a  (fujiGray)
+ */
+:root {
+  --bg: #1f1f28;
+  --fg: #dcd7ba;
+  --muted: #c8c093;
+  --subtle: #978ead;
+  --border: #54546d;
+  --panel: #181820;
+  --raised: #2a2a37;
+  --accent: #7e9cd8;
+  --focus: #7e9cd8;
+  --ok: #98bb6c;
+  --warn: #ff9e3b;
+  --danger: #e76b78;
+  --info: #7fb4ca;
+  --sel: #2a2a37;
+  --on-accent: #1f1f28;
+  --on-ok: #1f1f28;
+  --on-warn: #1f1f28;
+  --on-danger: #1f1f28;
+  --code: #ffa066;
+
+  --kw: #9f89c2;
+  --str: #98bb6c;
+  --num: #d27e99;
+  --com: #94938a;
+  --user: #7aa89f;
+  --tool: #e6c384;
+}

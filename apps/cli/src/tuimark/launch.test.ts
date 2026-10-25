@@ -682,7 +682,7 @@ test("an unknown --theme name is refused with the themes that exist", async () =
       "solarized",
     ),
   ).rejects.toThrow(
-    /Unknown theme: solarized. Available themes: dark, light, auto, midnight, sepia/,
+    /^Unknown theme: solarized\. Available themes: dark, light, auto, catppuccin-frappe, .*, midnight, .*, sepia, tokyo-night, tokyo-night-storm$/,
   );
 });
 

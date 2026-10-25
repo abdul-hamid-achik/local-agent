@@ -1,0 +1,46 @@
+/*
+ * themes/one-dark.tcss: a named palette adapted from One Dark, as
+ * onedark.nvim gives it (https://github.com/navarasu/onedark.nvim, MIT).
+ * Raised and selected surfaces blend bg0 toward bg1; muted blends fg
+ * toward light_grey.
+ *
+ * Loaded last (after app.tcss) by the document --theme generates, so its
+ * :root tokens re-declare the kit's and app.tcss's. Tokens only: no rules,
+ * no @import. The host is pinned to dark for a named theme.
+ *
+ * Every text token reads at WCAG AA (4.5:1) on bg, panel, raised and
+ * sel, and fg, muted and subtle stay a visible step apart on bg. To get
+ * there, these source colors moved along their own hue:
+ *   --subtle  #848b98 -> #929aa7  (light_grey)
+ *   --danger  #e86671 -> #f3707a  (red)
+ *   --kw      #c678dd -> #c97be0  (purple)
+ *   --com     #5c6370 -> #929aa8  (grey)
+ */
+:root {
+  --bg: #282c34;
+  --fg: #abb2bf;
+  --muted: #9ba2af;
+  --subtle: #929aa7;
+  --border: #3b3f4c;
+  --panel: #21252b;
+  --raised: #2d313b;
+  --accent: #61afef;
+  --focus: #61afef;
+  --ok: #98c379;
+  --warn: #e5c07b;
+  --danger: #f3707a;
+  --info: #56b6c2;
+  --sel: #2d313b;
+  --on-accent: #282c34;
+  --on-ok: #282c34;
+  --on-warn: #282c34;
+  --on-danger: #282c34;
+  --code: #d19a66;
+
+  --kw: #c97be0;
+  --str: #98c379;
+  --num: #d19a66;
+  --com: #929aa8;
+  --user: #56b6c2;
+  --tool: #e5c07b;
+}

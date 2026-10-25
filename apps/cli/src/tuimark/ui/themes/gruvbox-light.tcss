@@ -1,0 +1,53 @@
+/*
+ * themes/gruvbox-light.tcss: a named palette adapted from gruvbox light
+ * (https://github.com/morhetz/gruvbox, MIT), text in its faded colors.
+ *
+ * Loaded last (after app.tcss) by the document --theme generates, so its
+ * :root tokens re-declare the kit's and app.tcss's. Tokens only: no rules,
+ * no @import. The host is pinned to dark for a named theme, so the light
+ * variants of theme.tcss and app.tcss never fire; this palette carries
+ * its own light values instead.
+ *
+ * Every text token reads at WCAG AA (4.5:1) on bg, panel, raised and
+ * sel, and fg, muted and subtle stay a visible step apart on bg. To get
+ * there, these source colors moved along their own hue:
+ *   --muted   #665c54 -> #625850  (dark3)
+ *   --subtle  #7c6f64 -> #6b5e54  (dark4)
+ *   --accent  #af3a03 -> #ad3800  (faded_orange)
+ *   --focus   #af3a03 -> #ad3800  (faded_orange)
+ *   --ok      #79740e -> #676200  (faded_green)
+ *   --warn    #b57614 -> #875500  (faded_yellow)
+ *   --code    #427b58 -> #326b49  (faded_aqua)
+ *   --str     #79740e -> #676200  (faded_green)
+ *   --com     #928374 -> #6c5e50  (gray)
+ *   --user    #427b58 -> #326b49  (faded_aqua)
+ *   --tool    #b57614 -> #875500  (faded_yellow)
+ */
+:root {
+  --bg: #fbf1c7;
+  --fg: #3c3836;
+  --muted: #625850;
+  --subtle: #6b5e54;
+  --border: #d5c4a1;
+  --panel: #f2e5bc;
+  --raised: #ebdbb2;
+  --accent: #ad3800;
+  --focus: #ad3800;
+  --ok: #676200;
+  --warn: #875500;
+  --danger: #9d0006;
+  --info: #076678;
+  --sel: #f2e5bc;
+  --on-accent: #fbf1c7;
+  --on-ok: #fbf1c7;
+  --on-warn: #fbf1c7;
+  --on-danger: #fbf1c7;
+  --code: #326b49;
+
+  --kw: #9d0006;
+  --str: #676200;
+  --num: #8f3f71;
+  --com: #6c5e50;
+  --user: #326b49;
+  --tool: #875500;
+}

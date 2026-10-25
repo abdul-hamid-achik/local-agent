@@ -1,0 +1,43 @@
+/*
+ * themes/gruvbox-dark.tcss: a named palette adapted from gruvbox dark
+ * (https://github.com/morhetz/gruvbox, MIT), text in its bright colors.
+ *
+ * Loaded last (after app.tcss) by the document --theme generates, so its
+ * :root tokens re-declare the kit's and app.tcss's. Tokens only: no rules,
+ * no @import. The host is pinned to dark for a named theme.
+ *
+ * Every text token reads at WCAG AA (4.5:1) on bg, panel, raised and
+ * sel, and fg, muted and subtle stay a visible step apart on bg. To get
+ * there, these source colors moved along their own hue:
+ *   --danger  #fb4934 -> #ff6853  (bright_red)
+ *   --kw      #fb4934 -> #ff6853  (bright_red)
+ *   --com     #928374 -> #a59686  (gray)
+ */
+:root {
+  --bg: #282828;
+  --fg: #ebdbb2;
+  --muted: #bdae93;
+  --subtle: #a89984;
+  --border: #504945;
+  --panel: #32302f;
+  --raised: #32302f;
+  --accent: #fe8019;
+  --focus: #fe8019;
+  --ok: #b8bb26;
+  --warn: #fabd2f;
+  --danger: #ff6853;
+  --info: #83a598;
+  --sel: #32302f;
+  --on-accent: #282828;
+  --on-ok: #282828;
+  --on-warn: #282828;
+  --on-danger: #282828;
+  --code: #8ec07c;
+
+  --kw: #ff6853;
+  --str: #b8bb26;
+  --num: #d3869b;
+  --com: #a59686;
+  --user: #8ec07c;
+  --tool: #fabd2f;
+}

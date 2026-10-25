@@ -137,8 +137,10 @@ bun dev [--model MODEL (default: ${DEFAULT_OLLAMA_MODEL})] [--mode fullscreen|in
                        scrollback; a bare --mode inline still uses vue. It runs the
                        tuimark binary from TUIMARK_BINARY, or downloads the release
   --theme NAME         Tuimark palette at launch: dark, light or auto, or a
-                       named theme from the client's ui/themes folder (the
-                       bundled ones: midnight, sepia)
+                       named theme from the client's ui/themes folder:
+                       midnight, sepia, catppuccin-mocha, tokyo-night, nord,
+                       dracula, rose-pine, gruvbox-dark and more (an unknown
+                       name lists them all)
   --workspace PATH     Workspace root (default: current directory)
   --intent plan|build|chat  Plan forbids edits and commands; chat is conversational (research
                        only); build asks before acting

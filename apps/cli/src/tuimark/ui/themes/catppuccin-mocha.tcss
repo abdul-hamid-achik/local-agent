@@ -1,0 +1,38 @@
+/*
+ * themes/catppuccin-mocha.tcss: a named palette adapted from Catppuccin
+ * Mocha (https://github.com/catppuccin/palette, MIT). The raised and
+ * selected surfaces blend base toward surface0, kept near base
+ * so the text colors keep their own values.
+ *
+ * Loaded last (after app.tcss) by the document --theme generates, so its
+ * :root tokens re-declare the kit's and app.tcss's. Tokens only: no rules,
+ * no @import. The host is pinned to dark for a named theme.
+ */
+:root {
+  --bg: #1e1e2e;
+  --fg: #cdd6f4;
+  --muted: #a6adc8;
+  --subtle: #9399b2;
+  --border: #45475a;
+  --panel: #181825;
+  --raised: #282839;
+  --accent: #cba6f7;
+  --focus: #cba6f7;
+  --ok: #a6e3a1;
+  --warn: #f9e2af;
+  --danger: #f38ba8;
+  --info: #89dceb;
+  --sel: #2b2c3d;
+  --on-accent: #1e1e2e;
+  --on-ok: #1e1e2e;
+  --on-warn: #1e1e2e;
+  --on-danger: #1e1e2e;
+  --code: #f5c2e7;
+
+  --kw: #cba6f7;
+  --str: #a6e3a1;
+  --num: #fab387;
+  --com: #9399b2;
+  --user: #94e2d5;
+  --tool: #f9e2af;
+}

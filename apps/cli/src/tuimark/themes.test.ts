@@ -167,8 +167,24 @@ test("the palettes cover the builtins and every named theme", () => {
   expect(palettes.map(([name, palette]) => [name, palette.bg])).toEqual([
     ["dark", "#0d1117"],
     ["light", "#ffffff"],
+    ["catppuccin-frappe", "#303446"],
+    ["catppuccin-latte", "#eff1f5"],
+    ["catppuccin-macchiato", "#24273a"],
+    ["catppuccin-mocha", "#1e1e2e"],
+    ["dracula", "#282a36"],
+    ["everforest", "#2d353b"],
+    ["gruvbox-dark", "#282828"],
+    ["gruvbox-light", "#fbf1c7"],
+    ["kanagawa", "#1f1f28"],
     ["midnight", "#0a0e1a"],
+    ["nord", "#2e3440"],
+    ["one-dark", "#282c34"],
+    ["rose-pine", "#191724"],
+    ["rose-pine-dawn", "#faf4ed"],
+    ["rose-pine-moon", "#232136"],
     ["sepia", "#f4ecd8"],
+    ["tokyo-night", "#1a1b26"],
+    ["tokyo-night-storm", "#24283b"],
   ]);
 });
 

@@ -1,0 +1,44 @@
+/*
+ * themes/catppuccin-macchiato.tcss: a named palette adapted from Catppuccin
+ * Macchiato (https://github.com/catppuccin/palette, MIT). The raised and
+ * selected surfaces blend base toward surface0, kept near base
+ * so the text colors keep their own values.
+ *
+ * Loaded last (after app.tcss) by the document --theme generates, so its
+ * :root tokens re-declare the kit's and app.tcss's. Tokens only: no rules,
+ * no @import. The host is pinned to dark for a named theme.
+ *
+ * Every text token reads at WCAG AA (4.5:1) on bg, panel, raised and
+ * sel, and fg, muted and subtle stay a visible step apart on bg. To get
+ * there, these source colors moved along their own hue:
+ *   --subtle  #939ab7 -> #969dba  (overlay2)
+ *   --com     #939ab7 -> #969dba  (overlay2)
+ */
+:root {
+  --bg: #24273a;
+  --fg: #cad3f5;
+  --muted: #a5adcb;
+  --subtle: #969dba;
+  --border: #494d64;
+  --panel: #1e2030;
+  --raised: #2d3044;
+  --accent: #c6a0f6;
+  --focus: #c6a0f6;
+  --ok: #a6da95;
+  --warn: #eed49f;
+  --danger: #ed8796;
+  --info: #91d7e3;
+  --sel: #313449;
+  --on-accent: #24273a;
+  --on-ok: #24273a;
+  --on-warn: #24273a;
+  --on-danger: #24273a;
+  --code: #f5bde6;
+
+  --kw: #c6a0f6;
+  --str: #a6da95;
+  --num: #f5a97f;
+  --com: #969dba;
+  --user: #8bd5ca;
+  --tool: #eed49f;
+}

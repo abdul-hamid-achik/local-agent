@@ -13,7 +13,7 @@
 
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import {
   commitFixtures,
   DETAILS_HIDDEN,
@@ -26,6 +26,7 @@ import {
   WRAPPED_LINE,
 } from "#cli/tuimark/fixtures";
 import { resolvePinned } from "#cli/tuimark/launch";
+import { namedThemes, themedDocument } from "#cli/tuimark/themes";
 
 const ui = join(dirname(import.meta.path), "ui");
 const update = Bun.argv.includes("--update");
@@ -573,6 +574,60 @@ for (const d of extraDumps) {
   for (const kits of ["#6e7681", "#f85149"])
     if (styles.includes(kits))
       failures.push(`dump palette dark: the kit's ${kits} is painted`);
+}
+
+// A named theme is a generated copy of the document that loads one more sheet
+// (themes.ts); themes.test.ts reads the sheets, this proves the host loads
+// each one. Pinned to dark as launch.ts pins it, every color either document
+// paints is one of the theme's own tokens: a kit or app.tcss value that
+// shows through means a token the theme leaves out.
+for (const name of namedThemes(join(ui, "themes"))) {
+  const sheet = await Bun.file(join(ui, "themes", `${name}.tcss`)).text();
+  const values = new Set(
+    [...sheet.matchAll(/--[\w-]+:\s*(#[0-9a-f]{6});/gu)].map(([, v]) => v),
+  );
+  for (const [doc, sample, inline] of [
+    ["app.tui", "sample-palette", false],
+    ["inline.tui", "inline-sample-palette", true],
+  ] as const) {
+    const themed = await themedDocument(ui, doc, name);
+    const label = `dump ${sample} --theme ${name}`;
+    try {
+      const json = parsed(
+        tuimark([
+          "dump",
+          basename(themed),
+          "--data",
+          `samples/${sample}.json`,
+          "--cols",
+          "80",
+          "--rows",
+          "24",
+          "--theme",
+          "dark",
+          ...(inline ? ["--inline"] : []),
+          "--styles",
+          "--format",
+          "json",
+        ]).out,
+      ) as {
+        styles: { fg?: string; bg?: string }[][];
+        errors: unknown[];
+      };
+      if (json.errors.length > 0)
+        failures.push(`${label}: ${JSON.stringify(json.errors)}`);
+      const painted = new Set(
+        json.styles.flat().flatMap(({ fg, bg }) => [fg, bg].filter(Boolean)),
+      );
+      const foreign = [...painted].filter((color) => !values.has(color));
+      if (foreign.length > 0)
+        failures.push(`${label}: paints ${foreign.join(", ")}, not its own`);
+      if (painted.size < 5)
+        failures.push(`${label}: paints only ${painted.size} colors`);
+    } finally {
+      await rm(themed, { force: true });
+    }
+  }
 }
 
 // 4: every action fires, from the sample where its key is live. The event

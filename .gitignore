@@ -28,6 +28,10 @@ Thumbs.db
 # Logs
 *.log
 
+# A named --theme's generated copy of the document (themes.ts), removed
+# once the host has loaded it
+apps/cli/src/tuimark/ui/.themed-*
+
 # Glyphrun artifacts
 .glyphrun/runs/
 .glyphrun/tmp/

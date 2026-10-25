@@ -1,0 +1,46 @@
+/*
+ * themes/rose-pine-moon.tcss: a named palette adapted from Rosé Pine Moon
+ * (https://github.com/rose-pine/neovim, MIT). Its subtle is brighter than
+ * its muted, so they swap here: the client's muted outranks its subtle.
+ *
+ * Loaded last (after app.tcss) by the document --theme generates, so its
+ * :root tokens re-declare the kit's and app.tcss's. Tokens only: no rules,
+ * no @import. The host is pinned to dark for a named theme.
+ *
+ * Every text token reads at WCAG AA (4.5:1) on bg, panel, raised and
+ * sel, and fg, muted and subtle stay a visible step apart on bg. To get
+ * there, these source colors moved along their own hue:
+ *   --muted   #908caa -> #9e9ab8  (subtle)
+ *   --subtle  #6e6a86 -> #9692b0  (muted)
+ *   --ok      #3e8fb0 -> #4f9fc1  (pine)
+ *   --kw      #3e8fb0 -> #4f9fc1  (pine)
+ *   --com     #6e6a86 -> #9692b0  (muted)
+ */
+:root {
+  --bg: #232136;
+  --fg: #e0def4;
+  --muted: #9e9ab8;
+  --subtle: #9692b0;
+  --border: #44415a;
+  --panel: #2a273f;
+  --raised: #2e2b44;
+  --accent: #c4a7e7;
+  --focus: #c4a7e7;
+  --ok: #4f9fc1;
+  --warn: #f6c177;
+  --danger: #eb6f92;
+  --info: #9ccfd8;
+  --sel: #2a283e;
+  --on-accent: #232136;
+  --on-ok: #232136;
+  --on-warn: #232136;
+  --on-danger: #232136;
+  --code: #ea9a97;
+
+  --kw: #4f9fc1;
+  --str: #f6c177;
+  --num: #c4a7e7;
+  --com: #9692b0;
+  --user: #9ccfd8;
+  --tool: #f6c177;
+}

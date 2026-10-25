@@ -1,0 +1,56 @@
+/*
+ * themes/rose-pine-dawn.tcss: a named palette adapted from Rosé Pine Dawn
+ * (https://github.com/rose-pine/neovim, MIT). Its subtle is brighter than
+ * its muted, so they swap here: the client's muted outranks its subtle.
+ *
+ * Loaded last (after app.tcss) by the document --theme generates, so its
+ * :root tokens re-declare the kit's and app.tcss's. Tokens only: no rules,
+ * no @import. The host is pinned to dark for a named theme, so the light
+ * variants of theme.tcss and app.tcss never fire; this palette carries
+ * its own light values instead.
+ *
+ * Every text token reads at WCAG AA (4.5:1) on bg, panel, raised and
+ * sel, and fg, muted and subtle stay a visible step apart on bg. To get
+ * there, these source colors moved along their own hue:
+ *   --muted   #797593 -> #635f7c  (subtle)
+ *   --subtle  #9893a5 -> #6c6778  (muted)
+ *   --accent  #907aa9 -> #76608e  (iris)
+ *   --focus   #907aa9 -> #76608e  (iris)
+ *   --warn    #ea9d34 -> #945d00  (gold)
+ *   --danger  #b4637a -> #9f5067  (love)
+ *   --info    #56949f -> #34727d  (foam)
+ *   --code    #d7827e -> #a1524f  (rose)
+ *   --str     #ea9d34 -> #945d00  (gold)
+ *   --num     #907aa9 -> #76608e  (iris)
+ *   --com     #9893a5 -> #6c6778  (muted)
+ *   --user    #56949f -> #34727d  (foam)
+ *   --tool    #ea9d34 -> #945d00  (gold)
+ */
+:root {
+  --bg: #faf4ed;
+  --fg: #464261;
+  --muted: #635f7c;
+  --subtle: #6c6778;
+  --border: #dfdad9;
+  --panel: #fffaf3;
+  --raised: #f2e9e1;
+  --accent: #76608e;
+  --focus: #76608e;
+  --ok: #286983;
+  --warn: #945d00;
+  --danger: #9f5067;
+  --info: #34727d;
+  --sel: #f4ede8;
+  --on-accent: #faf4ed;
+  --on-ok: #faf4ed;
+  --on-warn: #faf4ed;
+  --on-danger: #faf4ed;
+  --code: #a1524f;
+
+  --kw: #286983;
+  --str: #945d00;
+  --num: #76608e;
+  --com: #6c6778;
+  --user: #34727d;
+  --tool: #945d00;
+}

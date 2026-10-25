@@ -1,0 +1,45 @@
+/*
+ * themes/everforest.tcss: a named palette adapted from Everforest dark,
+ * medium contrast (https://github.com/sainnhe/everforest, MIT). muted
+ * blends fg toward grey2.
+ *
+ * Loaded last (after app.tcss) by the document --theme generates, so its
+ * :root tokens re-declare the kit's and app.tcss's. Tokens only: no rules,
+ * no @import. The host is pinned to dark for a named theme.
+ *
+ * Every text token reads at WCAG AA (4.5:1) on bg, panel, raised and
+ * sel, and fg, muted and subtle stay a visible step apart on bg. To get
+ * there, these source colors moved along their own hue:
+ *   --subtle  #9da9a0 -> #a0aca3  (grey2)
+ *   --danger  #e67e80 -> #f48a8c  (red)
+ *   --kw      #e67e80 -> #f48a8c  (red)
+ *   --com     #859289 -> #9eaca3  (grey1)
+ */
+:root {
+  --bg: #2d353b;
+  --fg: #d3c6aa;
+  --muted: #b8b8a5;
+  --subtle: #a0aca3;
+  --border: #475258;
+  --panel: #232a2e;
+  --raised: #343f44;
+  --accent: #a7c080;
+  --focus: #a7c080;
+  --ok: #83c092;
+  --warn: #dbbc7f;
+  --danger: #f48a8c;
+  --info: #7fbbb3;
+  --sel: #343f44;
+  --on-accent: #2d353b;
+  --on-ok: #2d353b;
+  --on-warn: #2d353b;
+  --on-danger: #2d353b;
+  --code: #e69875;
+
+  --kw: #f48a8c;
+  --str: #a7c080;
+  --num: #d699b6;
+  --com: #9eaca3;
+  --user: #83c092;
+  --tool: #dbbc7f;
+}

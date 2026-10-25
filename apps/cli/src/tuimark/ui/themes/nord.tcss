@@ -1,0 +1,49 @@
+/*
+ * themes/nord.tcss: a named palette adapted from Nord
+ * (https://www.nordtheme.com, MIT). Panels, bars and selections blend
+ * nord0 toward nord1, which Nord's guide gives them; #616e88 is the
+ * comment color Nord's own ports use. Nord's comment and red read below
+ * 4.5:1 even on nord0, so they are the two colors that move the most.
+ *
+ * Loaded last (after app.tcss) by the document --theme generates, so its
+ * :root tokens re-declare the kit's and app.tcss's. Tokens only: no rules,
+ * no @import. The host is pinned to dark for a named theme.
+ *
+ * Every text token reads at WCAG AA (4.5:1) on bg, panel, raised and
+ * sel, and fg, muted and subtle stay a visible step apart on bg. To get
+ * there, these source colors moved along their own hue:
+ *   --subtle  #616e88 -> #99a7c3  (comment)
+ *   --danger  #bf616a -> #ee8b93  (nord11)
+ *   --info    #81a1c1 -> #8aaacb  (nord9)
+ *   --kw      #81a1c1 -> #8aaacb  (nord9)
+ *   --num     #b48ead -> #c29bbb  (nord15)
+ *   --com     #616e88 -> #99a7c3  (comment)
+ */
+:root {
+  --bg: #2e3440;
+  --fg: #eceff4;
+  --muted: #d8dee9;
+  --subtle: #99a7c3;
+  --border: #4c566a;
+  --panel: #363c4b;
+  --raised: #363c4b;
+  --accent: #88c0d0;
+  --focus: #88c0d0;
+  --ok: #a3be8c;
+  --warn: #ebcb8b;
+  --danger: #ee8b93;
+  --info: #8aaacb;
+  --sel: #363c4b;
+  --on-accent: #2e3440;
+  --on-ok: #2e3440;
+  --on-warn: #2e3440;
+  --on-danger: #2e3440;
+  --code: #8fbcbb;
+
+  --kw: #8aaacb;
+  --str: #a3be8c;
+  --num: #c29bbb;
+  --com: #99a7c3;
+  --user: #8fbcbb;
+  --tool: #ebcb8b;
+}
