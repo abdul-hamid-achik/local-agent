@@ -123,6 +123,22 @@ export type McpTool = {
 };
 
 /**
+ * The input schema the model is offered. MCP lets a tool that takes no
+ * arguments leave out `properties` (`{"type": "object"}`), and llama.cpp's
+ * chat templates, which Ollama runs for several models, refuse that: the
+ * whole request fails with "properties must be an object", for every tool,
+ * not just this one. An empty `properties` says the same in a form every
+ * template takes.
+ */
+export function modelSchema(
+  schema: Record<string, unknown>,
+): Record<string, unknown> {
+  return schema.properties === undefined
+    ? { ...schema, properties: {} }
+    : schema;
+}
+
+/**
  * A gateway (mcphub and the like) runs other servers' tools through one
  * `call_tool`, so its name says nothing about what runs. The identity that
  * approvals, rules and grants use is the downstream tool, qualified by the
@@ -313,7 +329,7 @@ export async function connectMcp(
       return {
         name,
         description: tool.description,
-        inputSchema: tool.inputSchema as Record<string, unknown>,
+        inputSchema: modelSchema(schema),
         readOnly: tool.annotations?.readOnlyHint === true,
       };
     });

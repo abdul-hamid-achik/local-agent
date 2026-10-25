@@ -12,6 +12,7 @@ import {
   McpServerConfigSchema,
   McpStartError,
   McpStoppedError,
+  modelSchema,
   readMcpConfig,
   startupError,
 } from "#runtime/mcp";
@@ -325,6 +326,18 @@ describe("MCP adapter boundary", () => {
           transport: { kind: "stdio", command: "bun" },
         }),
       ).toThrow();
+  });
+});
+
+describe("modelSchema", () => {
+  test("a tool that takes no arguments is offered an empty properties", () => {
+    // mcphub's list_servers and stats: valid MCP, refused by llama.cpp's
+    // chat templates (ornith-1.5 on Ollama failed every request).
+    expect(
+      modelSchema({ type: "object", additionalProperties: false }),
+    ).toEqual({ type: "object", additionalProperties: false, properties: {} });
+    const schema = { type: "object", properties: { text: { type: "string" } } };
+    expect(modelSchema(schema)).toBe(schema);
   });
 });
 
