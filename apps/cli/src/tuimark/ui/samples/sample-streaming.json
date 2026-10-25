@@ -274,7 +274,8 @@
     }
   ],
   "earlier": {
-    "n": 250
+    "n": 250,
+    "label": "250 earlier messages"
   },
   "live": {
     "id": "live",

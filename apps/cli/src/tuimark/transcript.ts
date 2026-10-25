@@ -16,7 +16,17 @@ export const WINDOW_STEP = 100;
 
 export interface TranscriptSnapshot {
   messages: MessageView[];
-  earlier: { n: number };
+  earlier: Earlier;
+}
+
+/** The messages above the window: how many, and the row's words for them. */
+export interface Earlier {
+  n: number;
+  label: string;
+}
+
+export function earlier(n: number): Earlier {
+  return { n, label: `${n} earlier message${n === 1 ? "" : "s"}` };
 }
 
 export class Transcript {
@@ -85,7 +95,7 @@ export class Transcript {
     const messages = this.views.slice(-this.shown);
     return {
       messages,
-      earlier: { n: this.views.length - messages.length },
+      earlier: earlier(this.views.length - messages.length),
     };
   }
 }

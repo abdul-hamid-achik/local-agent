@@ -146,7 +146,8 @@
     }
   ],
   "earlier": {
-    "n": 0
+    "n": 0,
+    "label": "0 earlier messages"
   },
   "live": {
     "id": "live",

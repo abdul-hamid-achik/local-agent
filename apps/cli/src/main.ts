@@ -581,11 +581,11 @@ A resumed session first closes the calls it was interrupted before running.`);
                 );
               else if (event.type === "compacted")
                 process.stderr.write(
-                  `context compacted: ${event.elided} earlier messages shortened (about ${event.tokensBefore} → ${event.tokensAfter} tokens)\n`,
+                  `context compacted: ${event.elided} earlier message${event.elided === 1 ? "" : "s"} shortened (about ${event.tokensBefore} → ${event.tokensAfter} tokens)\n`,
                 );
               else if (event.type === "windowed")
                 process.stderr.write(
-                  `context window full: the oldest ${event.left} messages are not sent (${event.sent} are)\n`,
+                  `context window full: the oldest ${event.left} message${event.left === 1 ? " is" : "s are"} not sent (${event.sent} ${event.sent === 1 ? "is" : "are"})\n`,
                 );
             }
             if (!values.json) process.stdout.write("\n");

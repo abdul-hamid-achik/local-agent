@@ -35,7 +35,15 @@ test("the store holds only the newest messages and counts the rest", () => {
   expect(messages).toHaveLength(200);
   expect(messages[0]?.id).toBe("m250");
   expect(messages.at(-1)?.id).toBe("m449");
-  expect(earlier.n).toBe(250);
+  expect(earlier).toEqual({ n: 250, label: "250 earlier messages" });
+  fill(t, 1);
+  expect(t.snapshot().earlier.label).toBe("251 earlier messages");
+  const one = new Transcript();
+  fill(one, 201);
+  expect(one.snapshot().earlier).toEqual({
+    n: 1,
+    label: "1 earlier message",
+  });
 });
 
 test("widening adds 100 messages at a time until everything is shown", () => {
@@ -77,5 +85,8 @@ test("replace drops the old conversation and resets the window", () => {
   expect(t.snapshot().earlier.n).toBe(1);
   t.replace([]);
   expect(t.length).toBe(0);
-  expect(t.snapshot()).toEqual({ messages: [], earlier: { n: 0 } });
+  expect(t.snapshot()).toEqual({
+    messages: [],
+    earlier: { n: 0, label: "0 earlier messages" },
+  });
 });

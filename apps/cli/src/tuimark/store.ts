@@ -39,7 +39,7 @@ import {
   type PaletteItem,
   type SlashRow,
 } from "#cli/tuimark/commands";
-import type { TranscriptSnapshot } from "#cli/tuimark/transcript";
+import type { Earlier, TranscriptSnapshot } from "#cli/tuimark/transcript";
 
 /** MCP servers that are still connecting, or that failed to (count only). */
 export interface McpStartupState {
@@ -343,7 +343,7 @@ export interface Store {
    */
   select_tip: string;
   messages: MessageView[];
-  earlier: { n: number };
+  earlier: Earlier;
   live: LiveView;
   /** The model's reasoning while it streams; gone once the answer starts. */
   thinking: ThinkingView;

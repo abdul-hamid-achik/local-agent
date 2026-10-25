@@ -46,7 +46,7 @@ import {
   statusLines,
 } from "#cli/tuimark/store";
 import { streamingView } from "#cli/tuimark/stream";
-import { Transcript } from "#cli/tuimark/transcript";
+import { earlier, Transcript } from "#cli/tuimark/transcript";
 
 const provider = {
   type: "ollama" as const,
@@ -523,7 +523,7 @@ export function streamingSample(): Store {
   store.live = streamingView(
     "Here is the plan:\n\n```ts\nconst retries = 3;\nfor (let i = 0; i < retries; i++) {\n  await fetch(url);",
   );
-  store.earlier = { n: 250 };
+  store.earlier = earlier(250);
   store.placeholder = PLACEHOLDER_BUSY;
   store.running = true;
   store.head = headState("streaming", 12);
@@ -1361,7 +1361,7 @@ export const SAMPLES = {
 export function toInline(store: Store): Store {
   const clone = structuredClone(store);
   clone.messages = [];
-  clone.earlier = { n: 0 };
+  clone.earlier = earlier(0);
   // The inline palette never lists load-earlier (its history is scrollback).
   const found = filterPalette(clone.palette.query, true);
   clone.found = { any: found.length > 0, items: found };

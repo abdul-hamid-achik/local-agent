@@ -182,7 +182,7 @@ import {
   windowedNotice,
 } from "#cli/tuimark/store";
 import { LiveStream } from "#cli/tuimark/stream";
-import { Transcript } from "#cli/tuimark/transcript";
+import { earlier, Transcript } from "#cli/tuimark/transcript";
 
 /** The part of the SDK's Host the client uses (a fake implements it in tests). */
 export type UiHost = Pick<Host, "on" | "batch" | "get" | "commit">;
@@ -701,7 +701,7 @@ export class TuimarkClient {
       empty: this.transcript.length === 0,
       // Inline, the region never holds history: attach() commits it instead.
       transcript: this.inline
-        ? { messages: [], earlier: { n: 0 } }
+        ? { messages: [], earlier: earlier(0) }
         : this.transcript.snapshot(),
       sandbox: this.sandbox,
       termProgram: this.options.termProgram,

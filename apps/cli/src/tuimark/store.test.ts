@@ -43,7 +43,7 @@ import {
   workspaceBasename,
   wrapLine,
 } from "#cli/tuimark/store";
-import { Transcript } from "#cli/tuimark/transcript";
+import { earlier, Transcript } from "#cli/tuimark/transcript";
 
 test("ctx flags: warn at 75%, danger at 90%", () => {
   expect(ctxFlags(74)).toEqual({ warn: false, danger: false });
@@ -490,7 +490,7 @@ test("empty is derived from the transcript and the mouse starts on in fullscreen
     intent: "build",
     mcpServers: 0,
     empty: false,
-    transcript: { messages: [], earlier: { n: 0 } },
+    transcript: { messages: [], earlier: earlier(0) },
   });
   expect(inline.empty).toBe(false);
   expect(workspaceBasename("/a/b/c")).toBe("c");
@@ -1126,7 +1126,7 @@ function storeInitForPanel() {
     },
     intent: "build" as const,
     mcpServers: 0,
-    transcript: { messages: [], earlier: { n: 0 } },
+    transcript: { messages: [], earlier: earlier(0) },
   };
 }
 

@@ -283,7 +283,7 @@
             <text class="la-welcome-line" wrap="wrap">esc cancels a turn</text>
           </col>
         </use>
-        <button id="earlier" class="la-earlier" if="earlier.n" on:click="load_earlier">▲ {earlier.n} earlier messages, ctrl+o or enter to load more</button>
+        <button id="earlier" class="la-earlier" if="earlier.n" on:click="load_earlier">▲ {earlier.label} · ctrl+o loads more</button>
         <col id="rows" each="messages as m" key="m.id">
           <use template="la-turn" with="m as msg"/>
         </col>
