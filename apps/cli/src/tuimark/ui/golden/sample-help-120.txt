@@ -10,22 +10,22 @@
 │      try { return aw│  /permissions [clear|trust] show, clear or trust grants and rules        │                     ┃
 │      catch (e) { if │  /sandbox on|off run commands confined (macOS), without a card           │                     ┃
 │    }                │  /details [N] show tool output N, or the last                            │                     ┃
-│  }                  │  /status show the effective config (model, workspace, session)           │                     ┃
-│                     │  /provider ask the model's endpoint: answer time, what is loaded         │                     ┃
-│ ╭─ Edit ────────────│  /sessions [new] switch to a saved session, or start a new one           │───────────────────╮ ┃
-│ │ ✓ applied         │  /recover [N outcome] review calls whose outcome is unknown              │                   │ ┃
-│ │ src/fetch.ts      │  /find TEXT search saved session messages (needs --session-db)           │                   │ ┃
-│ │ Updated src/fetch.│  /export [json] write the conversation to a markdown or JSON file        │                   │ ┃
-│ │   import { sleep }│  /mcp show connected MCP servers and their tools                         │                   │ ┃
-│ │ - export const get│  /goal [OBJECTIVE|stop] run turns toward an objective until done or a …  │                   │ ┃
-│ │ + export const get│  Keys                                                                    │                   │ ┃
-│ ╰───────────────────│  enter       send · shift/alt+enter new line                             │───────────────────╯ ┃
-│                     │  shift-drag  select text (mouse reporting is on)                         │                     ┃
-│ Assistant           │  ^P          commands                                                    │                     ┃
-│ Done. The helper now│  esc         cancel the turn, and a running goal                         │                     ┃
-│                     │  ctrl+c      clear the draft, cancel, then quit                          │                     ┃
-└─────────────────────│  ↑/↓         history                                                     │─────────────────────┘
-╭─────────────────────│  ↑           edit a queued message (empty draft)                         │─────────────────────╮
-│ Message the model   │  pgup/pgdn   scroll the transcript                                       │                     │
-╰─────────────────────│  ^L          back to the latest message                                  │─────────────────────╯
+│  }                  │  /diff show the files this session edited or wrote, and how              │                     ┃
+│                     │  /status show the effective config (model, workspace, session)           │                     ┃
+│ ╭─ Edit ────────────│  /provider ask the model's endpoint: answer time, what is loaded         │───────────────────╮ ┃
+│ │ ✓ applied         │  /sessions [new] switch to a saved session, or start a new one           │                   │ ┃
+│ │ src/fetch.ts      │  /recover [N outcome] review calls whose outcome is unknown              │                   │ ┃
+│ │ Updated src/fetch.│  /find TEXT search saved session messages (needs --session-db)           │                   │ ┃
+│ │   import { sleep }│  /export [json] write the conversation to a markdown or JSON file        │                   │ ┃
+│ │ - export const get│  /mcp show connected MCP servers and their tools                         │                   │ ┃
+│ │ + export const get│  /goal [OBJECTIVE|stop] run turns toward an objective until done or a …  │                   │ ┃
+│ ╰───────────────────│  Keys                                                                    │───────────────────╯ ┃
+│                     │  enter       send · shift/alt+enter new line                             │                     ┃
+│ Assistant           │  shift-drag  select text (mouse reporting is on)                         │                     ┃
+│ Done. The helper now│  ^P          commands                                                    │                     ┃
+│                     │  esc         cancel the turn, and a running goal                         │                     ┃
+└─────────────────────│  ctrl+c      clear the draft, cancel, then quit                          │─────────────────────┘
+╭─────────────────────│  ↑/↓         history                                                     │─────────────────────╮
+│ Message the model   │  ↑           edit a queued message (empty draft)                         │                     │
+╰─────────────────────│  pgup/pgdn   scroll the transcript                                       │─────────────────────╯
  build · last 1m 06s ·╰──────────────────────────────────────────────────────────────────────────╯                      

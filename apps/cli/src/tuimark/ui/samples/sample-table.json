@@ -326,6 +326,11 @@
         "hint": "/details"
       },
       {
+        "id": "diff",
+        "label": "Diff: what this session changed",
+        "hint": "/diff"
+      },
+      {
         "id": "status",
         "label": "Status: effective config",
         "hint": "/status"
@@ -443,6 +448,11 @@
         "id": "/details",
         "cmd": "/details [N]",
         "desc": "show tool output N, or the last"
+      },
+      {
+        "id": "/diff",
+        "cmd": "/diff",
+        "desc": "show the files this session edited or wrote, and how"
       },
       {
         "id": "/status",

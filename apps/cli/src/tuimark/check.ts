@@ -1409,6 +1409,21 @@ const plays: Expect[] = [
     screen: ["MCP servers: 1 · 2 tools", "db · 2 tools", "query, insert"],
   },
   { sample: "sample-mcp", input: "q", actions: ["panel_close"] },
+  // The /diff panel: a file per block, its rows as the edit cards show them.
+  {
+    sample: "sample-changes",
+    input: "",
+    actions: [],
+    screen: [
+      "3 files",
+      "── src/server.ts · edited · +1 −1",
+      "+ const port = Number(process.env.PORT",
+      "── src/config.ts · created · +1",
+      "── README.md · replaced",
+    ],
+  },
+  { sample: "sample-changes", input: "q", actions: ["panel_close"] },
+  { sample: "sample-changes", input: "esc", actions: ["panel_close"] },
   // The sessions picker: the arrows move the parent's choice (play has
   // no parent, so the choice itself does not move), enter asks to load,
   // esc and q close — the scroll never swallows an arrow.
@@ -1692,7 +1707,7 @@ const plays: Expect[] = [
     notScreen: ["Local Agent", "Message the model", "build · last"],
   },
   // A short terminal scrolls the commands and the keys together: the last
-  // key is below at first, and two pages down the first command is above.
+  // key is below at first, and three pages down the first command is above.
   {
     sample: "inline-sample-help",
     doc: "inline.tui",
@@ -1708,7 +1723,7 @@ const plays: Expect[] = [
     doc: "inline.tui",
     inline: true,
     rows: 15,
-    input: "pgdn pgdn",
+    input: "pgdn pgdn pgdn",
     actions: [],
     screen: ["? close help", "In an approval", "its top or its end"],
     notScreen: ["/mode plan|build"],

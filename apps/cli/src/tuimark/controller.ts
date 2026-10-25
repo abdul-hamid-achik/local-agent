@@ -86,6 +86,12 @@ import {
   ViewBuilder,
 } from "#cli/tuimark/blocks";
 import {
+  changesSummary,
+  changesText,
+  NO_CHANGES_STATUS,
+  sessionChanges,
+} from "#cli/tuimark/changes";
+import {
   CLIPBOARD_TOOL_NAMES,
   COPY_TIMEOUT_MS,
   type CopyResult,
@@ -1216,6 +1222,31 @@ export class TuimarkClient {
     if (!this.picking) return;
     const chosen = this.panelSessions[this.panelSel];
     if (chosen) await this.switchSession(chosen.handle);
+  }
+
+  /**
+   * `/diff`: the files this session edited or wrote, from its own history
+   * (not the retained receipts, which outlive a session switch), or "No
+   * changes in this session". Opens the read-only panel, so it is refused
+   * while a turn runs or an approval is open, like `/status`.
+   */
+  private async openChangesPanel(): Promise<void> {
+    if (this.busy || this.proposal) {
+      await this.write([{ path: "status", value: BUSY_STATUS }]);
+      return;
+    }
+    const changes = sessionChanges(this.history);
+    if (changes.files.length === 0 && changes.unknown === 0) {
+      await this.write([{ path: "status", value: NO_CHANGES_STATUS }]);
+      return;
+    }
+    const summary = changesSummary(changes);
+    await this.openPanel(
+      "Changes",
+      summary,
+      changesText(changes),
+      `Changes · ${summary}`,
+    );
   }
 
   /** `/status`: the effective config, exactly what this client holds. */
@@ -3214,6 +3245,10 @@ export class TuimarkClient {
     // The panel and export commands likewise run on controller state.
     if (outcome.statusPanel) {
       await this.openStatusPanel();
+      return;
+    }
+    if (outcome.diffPanel) {
+      await this.openChangesPanel();
       return;
     }
     if (outcome.providerPanel) {

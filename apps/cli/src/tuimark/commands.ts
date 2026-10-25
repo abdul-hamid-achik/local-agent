@@ -78,6 +78,8 @@ export interface CommandOutcome {
    * owns the receipts, so it writes the real status itself.
    */
   details?: true | number;
+  /** Set by `/diff`: open the panel over what this session changed. */
+  diffPanel?: boolean;
   /** Set by `/status`: open the panel over the effective config. */
   statusPanel?: boolean;
   /** Set by `/provider`: ask the endpoint (read-only), then open the panel over its answer. */
@@ -115,7 +117,7 @@ export interface CommandOutcome {
 }
 
 export const HELP_STATUS =
-  "/mode plan|build|chat · /model [NAME] · /theme dark|light|auto · /mouse on|off · /copy [code] · /permissions [clear|trust] · /sandbox on|off · /details [N] · /status · /sessions · /recover · /find TEXT · /export [json] · /mcp · /goal OBJECTIVE · /help · esc cancel · ctrl+c exit";
+  "/mode plan|build|chat · /model [NAME] · /theme dark|light|auto · /mouse on|off · /copy [code] · /permissions [clear|trust] · /sandbox on|off · /details [N] · /diff · /status · /sessions · /recover · /find TEXT · /export [json] · /mcp · /goal OBJECTIVE · /help · esc cancel · ctrl+c exit";
 
 /** Inline has no mouse (the engine ignores it there): the controller refuses with this. */
 export const MOUSE_INLINE_STATUS = "Mouse is not available in inline mode";
@@ -266,6 +268,7 @@ export function runSlash(text: string, state: CommandState): CommandOutcome {
       };
     return { status: `Tool output ${wanted}`, details: Number(wanted) };
   }
+  if (name === "/diff") return { status: "Changes", diffPanel: true };
   if (name === "/status") return { status: "Status", statusPanel: true };
   if (name === "/provider")
     return { status: "Checking the provider…", providerPanel: true };
@@ -431,6 +434,12 @@ export const SLASH_COMMANDS: readonly SlashCommand[] = [
     insert: "/details",
   },
   {
+    name: "/diff",
+    usage: "/diff",
+    description: "show the files this session edited or wrote, and how",
+    insert: "/diff",
+  },
+  {
     name: "/status",
     usage: "/status",
     description: "show the effective config (model, workspace, session)",
@@ -581,6 +590,7 @@ export const PALETTE: readonly PaletteItem[] = [
     hint: "/permissions trust",
   },
   { id: "details", label: "Details: last tool output", hint: "/details" },
+  { id: "diff", label: "Diff: what this session changed", hint: "/diff" },
   { id: "status", label: "Status: effective config", hint: "/status" },
   { id: "provider", label: "Provider: check the endpoint", hint: "/provider" },
   { id: "model", label: "Model: show current", hint: "/model" },

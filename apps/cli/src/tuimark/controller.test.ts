@@ -2913,6 +2913,7 @@ test("typing / opens the command popup; it filters, moves and completes", async 
     "/permissions",
     "/sandbox",
     "/details",
+    "/diff",
     "/status",
     "/provider",
     "/sessions",
@@ -3127,6 +3128,7 @@ test("the help overlay's store carries the slash commands", () => {
     "/permissions [clear|trust]",
     "/sandbox on|off",
     "/details [N]",
+    "/diff",
     "/status",
     "/provider",
     "/sessions [new]",
@@ -4268,6 +4270,120 @@ test("/status opens the panel with the config the client actually holds", async 
   await ui.fire("panel_close");
   expect(store(ui).panel.open).toBe(false);
   expect(store(ui).status).toBe("build");
+});
+
+/** An assistant reply with one tool call, then that call's applied receipt. */
+function appliedChange(
+  id: string,
+  name: "edit" | "write",
+  args: Record<string, string>,
+  output: string,
+): Message[] {
+  return [
+    {
+      role: "assistant",
+      content: "",
+      tool_calls: [{ id, function: { name, arguments: args } }],
+    },
+    {
+      role: "tool",
+      tool_name: name,
+      tool_call_id: id,
+      content: JSON.stringify({ status: "succeeded", output }),
+    },
+  ];
+}
+
+test("/diff opens the panel over the files this session edited or wrote", async () => {
+  const session = fakeSession("abc123", [
+    { role: "user", content: "fix it" },
+    ...appliedChange(
+      "e1",
+      "edit",
+      {
+        path: "src/a.ts",
+        old_string: "const a = 1;",
+        new_string: "const a = 2;",
+      },
+      "Updated src/a.ts. Verification has not been run.",
+    ),
+    ...appliedChange(
+      "w1",
+      "write",
+      { path: "notes.txt", content: "hello\n" },
+      "Created notes.txt. Verification has not been run.",
+    ),
+    { role: "assistant", content: "done" },
+  ]);
+  const { ui } = setup(reply("x"), { session });
+  await ui.fire("send", "/diff");
+  const panel = store(ui).panel;
+  expect(panel.open).toBe(true);
+  expect(panel.title).toBe("Changes");
+  expect(panel.args).toBe("2 files · +2 −1");
+  expect(store(ui).status).toBe("Changes · 2 files · +2 −1");
+  expect(panel.lines.map((line) => line.t)).toEqual([
+    "── src/a.ts · edited · +1 −1",
+    "- const a = 1;",
+    "+ const a = 2;",
+    "",
+    "── notes.txt · created · +1",
+    "+ hello",
+    "",
+    "Only applied edits and writes are listed, not commands.",
+  ]);
+  expect(store(ui).draft).toBe("");
+  await ui.fire("panel_close");
+  expect(store(ui).panel.open).toBe(false);
+});
+
+test("/diff says so when the session changed nothing, and while a turn runs it waits", async () => {
+  const session = fakeSession("abc123", [
+    { role: "user", content: "hi" },
+    { role: "assistant", content: "hello" },
+  ]);
+  let release: () => void = () => {};
+  const gate = new Promise<void>((r) => {
+    release = r;
+  });
+  const { ui, client } = setup(
+    async function* () {
+      await gate;
+      yield { type: "message", message: { role: "assistant", content: "ok" } };
+    },
+    { session },
+  );
+  await ui.fire("send", "/diff");
+  expect(store(ui).status).toBe("No changes in this session");
+  expect(store(ui).panel.open).toBe(false);
+  await ui.fire("send", "work");
+  await ui.fire("send", "/diff");
+  expect(store(ui).status).toBe(BUSY_STATUS);
+  release();
+  await client.idle();
+});
+
+test("/diff follows the conversation: a new session starts with nothing changed", async () => {
+  const old = fakeSession("aaa111", [
+    ...appliedChange(
+      "e1",
+      "edit",
+      { path: "a.ts", old_string: "x", new_string: "y" },
+      "Updated a.ts. Verification has not been run.",
+    ),
+  ]);
+  const sessions = {
+    ...capabilityFor({ aaa111: old }),
+    create: async () => fakeSession("new999", []),
+  };
+  const { ui, client } = setup(reply("x"), { session: old, sessions });
+  await ui.fire("send", "/diff");
+  expect(store(ui).panel.open).toBe(true);
+  await ui.fire("panel_close");
+  await ui.fire("send", "/sessions new");
+  await client.idle();
+  await ui.fire("send", "/diff");
+  expect(store(ui).status).toBe("No changes in this session");
 });
 
 test("/provider asks the endpoint once, read-only, and opens the panel over its answer", async () => {

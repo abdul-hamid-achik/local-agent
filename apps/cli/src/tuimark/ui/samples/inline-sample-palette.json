@@ -178,6 +178,11 @@
         "desc": "show tool output N, or the last"
       },
       {
+        "id": "/diff",
+        "cmd": "/diff",
+        "desc": "show the files this session edited or wrote, and how"
+      },
+      {
         "id": "/status",
         "cmd": "/status",
         "desc": "show the effective config (model, workspace, session)"

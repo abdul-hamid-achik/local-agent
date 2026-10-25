@@ -10,6 +10,7 @@
 │ │  /permissions [clear|trust] show, clear or trust grants and rules        │ ┃
 │ │  /sandbox on|off run commands confined (macOS), without a card           │ ┃
 │ │  /details [N] show tool output N, or the last                            │ ┃
+│ │  /diff show the files this session edited or wrote, and how              │ ┃
 │ │  /status show the effective config (model, workspace, session)           │ ┃
 │ │  /provider ask the model's endpoint: answer time, what is loaded         │ ┃
 │ │  /sessions [new] switch to a saved session, or start a new one           │ ┃
@@ -23,9 +24,8 @@
 │ │  shift-drag  select text (mouse reporting is on)                         │ ┃
 │ │  ^P          commands                                                    │ ┃
 │ │  esc         cancel the turn, and a running goal                         │ ┃
-│ │  ctrl+c      clear the draft, cancel, then quit                          │ ┃
-└─│  ↑/↓         history                                                     │─┘
-╭─│  ↑           edit a queued message (empty draft)                         │─╮
-│ │  pgup/pgdn   scroll the transcript                                       │ │
-╰─│  ^L          back to the latest message                                  │─╯
+└─│  ctrl+c      clear the draft, cancel, then quit                          │─┘
+╭─│  ↑/↓         history                                                     │─╮
+│ │  ↑           edit a queued message (empty draft)                         │ │
+╰─│  pgup/pgdn   scroll the transcript                                       │─╯
  b╰──────────────────────────────────────────────────────────────────────────╯  

@@ -18,6 +18,11 @@ import {
   ViewBuilder,
 } from "#cli/tuimark/blocks";
 import {
+  changesSummary,
+  changesText,
+  sessionChanges,
+} from "#cli/tuimark/changes";
+import {
   filterPalette,
   runSlash,
   slashMatches,
@@ -795,6 +800,57 @@ export function mcpPanelSample(): Store {
   return store;
 }
 
+/** The `/diff` panel open: an edited file, a created one, a replaced one. */
+export function changesPanelSample(): Store {
+  const { store } = base();
+  const applied = (
+    id: string,
+    name: string,
+    args: Record<string, string>,
+    output: string,
+  ): Message[] => [
+    {
+      role: "assistant",
+      content: "",
+      tool_calls: [{ id, function: { name, arguments: args } }],
+    },
+    {
+      role: "tool",
+      tool_name: name,
+      tool_call_id: id,
+      content: JSON.stringify({ status: "succeeded", output }),
+    },
+  ];
+  const changes = sessionChanges([
+    ...applied(
+      "e1",
+      "edit",
+      {
+        path: "src/server.ts",
+        old_string: "const port = 3000;",
+        new_string: "const port = Number(process.env.PORT ?? 3000);",
+      },
+      "Updated src/server.ts. Verification has not been run.",
+    ),
+    ...applied(
+      "w1",
+      "write",
+      { path: "src/config.ts", content: 'export const name = "app";\n' },
+      "Created src/config.ts. Verification has not been run.",
+    ),
+    ...applied(
+      "w2",
+      "write",
+      { path: "README.md", content: "# app\n" },
+      "Replaced README.md. Verification has not been run.",
+    ),
+  ]);
+  const summary = changesSummary(changes);
+  store.panel = panelState("Changes", summary, changesText(changes), 80);
+  store.status = `Changes · ${summary}`;
+  return store;
+}
+
 /** The `/sessions` picker open: three saved sessions, the current one chosen. */
 export function sessionsSample(): Store {
   const { store } = base();
@@ -1350,6 +1406,7 @@ export const SAMPLES = {
   "sample-details": detailsSample,
   "sample-panel": panelSample,
   "sample-mcp": mcpPanelSample,
+  "sample-changes": changesPanelSample,
   "sample-sessions": sessionsSample,
   "sample-slash": slashSample,
   "sample-grants": grantsSample,

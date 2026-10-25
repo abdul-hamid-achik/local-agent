@@ -211,6 +211,7 @@ test("each palette row's hint runs the command its label names", () => {
     "permissions-clear": { clearGrants: true },
     "permissions-trust": { trustRules: "review" },
     details: { details: true },
+    diff: { diffPanel: true },
     status: { statusPanel: true },
     provider: { providerPanel: true },
     model: { status: "Current model: unknown. Use /model NAME to switch" },
@@ -259,7 +260,23 @@ test("/details asks the controller for the viewer over the latest receipt", () =
   expect(filterPalette("details")[0]?.label).toBe("Details: last tool output");
   expect(paletteCommand("details")).toBe("/details");
   expect(HELP_STATUS).toContain("/details [N]");
-  expect(slashMatches("/d")?.map((c) => c.name)).toEqual(["/details"]);
+  // /details stays the first match of "/d": completing it does what it did.
+  expect(slashMatches("/d")?.map((c) => c.name)).toEqual(["/details", "/diff"]);
+});
+
+test("/diff asks the controller for the panel over what the session changed", () => {
+  expect(runSlash("/diff", state)).toEqual({
+    status: "Changes",
+    diffPanel: true,
+  });
+  expect(runSlash("/DIFF", state).diffPanel).toBe(true);
+  // It takes no argument: a stray one is a typo to fix, not a silent /diff.
+  expect(runSlash("/diff src/a.ts", state).unknown).toBe(true);
+  expect(paletteCommand("diff")).toBe("/diff");
+  expect(filterPalette("diff").map((r) => r.id)).toEqual(["diff"]);
+  expect(HELP_STATUS).toContain("/diff");
+  expect(helpRows().map((r) => r.cmd)).toContain("/diff");
+  expect(slashMatches("/di")?.map((c) => c.name)).toEqual(["/diff"]);
 });
 
 test("the slash catalog lists exactly the commands the parser knows", () => {
@@ -272,6 +289,7 @@ test("the slash catalog lists exactly the commands the parser knows", () => {
     "/permissions",
     "/sandbox",
     "/details",
+    "/diff",
     "/status",
     "/provider",
     "/sessions",
@@ -326,6 +344,7 @@ test("the slash catalog lists exactly the commands the parser knows", () => {
     "/permissions [clear|trust]",
     "/sandbox on|off",
     "/details [N]",
+    "/diff",
     "/status",
     "/provider",
     "/sessions [new]",
