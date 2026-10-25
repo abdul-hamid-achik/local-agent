@@ -13,7 +13,7 @@
 │  }      │ Mode: plan (read only)                        /mode plan │         ┃
 │         │ Mode: build (read, edit, command)            /mode build │         ┃
 │ ╭─ Edit │ Mode: chat (conversational)                   /mode chat │───────╮ ┃
-│ │ ✓ succ│ Model: show current                               /model │       │ ┃
+│ │ ✓ appl│ Model: show current                               /model │       │ ┃
 │ │ src/fe│                                                          │       │ ┃
 │ │ Update│                                                          │       │ ┃
 │ │   impo│                                                          │       │ ┃

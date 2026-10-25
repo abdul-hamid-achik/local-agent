@@ -6,7 +6,7 @@
 │  }                  ╭─ Edit big.txt? ──────────────────────────────────────────────────────────╮                     │
 │                     │                                                                          │                     │
 │ ╭─ Edit ────────────│  Preview truncated. Deny unless you have read the whole change.          │───────────────────╮ │
-│ │ ✓ succeeded       │  ┌────────────────────────────────────────────────────────────────────┐  │                   │ │
+│ │ ✓ applied         │  ┌────────────────────────────────────────────────────────────────────┐  │                   │ │
 │ │ src/fetch.ts      │  │+line 0                                                             ┃  │                   │ │
 │ │ Updated src/fetch.│  │+line 1                                                             │  │                   │ ┃
 │ │   import { sleep }│  │+line 2                                                             │  │                   │ ┃
@@ -28,4 +28,4 @@
 ╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
 │ Answer the approval first                                                                                            │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
- Preview truncated · n deny · y allow · Esc deny   pgup/pgdn scroll  home/end top/end                                   
+ Preview truncated · n deny · y allow · esc deny   pgup/pgdn scroll  home/end top/end                                   

@@ -28,4 +28,4 @@
 ╭──────────────────────────────────────────────────────────────────────────────╮
 │ Answer the approval first                                                    │
 ╰──────────────────────────────────────────────────────────────────────────────╯
- Waiting for approval · n deny · Esc deny   a session  ! always                 
+ Waiting for approval · n deny · esc deny   a session  ! always                 

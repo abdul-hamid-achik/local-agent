@@ -19,4 +19,4 @@
 ╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
 │ Answer the approval first                                                                                            │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
- Waiting for approval · y allow · n deny · a session · ! always · Esc deny   y allow  a session  ! always  n deny       
+ Waiting for approval · y allow · n deny · a session · ! always · esc deny   y allow  a session  ! always  n deny       

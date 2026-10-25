@@ -19,4 +19,4 @@
 ╭──────────────────────────────────────────────────────────────────────────────╮
 │ Answer the approval first                                                    │
 ╰──────────────────────────────────────────────────────────────────────────────╯
- Preview truncated · n deny · y allow · Esc deny   y allow  n deny  ^P commands 
+ Preview truncated · n deny · y allow · esc deny   y allow  n deny  ^P commands 

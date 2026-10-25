@@ -13,7 +13,7 @@
 │  }                                                                           ┃
 │                                                                              ┃
 │ ╭─ Edit ───────────────────────────────────────────────────────────────────╮ ┃
-│ │ ✓ succeeded                                                              │ ┃
+│ │ ✓ applied                                                                │ ┃
 │ │ src/fetch.ts                                                             │ ┃
 │ │ Updated src/fetch.ts. Verification has not been run.                     │ ┃
 │ │   import { sleep } from './util';                                        │ ┃

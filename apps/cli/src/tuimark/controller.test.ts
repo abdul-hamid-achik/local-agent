@@ -674,10 +674,10 @@ async function until(ok: () => boolean) {
 
 /** The armed status of a command card with the sandbox on: no `a`. */
 const SANDBOX_ARMED_STATUS =
-  "Waiting for approval · y allow · n deny · ! always · Esc deny";
+  "Waiting for approval · y allow · n deny · ! always · esc deny";
 /** The armed status of a card that offers no grant (a secret path). */
 const NO_GRANT_ARMED_STATUS =
-  "Waiting for approval · y allow · n deny · Esc deny";
+  "Waiting for approval · y allow · n deny · esc deny";
 
 /**
  * Until the dialog is open and has armed itself: its status offers "y
@@ -735,9 +735,10 @@ test("approval: the dialog opens with the tool card, and allow resolves the prom
   expect(decisions).toEqual([true]);
   await client.idle();
   const tool = store(ui).messages.find((m: MessageView) => m.is_tool);
+  // An edit the runtime applied says so.
   expect(tool?.card).toMatchObject({
     ok: true,
-    status: "succeeded",
+    status: "applied",
     args: "a.txt",
   });
   expect(store(ui).live.active).toBe(false);
@@ -2446,7 +2447,7 @@ test("inline: a tool receipt is committed in its final state, and the approval s
   expect(decisions).toEqual([true]);
   const out = printed(ui);
   expect(out).toContain("You: edit");
-  expect(out).toContain("tool edit succeeded");
+  expect(out).toContain("tool edit applied");
   // The live card states were never printed.
   expect(out.join("\n")).not.toContain("requested");
   expect(out.join("\n")).not.toContain("waiting for approval");
@@ -3063,6 +3064,8 @@ test("grants: `a` on an edit lets a later write through with a status flash and 
   await ui.fire("dialog_session");
   await client.idle();
   expect(decisions).toEqual([true]);
+  // The verdict echoes the key: a allows, for this session.
+  expect(statusWrites(ui)).toContain("Allowed · files for this session");
   expect(store(ui).header.grants).toBe("auto: files");
   expect(store(ui).header.grants_on).toBe(true);
 
@@ -5201,7 +5204,7 @@ test("F8: refused pre-tool text prints before the tool card", async () => {
   await client.idle();
   const out = printed(ui);
   const pre = out.findIndex((s) => s.includes("pre-tool text"));
-  const card = out.findIndex((s) => s === "tool edit succeeded");
+  const card = out.findIndex((s) => s === "tool edit applied");
   expect(pre).toBeGreaterThanOrEqual(0);
   expect(card).toBeGreaterThan(pre);
 });
@@ -7265,7 +7268,7 @@ test("a verdict stays on the status line until a tool result gives the ambient s
   await ui.fire("dialog_confirm");
   // The tool ran and its result arrived: the bar is the ambient one again.
   await until(() => store(ui).status === "build");
-  expect(statusWrites(ui)).toContain("Approved");
+  expect(statusWrites(ui)).toContain("Allowed");
   release();
   await client.idle();
 });

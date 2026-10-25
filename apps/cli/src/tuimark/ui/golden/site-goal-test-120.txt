@@ -1,7 +1,7 @@
 === grid 120x30 ===
  Local Agent            goal 2/8  Ollama / loopback  qwen3.5:4b-q4_K_M            temporary  ctx 2.1k/32k  ▊░░░░░░░░░░░ 
 ┌──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│ │ ✓ succeeded · 0.2s                                                                                               │ │
+│ │ ✓ applied · 0.2s                                                                                                 │ │
 │ │ src/fetch.ts                                                                                                     │ │
 │ │ Updated src/fetch.ts. Verification has not been run.                                                             │ │
 │ │   import { sleep } from './util';                                                                                │ │

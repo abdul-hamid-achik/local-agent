@@ -6,7 +6,7 @@
 │  }                                                                                                                   │
 │                                                                                                                      │
 │ ╭─ Edit ───────────────────────────────────────────────────────────────────────────────────────────────────────────╮ │
-│ │ ✓ succeeded                                                                                                      │ │
+│ │ ✓ applied                                                                                                        │ │
 │ │ src/fetch.ts                                                                                                     │ │
 │ │ Updated src/fetch.╭─ Run command? ───────────────────────────────────────────────────────────╮                   │ ┃
 │ │   import { sleep }│                                                                          │                   │ ┃
@@ -28,4 +28,4 @@
 ╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
 │ Answer the approval first                                                                                            │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
- Waiting for approval · y allow · n deny · a session · ! always · Esc deny   a session  ! always  pgup/pgdn scroll      
+ Waiting for approval · y allow · n deny · a session · ! always · esc deny   a session  ! always  pgup/pgdn scroll      

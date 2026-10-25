@@ -14,7 +14,7 @@
 │ ╰──────────────────────────────────────────────────────────────────────────╯ ┃
 │                                                                              ┃
 │ ╭─ Edit ───────────────────────────────────────────────────────────────────╮ ┃
-│ │ ✓ succeeded · 0.4s                                                       │ ┃
+│ │ ✓ applied · 0.4s                                                         │ ┃
 │ │ packages/runtime/src/provider.ts                                         │ ┃
 │ │ Updated packages/runtime/src/provider.ts. Verification has not been run. │ ┃
 │ │ - export const timeoutMs = 5_000;                                        │ ┃

@@ -22,4 +22,4 @@
 │                                     [ Deny ]  [ Allow ]  │
 │                                                          │
 ╰──────────────────────────────────────────────────────────╯
- Waiting for approval · n deny · Esc deny                   
+ Waiting for approval · n deny · esc deny                   

@@ -267,15 +267,21 @@
              by the parent and never returns). Facts come from the header the
              appbar already shows; the tips name keys that exist. -->
         <use template="k-empty" if="empty" title="Local Agent" style="height: auto">
-          <text class="la-welcome-line" wrap="wrap">{header.model} · {header.provider}</text>
-          <text class="la-welcome-line" wrap="wrap">{header.mode} · {header.session}</text>
-          <text class="la-welcome-line" wrap="wrap">{header.workspace}</text>
-          <text class="la-welcome-line" wrap="wrap">/help lists keys</text>
-          <text class="la-welcome-line" wrap="wrap">ctrl+p opens commands</text>
-          <text class="la-welcome-line" wrap="wrap">pgup/pgdn scroll · wheel scrolls too</text>
-          <text class="la-welcome-line" wrap="wrap">{select_tip}</text>
-          <text class="la-welcome-line" wrap="wrap">/copy copies the last reply</text>
-          <text class="la-welcome-line" wrap="wrap">esc cancels a turn</text>
+          <!-- Two groups, the session's facts and the tips, a blank row
+               between them and none inside: it fits a 40x24 terminal. -->
+          <col class="la-welcome-group">
+            <text class="la-welcome-line" wrap="wrap">{header.model} · {header.provider}</text>
+            <text class="la-welcome-line" wrap="wrap">{header.mode} · {header.session}</text>
+            <text class="la-welcome-line" wrap="wrap">{header.workspace}</text>
+          </col>
+          <col class="la-welcome-group">
+            <text class="la-welcome-line" wrap="wrap">/help lists keys</text>
+            <text class="la-welcome-line" wrap="wrap">ctrl+p opens commands</text>
+            <text class="la-welcome-line" wrap="wrap">pgup/pgdn scroll · wheel scrolls too</text>
+            <text class="la-welcome-line" wrap="wrap">{select_tip}</text>
+            <text class="la-welcome-line" wrap="wrap">/copy copies the last reply</text>
+            <text class="la-welcome-line" wrap="wrap">esc cancels a turn</text>
+          </col>
         </use>
         <button id="earlier" class="la-earlier" if="earlier.n" on:click="load_earlier">▲ {earlier.n} earlier messages, ctrl+o or enter to load more</button>
         <col id="rows" each="messages as m" key="m.id">

@@ -1331,6 +1331,17 @@ const STATE_LABEL: Record<ToolState, string> = {
   unverified: "unverified",
 };
 
+/**
+ * The card's word for its state. An edit or a write that succeeded is one
+ * the runtime applied itself (it holds the file authority), so its card
+ * says that, not the generic word.
+ */
+function stateLabel(name: string, state: ToolState): string {
+  if (state === "succeeded" && (name === "edit" || name === "write"))
+    return "applied";
+  return STATE_LABEL[state];
+}
+
 const OUT_LINES = 8;
 const OUT_COLS = 200;
 
@@ -1683,7 +1694,7 @@ function toolCard(
   return {
     name: clip(terminalLine(name), 80),
     title: toolTitle(name, call),
-    status: STATE_LABEL[state],
+    status: stateLabel(name, state),
     mark: running ? "" : state === "succeeded" ? "✓" : bad ? "✗" : "!",
     took: "",
     args: line.text,
@@ -1948,7 +1959,7 @@ export class ViewBuilder {
     return {
       n: this.numberOf(message),
       name: clip(terminalLine(name), 80),
-      status: STATE_LABEL[state],
+      status: stateLabel(name, state),
       args: callSummary(call),
       output: capDetailsOutput(
         change

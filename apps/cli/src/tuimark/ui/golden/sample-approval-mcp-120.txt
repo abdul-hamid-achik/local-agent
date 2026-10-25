@@ -6,7 +6,7 @@
 │  }                  ╭─ Call query from server db? ─────────────────────────────────────────────╮                     │
 │                     │                                                                          │                     │
 │ ╭─ Edit ────────────│  MCP tool query from server db. Call it with the arguments below.        │───────────────────╮ │
-│ │ ✓ succeeded       │  ┌────────────────────────────────────────────────────────────────────┐  │                   │ │
+│ │ ✓ applied         │  ┌────────────────────────────────────────────────────────────────────┐  │                   │ │
 │ │ src/fetch.ts      │  │db__query                                                           ┃  │                   │ │
 │ │ Updated src/fetch.│  │{                                                                   ┃  │                   │ ┃
 │ │   import { sleep }│  │  "field_0": "value number 0 for the remote tool",                  ┃  │                   │ ┃
@@ -28,4 +28,4 @@
 ╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
 │ Answer the approval first                                                                                            │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
- Waiting for approval · y allow · n deny · a session · ! always · Esc deny   a session  ! always  pgup/pgdn scroll      
+ Waiting for approval · y allow · n deny · a session · ! always · esc deny   a session  ! always  pgup/pgdn scroll      

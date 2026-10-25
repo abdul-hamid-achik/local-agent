@@ -3437,8 +3437,8 @@ export class TuimarkClient {
           (!allowed
             ? "Denied"
             : granted !== undefined
-              ? `Approved · ${granted} allowed for session`
-              : "Approved");
+              ? `Allowed · ${granted} for this session`
+              : "Allowed");
         // The verdict stays on the status line until the next state change
         // (a tool result, the turn's end); the turn's clock goes on.
         this.flashed = true;

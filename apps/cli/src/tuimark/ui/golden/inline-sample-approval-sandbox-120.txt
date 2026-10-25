@@ -13,4 +13,4 @@
 ╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
 │ Answer the approval first                                                                                            │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
- Waiting for approval · y allow · n deny · ! always · Esc deny   y allow  ! always  n deny  ^P commands  ^Y copy        
+ Waiting for approval · y allow · n deny · ! always · esc deny   y allow  ! always  n deny  ^P commands  ^Y copy        

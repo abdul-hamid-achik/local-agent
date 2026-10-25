@@ -6,7 +6,7 @@
 │  }                  ╭─ Edit src/fetch.ts? ─────────────────────────────────────────────────────╮                     │
 │                     │                                                                          │                     │
 │ ╭─ Edit ────────────│  Apply this change to the workspace.                                     │───────────────────╮ │
-│ │ ✓ succeeded       │  ┌────────────────────────────────────────────────────────────────────┐  │                   │ │
+│ │ ✓ applied         │  ┌────────────────────────────────────────────────────────────────────┐  │                   │ │
 │ │ src/fetch.ts      │  │--- a/src/fetch.ts                                                  ┃  │                   │ │
 │ │ Updated src/fetch.│  │+++ b/src/fetch.ts                                                  ┃  │                   │ ┃
 │ │   import { sleep }│  │@@ -12,3 +12,9 @@                                                   ┃  │                   │ ┃
@@ -28,4 +28,4 @@
 ╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
 │ Answer the approval first                                                                                            │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
- Waiting for approval · n deny · Esc deny   a session  ! always  pgup/pgdn scroll  home/end top/end                     
+ Waiting for approval · n deny · esc deny   a session  ! always  pgup/pgdn scroll  home/end top/end                     

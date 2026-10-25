@@ -13,7 +13,7 @@
 │  }                  │  │Think: model default                                                ┃  │                     ┃
 │                     │  │Context: 9.6k/32k                                                   ┃  │                     ┃
 │ ╭─ Edit ────────────│  │Workspace: /home/me/project                                         ┃  │───────────────────╮ ┃
-│ │ ✓ succeeded       │  │Mode: build                                                         ┃  │                   │ ┃
+│ │ ✓ applied         │  │Mode: build                                                         ┃  │                   │ ┃
 │ │ src/fetch.ts      │  │Session: a1b2c3d                                                    ┃  │                   │ ┃
 │ │ Updated src/fetch.│  │Session db: /home/me/project/sessions.db                            ┃  │                   │ ┃
 │ │   import { sleep }│  │Theme: auto                                                         ┃  │                   │ ┃

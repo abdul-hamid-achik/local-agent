@@ -13,7 +13,7 @@
 │  }                          │ Mode: plan (read only)                        /mode plan │                             ┃
 │                             │ Mode: build (read, edit, command)            /mode build │                             ┃
 │ ╭─ Edit ────────────────────│ Mode: chat (conversational)                   /mode chat │───────────────────────────╮ ┃
-│ │ ✓ succeeded               │ Model: show current                               /model │                           │ ┃
+│ │ ✓ applied                 │ Model: show current                               /model │                           │ ┃
 │ │ src/fetch.ts              │                                                          │                           │ ┃
 │ │ Updated src/fetch.ts. Veri│                                                          │                           │ ┃
 │ │   import { sleep } from '.│                                                          │                           │ ┃

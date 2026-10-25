@@ -5,7 +5,7 @@
 │  [goal 1/8] Goal: make the fetch tests pass                                  │
 │                                                                              │
 │ ╭─ Edit ───────────────────────────────────────────────────────────────────╮ │
-│ │ ✓ succeeded · 0.2s                                                       │ │
+│ │ ✓ applied · 0.2s                                                         │ │
 │ │ src/fetch.ts                                                             │ │
 │ │ Updated src/fetch.ts. Verification has not been run.                     │ │
 │ │   import { sleep } from './util';                                        │ │

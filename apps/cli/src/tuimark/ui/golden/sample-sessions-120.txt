@@ -13,7 +13,7 @@
 │  }                  │                                                                          │                     ┃
 │                     │  ┌────────────────────────────────────────────────────────────────────┐  │                     ┃
 │ ╭─ Edit ────────────│  │› a1b2c3d · 5 messages · current                                    │  │───────────────────╮ ┃
-│ │ ✓ succeeded       │  │  e4f5g6h · 12 messages                                             │  │                   │ ┃
+│ │ ✓ applied         │  │  e4f5g6h · 12 messages                                             │  │                   │ ┃
 │ │ src/fetch.ts      │  │  i7j8k9l · 2 messages                                              │  │                   │ ┃
 │ │ Updated src/fetch.│  └────────────────────────────────────────────────────────────────────┘  │                   │ ┃
 │ │   import { sleep }│  up/down choose · enter loads · pgup/pgdn scroll · esc close             │                   │ ┃

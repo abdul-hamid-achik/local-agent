@@ -202,7 +202,7 @@
       "card": {
         "name": "edit",
         "title": "Edit",
-        "status": "succeeded",
+        "status": "applied",
         "mark": "✓",
         "took": "",
         "args": "src/fetch.ts",
@@ -687,7 +687,7 @@
   "draft": "",
   "placeholder": "Answer the approval first",
   "running": true,
-  "status": "Waiting for approval · n deny · Esc deny",
+  "status": "Waiting for approval · n deny · esc deny",
   "commit_buf": {
     "id": "commit",
     "is_user": false,

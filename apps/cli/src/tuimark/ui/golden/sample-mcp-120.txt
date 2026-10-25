@@ -13,7 +13,7 @@
 │  }                  │                                                                          │                     ┃
 │                     │  MCP servers: 1 · 2 tools                                                │                     ┃
 │ ╭─ Edit ────────────│  ┌────────────────────────────────────────────────────────────────────┐  │───────────────────╮ ┃
-│ │ ✓ succeeded       │  │db · 2 tools                                                        │  │                   │ ┃
+│ │ ✓ applied         │  │db · 2 tools                                                        │  │                   │ ┃
 │ │ src/fetch.ts      │  │  query, insert                                                     │  │                   │ ┃
 │ │ Updated src/fetch.│  └────────────────────────────────────────────────────────────────────┘  │                   │ ┃
 │ │   import { sleep }│  pgup/pgdn scroll · home/end top/bottom · esc or q close                 │                   │ ┃

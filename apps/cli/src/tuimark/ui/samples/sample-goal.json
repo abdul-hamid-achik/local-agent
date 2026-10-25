@@ -75,7 +75,7 @@
       "card": {
         "name": "edit",
         "title": "Edit",
-        "status": "succeeded",
+        "status": "applied",
         "mark": "✓",
         "took": "",
         "args": "src/fetch.ts",

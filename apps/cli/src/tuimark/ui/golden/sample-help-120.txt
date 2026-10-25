@@ -13,7 +13,7 @@
 │  }                  │  /status show the effective config (model, workspace, session)           │                     ┃
 │                     │  /provider ask the model's endpoint: answer time, what is loaded         │                     ┃
 │ ╭─ Edit ────────────│  /sessions [new] switch to a saved session, or start a new one           │───────────────────╮ ┃
-│ │ ✓ succeeded       │  /recover [N outcome] review calls whose outcome is unknown              │                   │ ┃
+│ │ ✓ applied         │  /recover [N outcome] review calls whose outcome is unknown              │                   │ ┃
 │ │ src/fetch.ts      │  /find TEXT search saved session messages (needs --session-db)           │                   │ ┃
 │ │ Updated src/fetch.│  /export [json] write the conversation to a markdown or JSON file        │                   │ ┃
 │ │   import { sleep }│  /mcp show connected MCP servers and their tools                         │                   │ ┃

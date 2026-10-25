@@ -4,8 +4,8 @@
 │                                                     Local Agent                                                      │
 │                                                                                                                      │
 │                                        qwen3.5:4b-q4_K_M · Ollama / loopback                                         │
-│                                                                                                                      │
 │                                                  build · temporary                                                   │
+│                                                       project                                                        │
 │                                                                                                                      │
 │                     ╭─ Provider ───────────────────────────────────────────────────────────────╮                     │
 │                     │                                                                          │                     │

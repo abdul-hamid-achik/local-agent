@@ -28,4 +28,4 @@
 ╭──────────────────────────────────────────────────────────────────────────────╮
 │ Answer the approval first                                                    │
 ╰──────────────────────────────────────────────────────────────────────────────╯
- Preview truncated · n deny · y allow · Esc deny   pgup/pgdn scroll             
+ Preview truncated · n deny · y allow · esc deny   pgup/pgdn scroll             

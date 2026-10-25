@@ -114,7 +114,7 @@ export const PLACEHOLDER_BUSY = "Type to queue a message";
 /** While an approval waits, its keys are the dialog's: nothing is queued. */
 export const APPROVAL_PLACEHOLDER = "Answer the approval first";
 /** While the dialog is not armed yet: only deny works. */
-export const APPROVAL_WAIT_STATUS = "Waiting for approval · n deny · Esc deny";
+export const APPROVAL_WAIT_STATUS = "Waiting for approval · n deny · esc deny";
 /**
  * Once the dialog accepts `y` (and `a`, the session grant, `!` the rule).
  * The decision comes first, so a narrow status row that cuts the grants
@@ -122,10 +122,10 @@ export const APPROVAL_WAIT_STATUS = "Waiting for approval · n deny · Esc deny"
  * offer.
  */
 export const APPROVAL_STATUS =
-  "Waiting for approval · y allow · n deny · a session · ! always · Esc deny";
+  "Waiting for approval · y allow · n deny · a session · ! always · esc deny";
 /** The body says to deny an unread change, so the status leads with deny. */
 export const APPROVAL_TRUNCATED_STATUS =
-  "Preview truncated · n deny · y allow · Esc deny";
+  "Preview truncated · n deny · y allow · esc deny";
 /** A `y` swallowed by the arm delay says so instead of going silent. */
 export const APPROVAL_UNARMED_STATUS = "Approval not armed yet — press y again";
 /** An `a` swallowed by the arm delay, same rule as `y`. */
@@ -1109,7 +1109,7 @@ export function armedStatus(
     "n deny",
     ...(approval.session_ok ? ["a session"] : []),
     ...(approval.always_ok ? ["! always"] : []),
-    "Esc deny",
+    "esc deny",
   ];
   return `Waiting for approval · ${keys.join(" · ")}`;
 }

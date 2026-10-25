@@ -202,7 +202,7 @@
       "card": {
         "name": "edit",
         "title": "Edit",
-        "status": "succeeded",
+        "status": "applied",
         "mark": "✓",
         "took": "0.4s",
         "args": "src/fetch.ts",

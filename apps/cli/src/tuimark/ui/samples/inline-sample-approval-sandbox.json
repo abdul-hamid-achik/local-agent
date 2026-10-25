@@ -353,7 +353,7 @@
   "draft": "",
   "placeholder": "Answer the approval first",
   "running": true,
-  "status": "Waiting for approval · y allow · n deny · ! always · Esc deny",
+  "status": "Waiting for approval · y allow · n deny · ! always · esc deny",
   "commit_buf": {
     "id": "commit",
     "is_user": false,

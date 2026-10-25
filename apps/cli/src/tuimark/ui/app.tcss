@@ -88,6 +88,7 @@
 /* Its own width up to the row's, so a line longer than a narrow terminal
  * (the default model's name and provider at 40 columns) wraps, not cut. */
 .la-welcome-line { width: auto; max-width: 100%; color: $muted; }
+.la-welcome-group { width: auto; max-width: 100%; height: auto; layout: column; align: center; }
 #rows, #live { height: auto; layout: column; }
 
 .la-msg { height: auto; layout: column; margin: 0 0 1 0; }
@@ -167,7 +168,7 @@ span.del { color: $danger; }
  * takes the rest. While an approval is open its status names the keys,
  * so it gets the whole row and the hints, which would repeat a and !, go:
  * capped, it cut `y allow` itself. It still ends in … where the row is
- * shorter than the keys (Esc deny at 60 columns). */
+ * shorter than the keys (esc deny at 60 columns). */
 @media (max-cols: 60) {
   .la-ctx, .la-ctxbar, .la-grants { display: none; }
   .la-statustext { max-width: 50%; padding: 0; }

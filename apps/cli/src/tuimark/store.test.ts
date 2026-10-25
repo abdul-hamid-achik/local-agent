@@ -586,14 +586,14 @@ test("the armed status names only the keys that act", () => {
   const offered = { truncated: false, session_ok: true, always_ok: true };
   expect(armedStatus(offered)).toBe(APPROVAL_STATUS);
   expect(armedStatus({ ...offered, session_ok: false })).toBe(
-    "Waiting for approval · y allow · n deny · ! always · Esc deny",
+    "Waiting for approval · y allow · n deny · ! always · esc deny",
   );
   expect(armedStatus({ ...offered, always_ok: false })).toBe(
-    "Waiting for approval · y allow · n deny · a session · Esc deny",
+    "Waiting for approval · y allow · n deny · a session · esc deny",
   );
   expect(
     armedStatus({ truncated: false, session_ok: false, always_ok: false }),
-  ).toBe("Waiting for approval · y allow · n deny · Esc deny");
+  ).toBe("Waiting for approval · y allow · n deny · esc deny");
   expect(
     armedStatus({ truncated: true, session_ok: false, always_ok: false }),
   ).toBe(APPROVAL_TRUNCATED_STATUS);

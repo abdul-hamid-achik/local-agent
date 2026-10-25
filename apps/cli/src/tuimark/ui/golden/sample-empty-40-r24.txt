@@ -1,23 +1,23 @@
 === grid 40x24 ===
  Local Agent        build  LOCAL        
 ┌──────────────────────────────────────┐
-│ qwen3-coder:30b · Ollama / loopback  │
+│             Local Agent              │
 │                                      │
-│       build · session a1b2c3d        ┃
-│                                      ┃
-│               project                ┃
-│                                      ┃
-│           /help lists keys           ┃
-│                                      ┃
-│        ctrl+p opens commands         ┃
-│                                      ┃
-│ pgup/pgdn scroll · wheel scrolls too ┃
-│                                      ┃
-│       shift-drag selects text        ┃
-│                                      ┃
-│     /copy copies the last reply      ┃
-│                                      ┃
-│          esc cancels a turn          ┃
+│ qwen3-coder:30b · Ollama / loopback  │
+│       build · session a1b2c3d        │
+│               project                │
+│                                      │
+│           /help lists keys           │
+│        ctrl+p opens commands         │
+│ pgup/pgdn scroll · wheel scrolls too │
+│       shift-drag selects text        │
+│     /copy copies the last reply      │
+│          esc cancels a turn          │
+│                                      │
+│                                      │
+│                                      │
+│                                      │
+│                                      │
 └──────────────────────────────────────┘
 ╔══════════════════════════════════════╗
 ║ Message the model                    ║

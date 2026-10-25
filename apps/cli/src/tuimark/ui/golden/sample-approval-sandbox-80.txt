@@ -6,7 +6,7 @@
 │  }                                                                           │
 │                                                                              │
 │ ╭─ Edit ───────────────────────────────────────────────────────────────────╮ │
-│ │ ✓ succeeded                                                              │ │
+│ │ ✓ applied                                                                │ │
 │ ╭─ Run command? ───────────────────────────────────────────────────────────╮ │
 │ │                                                                          │ ┃
 │ │  Runs outside the sandbox, as you, exactly as written (no shell). It     │ ┃
@@ -28,4 +28,4 @@
 ╭──────────────────────────────────────────────────────────────────────────────╮
 │ Answer the approval first                                                    │
 ╰──────────────────────────────────────────────────────────────────────────────╯
- Waiting for approval · y allow · n deny · ! always · Esc deny   ! always       
+ Waiting for approval · y allow · n deny · ! always · esc deny   ! always       

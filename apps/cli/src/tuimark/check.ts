@@ -436,7 +436,7 @@ const extraDumps: {
     golden: "sample-approval-60-r24.txt",
     contains: ["Deny", "Allow", "--- a/src/fetch.ts"],
   },
-  // Before it arms, the narrow status says only that n and Esc deny: the
+  // Before it arms, the narrow status says only that n and esc deny: the
   // hints, which would name a and ! there, give the row to the status.
   {
     doc: "app.tui",
@@ -444,7 +444,7 @@ const extraDumps: {
     cols: 60,
     rows: 24,
     golden: "sample-approval-unarmed-60-r24.txt",
-    contains: ["Waiting for approval · n deny · Esc deny"],
+    contains: ["Waiting for approval · n deny · esc deny"],
   },
   // The status names no key while a question waits: the box's hint does,
   // and at 60 columns its longest one still keeps esc skip.
@@ -914,7 +914,7 @@ const plays: Expect[] = [
     input: "",
     cols: 120,
     actions: [],
-    screen: ["Esc deny   pgup/pgdn scroll"],
+    screen: ["esc deny   pgup/pgdn scroll"],
     notScreen: ["a session", "! always"],
   },
   {
@@ -927,7 +927,7 @@ const plays: Expect[] = [
     input: "",
     cols: 120,
     actions: [],
-    screen: ["Esc deny   ! always  pgup/pgdn scroll"],
+    screen: ["esc deny   ! always  pgup/pgdn scroll"],
     notScreen: ["a session"],
   },
   {
@@ -1371,7 +1371,7 @@ const plays: Expect[] = [
     cols: 120,
     input: "",
     actions: [],
-    screen: ["Esc deny   y allow  n deny"],
+    screen: ["esc deny   y allow  n deny"],
     notScreen: ["a session", "! always"],
   },
   {
@@ -1398,7 +1398,7 @@ const plays: Expect[] = [
     cols: 120,
     input: "",
     actions: [],
-    screen: ["Esc deny   y allow  ! always  n deny"],
+    screen: ["esc deny   y allow  ! always  n deny"],
     notScreen: ["a session"],
   },
   {
@@ -1811,7 +1811,7 @@ const plays: Expect[] = [
       "Add a retry to the fetch helper",
       "Assistant",
       "Edit",
-      "✓ succeeded",
+      "✓ applied",
       "Done. The helper now retries three times.",
     ],
     notScrollback: ["waiting for the model", "Type to queue a message"],

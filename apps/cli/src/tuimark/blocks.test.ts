@@ -793,6 +793,20 @@ test("a finished edit's card shows the change its own strings made", () => {
   );
 });
 
+test("an edit or a write the runtime applied says applied; other tools say succeeded", () => {
+  const edit = cardOf("edit", { path: "a" }, "succeeded", "Updated a.");
+  expect(edit.card?.status).toBe("applied");
+  expect(edit.receipt?.status).toBe("applied");
+  const write = cardOf("write", { path: "b" }, "succeeded", "Created b.");
+  expect(write.card?.status).toBe("applied");
+  const run = cardOf("run_command", { argv: ["true"] }, "succeeded", "ok");
+  expect(run.card?.status).toBe("succeeded");
+  // Only success has the narrower word.
+  expect(cardOf("edit", { path: "a" }, "failed", "no").card?.status).toBe(
+    "failed",
+  );
+});
+
 test("an edit that did not land shows no change", () => {
   // unverified is MCP's word (a server's result) and a status-less
   // receipt's: neither says an edit was applied.

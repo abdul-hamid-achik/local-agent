@@ -147,7 +147,7 @@
       "card": {
         "name": "edit",
         "title": "Edit",
-        "status": "succeeded",
+        "status": "applied",
         "mark": "✓",
         "took": "0.4s",
         "args": "packages/runtime/src/provider.ts",
@@ -512,7 +512,7 @@
   "draft": "",
   "placeholder": "Answer the approval first",
   "running": true,
-  "status": "Waiting for approval · y allow · n deny · a session · ! always · Esc deny",
+  "status": "Waiting for approval · y allow · n deny · a session · ! always · esc deny",
   "commit_buf": {
     "id": "commit",
     "is_user": false,
