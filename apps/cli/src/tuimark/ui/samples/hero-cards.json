@@ -58,6 +58,8 @@
         "bad": false,
         "warn": false,
         "running": false,
+        "spin": false,
+        "still": false,
         "out": []
       },
       "links": [],
@@ -101,6 +103,8 @@
         "bad": false,
         "warn": false,
         "running": false,
+        "spin": false,
+        "still": false,
         "out": []
       },
       "links": [],
@@ -128,6 +132,8 @@
         "bad": false,
         "warn": false,
         "running": false,
+        "spin": false,
+        "still": false,
         "out": [
           "1: import { fetchJSON } from './http';\n2: export const timeoutMs = 5_000;"
         ]
@@ -157,6 +163,8 @@
         "bad": false,
         "warn": false,
         "running": false,
+        "spin": false,
+        "still": false,
         "out": [
           "Updated packages/runtime/src/provider.ts. Verification has not been run.\n",
           {
@@ -200,6 +208,8 @@
       "bad": false,
       "warn": false,
       "running": false,
+      "spin": false,
+      "still": false,
       "out": []
     },
     "links": [],
@@ -582,6 +592,8 @@
       "bad": false,
       "warn": false,
       "running": false,
+      "spin": false,
+      "still": false,
       "out": []
     },
     "links": [],

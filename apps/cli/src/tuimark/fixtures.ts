@@ -570,6 +570,22 @@ export function thinkingSample(): Store {
   return store;
 }
 
+/** The thinking sample with motion reduced (TUIMARK_MOTION=reduce): the head's glyph is still. */
+export function calmHeadSample(): Store {
+  const store = thinkingSample();
+  store.head = headState("thinking", 7, true);
+  return store;
+}
+
+/** A running command with motion reduced: the card's still glyph stands where its spinner turns. */
+export function calmToolSample(): Store {
+  const { store } = base();
+  store.live = liveToolView(SITE_TEST_CALL, "run_command", "running", true);
+  store.placeholder = PLACEHOLDER_BUSY;
+  store.running = true;
+  return store;
+}
+
 /**
  * A goal at its second turn: the host-written messages are notices, the
  * header names the turn, and the turn is streaming.
@@ -1445,6 +1461,8 @@ export const SAMPLES = {
   "sample-question-text": questionTextSample,
   "sample-thinking": thinkingSample,
   "sample-streaming": streamingSample,
+  "sample-calm-head": calmHeadSample,
+  "sample-calm-tool": calmToolSample,
   "sample-goal": goalSample,
   "sample-palette": paletteSample,
   "sample-help": helpSample,
@@ -1534,6 +1552,7 @@ export const INLINE_SAMPLES = {
   "inline-sample-streaming": () => toInline(streamingSample()),
   "inline-sample-goal": () => toInline(goalSample()),
   "inline-sample-thinking": () => toInline(thinkingSample()),
+  "inline-sample-calm-tool": () => toInline(calmToolSample()),
   "inline-sample-approval": inlineApprovalSample,
   "inline-sample-approval-long": inlineLongApprovalSample,
   "inline-sample-approval-truncated": inlineTruncatedApprovalSample,

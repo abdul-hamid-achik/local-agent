@@ -62,6 +62,8 @@
       "bad": false,
       "warn": false,
       "running": false,
+      "spin": false,
+      "still": false,
       "out": []
     },
     "links": [],
@@ -468,6 +470,8 @@
       "bad": false,
       "warn": false,
       "running": false,
+      "spin": false,
+      "still": false,
       "out": []
     },
     "links": [],

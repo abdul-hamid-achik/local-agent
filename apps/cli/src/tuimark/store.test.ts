@@ -40,6 +40,7 @@ import {
   providerLines,
   questionPick,
   questionState,
+  reducedMotion,
   sessionRows,
   statusLines,
   TRUNCATED_BODY,
@@ -1396,4 +1397,31 @@ test("the head names the phase and the elapsed time; a wait on the person shows 
   expect(headState("approval", 9).text).toBe("waiting for your approval · 9s");
   expect(headState("answer", 9).text).toBe("waiting for your answer · 9s");
   expect(NO_HEAD).toMatchObject({ on: false, spin: false, still: false });
+});
+
+test("with motion reduced the head is the still glyph in every phase, and its words still count the time", () => {
+  for (const phase of [
+    "waiting",
+    "mcp",
+    "thinking",
+    "streaming",
+    "approval",
+    "answer",
+  ] as const) {
+    const calm = headState(phase, 9, true);
+    expect(calm, phase).toMatchObject({ on: true, spin: false, still: true });
+    // Only the spinner goes: the phase and the elapsed time are the same words.
+    expect(calm.text, phase).toBe(headState(phase, 9).text);
+  }
+  expect(headState("waiting", 3, true).text).toBe("waiting for the model · 3s");
+});
+
+test("TUIMARK_MOTION=reduce or 0 reduces motion, nothing else does", () => {
+  for (const value of ["reduce", "0", "REDUCE", " reduce ", "Reduce"])
+    expect(reducedMotion({ TUIMARK_MOTION: value }), value).toBe(true);
+  for (const value of ["", "1", "full", "no", "false", "reduced", "00"])
+    expect(reducedMotion({ TUIMARK_MOTION: value }), value).toBe(false);
+  // Unset is motion on; NO_COLOR is the engine's (a color profile), not this switch.
+  expect(reducedMotion({})).toBe(false);
+  expect(reducedMotion({ NO_COLOR: "1" })).toBe(false);
 });

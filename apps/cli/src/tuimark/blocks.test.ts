@@ -24,12 +24,16 @@ import {
   MAX_PARA_CHARS,
   type MessageView,
   messageImages,
+  NO_CARD,
+  onHold,
   outputRuns,
   parseBlocks,
   parseStreaming,
   type Run,
   resultSummary,
+  runningCard,
   runsText,
+  STILL_GLYPH,
   startsOpenFence,
   THINK_TRIM,
   tableRuns,
@@ -1090,6 +1094,47 @@ test("live tool calls come in call order, one per tool_requested event", () => {
     running: true,
     status: "waiting for approval",
   });
+});
+
+test("a running card spins; with motion reduced the still glyph stands where the spinner turns", () => {
+  for (const state of ["requested", "approval", "running"] as const) {
+    expect(liveToolView(undefined, "read", state).card, state).toMatchObject({
+      running: true,
+      spin: true,
+      still: false,
+      mark: "",
+    });
+    expect(
+      liveToolView(undefined, "read", state, true).card,
+      state,
+    ).toMatchObject({ running: true, spin: false, still: true, mark: "⠿" });
+  }
+  // A call that goes on after it was held runs, either way.
+  const held = onHold(liveToolView(undefined, "edit", "approval").card, "hold");
+  expect(held).toMatchObject({ running: false, spin: false, still: false });
+  expect(runningCard(held)).toMatchObject({
+    status: "running",
+    running: true,
+    spin: true,
+    still: false,
+    mark: "",
+  });
+  expect(runningCard(held, true)).toMatchObject({
+    status: "running",
+    running: true,
+    spin: false,
+    still: true,
+    mark: STILL_GLYPH,
+  });
+  // A finished card never shows either.
+  const builder = new ViewBuilder();
+  const done = builder.fromMessage({
+    role: "tool",
+    tool_name: "read",
+    content: JSON.stringify({ status: "succeeded", output: "ok" }),
+  });
+  expect(done?.card).toMatchObject({ spin: false, still: false, mark: "✓" });
+  expect(NO_CARD).toMatchObject({ spin: false, still: false });
 });
 
 test("a notice and an error are quoted UI-local views: one role flag each, every line kept", () => {

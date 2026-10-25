@@ -58,6 +58,8 @@
         "bad": false,
         "warn": false,
         "running": false,
+        "spin": false,
+        "still": false,
         "out": []
       },
       "links": [],
@@ -85,6 +87,8 @@
         "bad": false,
         "warn": false,
         "running": false,
+        "spin": false,
+        "still": false,
         "out": [
           "image 1x1 png from shots/dot.png (attached)"
         ]
@@ -137,6 +141,8 @@
         "bad": false,
         "warn": false,
         "running": false,
+        "spin": false,
+        "still": false,
         "out": []
       },
       "links": [],
@@ -169,6 +175,8 @@
       "bad": false,
       "warn": false,
       "running": false,
+      "spin": false,
+      "still": false,
       "out": []
     },
     "links": [],
@@ -535,6 +543,8 @@
       "bad": false,
       "warn": false,
       "running": false,
+      "spin": false,
+      "still": false,
       "out": []
     },
     "links": [],

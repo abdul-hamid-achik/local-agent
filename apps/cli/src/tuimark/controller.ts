@@ -82,6 +82,7 @@ import {
   NO_CARD,
   onHold,
   RECEIPTS_MAX_CHARS,
+  runningCard,
   type ToolReceipt,
   tableWidth,
   ViewBuilder,
@@ -363,6 +364,11 @@ export interface ClientOptions {
   ) => Promise<LoadedModel | null | undefined>;
   /** Chalupa's environment name (CHALUPA_ENVIRONMENT), when Chalupa launched this process. */
   environment?: string;
+  /**
+   * Motion is reduced (`TUIMARK_MOTION=reduce` or `0`, read by launch.ts):
+   * every spinner the client renders is the still glyph. Default off.
+   */
+  reduceMotion?: boolean;
   /** Clock for the head's elapsed time. Default Date.now. */
   now?: () => number;
   /**
@@ -2615,10 +2621,11 @@ export class TuimarkClient {
   private headView(): HeadView {
     if (!this.headOn) return NO_HEAD;
     const seconds = this.turnSeconds();
-    if (this.decide) return headState("approval", seconds);
-    if (this.asking) return headState("answer", seconds);
+    const calm = this.options.reduceMotion;
+    if (this.decide) return headState("approval", seconds, calm);
+    if (this.asking) return headState("answer", seconds, calm);
     if (this.liveTool || this.phase === "between") return NO_HEAD;
-    return headState(this.phase, seconds);
+    return headState(this.phase, seconds, calm);
   }
 
   /** The write that brings the head up to date, or none when it already is. */
@@ -2678,7 +2685,7 @@ export class TuimarkClient {
     if (!before || !this.liveTool) return [];
     this.liveTool = {
       ...this.liveTool,
-      card: running ? { ...before, status: "running", running: true } : before,
+      card: running ? runningCard(before, this.options.reduceMotion) : before,
     };
     this.dirty = false;
     return [{ path: "live", value: this.liveTool }];
@@ -4396,6 +4403,7 @@ export class TuimarkClient {
               this.builder.takeCall(),
               event.name,
               "requested",
+              this.options.reduceMotion,
             );
             this.dirty = true;
             break;
@@ -4404,11 +4412,10 @@ export class TuimarkClient {
             if (this.liveTool) {
               this.liveTool = {
                 ...this.liveTool,
-                card: {
-                  ...this.liveTool.card,
-                  status: "running",
-                  running: true,
-                },
+                card: runningCard(
+                  this.liveTool.card,
+                  this.options.reduceMotion,
+                ),
               };
               this.dirty = true;
             }

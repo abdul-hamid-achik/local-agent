@@ -8564,3 +8564,168 @@ test("inline: /search alone says what it takes, and ctrl+f prints nothing", asyn
   expect(printed(ui)).toHaveLength(before);
   expect(store(ui).search.open).toBe(false);
 });
+
+// --------------------------------------------------------------- reduced motion
+
+/** Every `head` and `live` value the host took, in order. */
+const spinnerWrites = (ui: FakeHost) =>
+  ui.batches
+    .filter((_, index) => ui.applied.has(index))
+    .flat()
+    .filter((w) => w.path === "head" || w.path === "live");
+
+/** A turn that thinks, calls a tool that is approved, runs, then answers. */
+function motionTurn(gate: Promise<void>): Script {
+  return async function* ({ options }) {
+    yield { type: "thinking", text: "hm" };
+    yield {
+      type: "message",
+      message: {
+        role: "assistant",
+        content: "",
+        tool_calls: [
+          {
+            id: "c1",
+            function: { name: "edit", arguments: { path: "a.txt" } },
+          },
+        ],
+      },
+    };
+    yield { type: "tool_requested", id: "e1", name: "edit" };
+    const allowed = await options.approve(editProposal(), options.signal);
+    decisions.push(allowed);
+    yield { type: "tool_start", id: "e1", name: "edit" };
+    await gate;
+    const message: Message = {
+      role: "tool",
+      tool_name: "edit",
+      tool_call_id: "c1",
+      content: JSON.stringify({ status: "succeeded", output: "Updated a.txt" }),
+    };
+    yield { type: "message", message };
+    yield {
+      type: "tool_result",
+      id: "e1",
+      name: "edit",
+      status: "succeeded",
+      output: "o",
+    };
+    yield { type: "text", text: "done " };
+    yield { type: "message", message: { role: "assistant", content: "done" } };
+  };
+}
+
+test("with motion reduced a whole turn never writes a spinner: the head and the running card show the still glyph", async () => {
+  let release: () => void = () => {};
+  const gate = new Promise<void>((r) => {
+    release = r;
+  });
+  const { ui, client } = setup(motionTurn(gate), { reduceMotion: true });
+  await ui.fire("send", "edit it");
+  // The head's glyph stands where the spinner turns, and keeps its words.
+  expect(store(ui).head).toMatchObject({
+    on: true,
+    spin: false,
+    still: true,
+    glyph: "⠿",
+  });
+  expect(store(ui).head.text).toMatch(/ · \d+s$/);
+  await untilApproval(ui);
+  await ui.fire("dialog_confirm");
+  await until(() => store(ui).live.card.status === "running");
+  // The approved call runs: its card has the glyph where the spinner turns.
+  expect(store(ui).live.card).toMatchObject({
+    running: true,
+    spin: false,
+    still: true,
+    mark: "⠿",
+  });
+  release();
+  await client.idle();
+  // Nothing the host ever took has a spinner in it.
+  for (const write of spinnerWrites(ui)) {
+    const value = write.value as { spin?: boolean; card?: { spin: boolean } };
+    expect(value.spin ?? false, JSON.stringify(write)).toBe(false);
+    expect(value.card?.spin ?? false, JSON.stringify(write)).toBe(false);
+  }
+  // The finished card is the usual one.
+  expect(store(ui).messages.find((m) => m.is_tool)?.card).toMatchObject({
+    mark: "✓",
+    spin: false,
+    still: false,
+  });
+  expect(client.writeErrors).toEqual([]);
+});
+
+test("with motion on the same turn spins: the head's spinner and the running card's", async () => {
+  let release: () => void = () => {};
+  const gate = new Promise<void>((r) => {
+    release = r;
+  });
+  const { ui, client } = setup(motionTurn(gate));
+  await ui.fire("send", "edit it");
+  expect(store(ui).head).toMatchObject({ spin: true, still: false });
+  await untilApproval(ui);
+  await ui.fire("dialog_confirm");
+  await until(() => store(ui).live.card.status === "running");
+  expect(store(ui).live.card).toMatchObject({
+    running: true,
+    spin: true,
+    still: false,
+    mark: "",
+  });
+  release();
+  await client.idle();
+  expect(
+    spinnerWrites(ui).some((w) => (w.value as { spin?: boolean }).spin),
+  ).toBe(true);
+});
+
+test("a tool that starts without an approval is still under reduced motion too", async () => {
+  let release: () => void = () => {};
+  const gate = new Promise<void>((r) => {
+    release = r;
+  });
+  const { ui, client } = setup(
+    async function* () {
+      yield { type: "tool_requested", id: "r1", name: "read" };
+      yield { type: "tool_start", id: "r1", name: "read" };
+      await gate;
+    },
+    { reduceMotion: true },
+  );
+  await ui.fire("send", "read");
+  await until(() => store(ui).live.card.status === "running");
+  expect(store(ui).live.card).toMatchObject({
+    spin: false,
+    still: true,
+    mark: "⠿",
+  });
+  release();
+  await client.idle();
+});
+
+test("reduced motion keeps the elapsed time counting: it is information, the only sign of life beside a still glyph", async () => {
+  let nowMs = 1_000_000;
+  let release: () => void = () => {};
+  const gate = new Promise<void>((r) => {
+    release = r;
+  });
+  const { ui, client } = setup(
+    quiet(async () => {
+      await gate;
+    }),
+    { reduceMotion: true, now: () => nowMs },
+  );
+  await ui.fire("send", "go");
+  expect(store(ui).head.text).toBe("waiting for the model · 0s");
+  nowMs += 5_000;
+  await client.flush();
+  expect(store(ui).head).toMatchObject({
+    spin: false,
+    still: true,
+    text: "waiting for the model · 5s",
+  });
+  release();
+  await client.idle();
+});

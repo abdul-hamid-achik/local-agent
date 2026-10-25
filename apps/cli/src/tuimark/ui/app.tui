@@ -201,7 +201,8 @@
   <template id="la-tool">
     <box class="la-tool" class:ok="t.ok" class:bad="t.bad" class:warn="t.warn" class:run="t.running" title="{t.title}">
       <row class="la-tool-head">
-        <progress indeterminate="true" if="t.running" class="la-spin"/>
+        <progress indeterminate="true" if="t.spin" class="la-spin"/>
+        <text if="t.still" class="la-still">{t.mark}</text>
         <text if="!t.running" class="la-tool-mark">{t.mark}</text>
         <text class="la-tool-status">{t.status}</text>
         <text if="t.took" class="la-muted la-tool-took">· {t.took}</text>

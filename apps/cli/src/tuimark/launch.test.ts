@@ -408,6 +408,80 @@ test("the turn is awaited before the launcher returns when the host dies mid-tur
   expect(turnEnded).toBe(true);
 });
 
+test("TUIMARK_MOTION=reduce (or 0) reaches the client: a whole turn writes no spinner", async () => {
+  /** Runs one turn with a tool call and returns every write the host took. */
+  async function turn(motion: string | undefined) {
+    const before = process.env.TUIMARK_MOTION;
+    if (motion === undefined) delete process.env.TUIMARK_MOTION;
+    else process.env.TUIMARK_MOTION = motion;
+    try {
+      const control: { exit?: (reason: HostExit | Error) => void } = {};
+      const host = fakeSpawn({}, control);
+      const gate = Promise.withResolvers<void>();
+      const script = async function* (): AsyncGenerator<AgentEvent> {
+        yield { type: "tool_requested", id: "c1", name: "read" };
+        yield { type: "tool_start", id: "c1", name: "read" };
+        await gate.promise;
+        yield { type: "done", inputTokens: 1, outputTokens: 1 };
+      };
+      const done = launch(
+        {
+          spawn: host.spawn,
+          resolve: async () => "/b",
+          stdout: fakeStdout(true),
+          run: script,
+        },
+        new AbortController().signal,
+      );
+      await host.attached;
+      await host.calls.handlers.get("send")?.({
+        seq: 1,
+        action: "send",
+        source: "composer",
+        keys: {},
+        value: "go",
+      });
+      await until(() =>
+        host.calls.batches.flat().some((write) => {
+          const w = write as { path: string; value: unknown };
+          return (
+            w.path === "live" &&
+            (w.value as { card?: { running: boolean } }).card?.running === true
+          );
+        }),
+      );
+      gate.resolve();
+      control.exit?.({ reason: "quit", code: 0 });
+      await done;
+      return host.calls.batches.flat() as { path: string; value: unknown }[];
+    } finally {
+      if (before === undefined) delete process.env.TUIMARK_MOTION;
+      else process.env.TUIMARK_MOTION = before;
+    }
+  }
+  const spins = (writes: { path: string; value: unknown }[]) =>
+    writes.filter(
+      (w) =>
+        (w.path === "head" && (w.value as { spin: boolean }).spin) ||
+        (w.path === "live" &&
+          (w.value as { card?: { spin: boolean } }).card?.spin),
+    );
+  // Motion on (the variable unset, or not a reducing value): spinners turn.
+  expect(spins(await turn(undefined)).length).toBeGreaterThan(0);
+  expect(spins(await turn("1")).length).toBeGreaterThan(0);
+  // Reduced: the head's glyph and the running card's stay still.
+  for (const motion of ["reduce", "0"]) {
+    const writes = await turn(motion);
+    expect(spins(writes)).toEqual([]);
+    const live = writes.filter((w) => w.path === "live");
+    expect(
+      live.some(
+        (w) => (w.value as { card?: { still: boolean } }).card?.still === true,
+      ),
+    ).toBe(true);
+  }
+});
+
 test("a terminal resize that fails is reported on the status line, and the session goes on", async () => {
   const control: { exit?: (reason: HostExit | Error) => void } = {};
   const host = fakeSpawn({}, control);

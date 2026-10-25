@@ -911,6 +911,8 @@ interface Expect {
   scrollbackGolden?: string;
 }
 const pages = (n: number) => Array(n).fill("pgdn").join(" ");
+/** The frames of the engine's spinner: none of them may show where the still glyph stands. */
+const SPINNER_FRAMES = [..."⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"];
 const commitData = commitFixtures();
 const plays: Expect[] = [
   {
@@ -1373,6 +1375,48 @@ const plays: Expect[] = [
     input: "tab",
     actions: ["slash_complete"],
     value: "/m",
+  },
+  // Reduced motion (TUIMARK_MOTION=reduce or 0): the engine turns a
+  // `<progress indeterminate>` as time passes — the controls below show it
+  // does, in the head and on a running card — and the calm samples, which
+  // use the still glyph instead, show the same glyph after any time.
+  {
+    sample: "sample-thinking",
+    input: "tick:100ms",
+    actions: [],
+    screen: ["⠙  thinking · 7s"],
+    notScreen: ["⠿"],
+  },
+  {
+    sample: "site-goal-test",
+    input: "tick:100ms",
+    actions: [],
+    screen: ["⠙  running"],
+    notScreen: ["⠿"],
+  },
+  {
+    sample: "sample-calm-head",
+    input: "tick:100ms tick:300ms tick:1s",
+    actions: [],
+    screen: ["Assistant ⠿  thinking · 7s"],
+    notScreen: SPINNER_FRAMES,
+  },
+  {
+    sample: "sample-calm-tool",
+    input: "tick:100ms tick:300ms tick:1s",
+    actions: [],
+    screen: ["⠿  running", "bun test src/fetch.test.ts"],
+    notScreen: SPINNER_FRAMES,
+  },
+  {
+    sample: "inline-sample-calm-tool",
+    doc: "inline.tui",
+    inline: true,
+    rows: 30,
+    input: "tick:100ms tick:300ms tick:1s",
+    actions: [],
+    screen: ["⠿  running", "bun test src/fetch.test.ts"],
+    notScreen: SPINNER_FRAMES,
   },
   // The details viewer: a modal over the latest tool receipt, its output
   // whole where the card kept eight lines. Every row is reachable by

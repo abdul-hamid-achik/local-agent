@@ -39,6 +39,7 @@ import {
   type SessionsCapability,
   TuimarkClient,
 } from "#cli/tuimark/controller";
+import { reducedMotion } from "#cli/tuimark/store";
 import {
   resolveTheme,
   THEME_FOLDER_PREFIX,
@@ -334,6 +335,8 @@ export interface LaunchDeps {
   copy?: ClientOptions["copy"];
   /** Replaces `$TERM_PROGRAM` for the native-selection hint (tests). */
   termProgram?: string;
+  /** Replaces `$TUIMARK_MOTION` (tests; ClientOptions.reduceMotion). */
+  reduceMotion?: boolean;
   /** Replaces the store-built `/sessions` capability (tests). */
   sessions?: SessionsCapability;
   spawn?: typeof spawnHost;
@@ -419,6 +422,8 @@ export async function runTuimark(
       deps.copy ??
       ((text: string) => copyToClipboard(text, { exclude: [workspace.root] })),
     termProgram: deps.termProgram ?? process.env.TERM_PROGRAM,
+    // The engine reads the same variable once it has a switch for motion.
+    reduceMotion: deps.reduceMotion ?? reducedMotion(process.env),
     signal,
     run: deps.run,
     columns: () => stdout.columns ?? readyColumns,

@@ -1340,7 +1340,10 @@ export interface Card {
   /** What the card's border names: the tool as a reader says it ("Edit", "Command"). */
   title: string;
   status: string;
-  /** The finished state at a glance: ✓ succeeded, ✗ denied or failed, ! otherwise; "" while running. */
+  /**
+   * The finished state at a glance: ✓ succeeded, ✗ denied or failed, !
+   * otherwise; "" while running, or the still glyph when motion is reduced.
+   */
   mark: string;
   /** How long the call ran ("1.2s"); "" when unknown (a resumed session, a call that never ran). */
   took: string;
@@ -1353,6 +1356,10 @@ export interface Card {
   bad: boolean;
   warn: boolean;
   running: boolean;
+  /** The call runs and the engine's spinner turns beside the status. */
+  spin: boolean;
+  /** The call runs with motion reduced: the still glyph (`mark`) stands in for the spinner. */
+  still: boolean;
   /** The output as runs for one `wrap: pre-wrap` text. */
   out: Run[];
 }
@@ -1370,6 +1377,8 @@ export const NO_CARD: Card = Object.freeze({
   bad: false,
   warn: false,
   running: false,
+  spin: false,
+  still: false,
   out: [],
 }) as Card;
 
@@ -1844,6 +1853,8 @@ function toolCard(
     bad,
     warn: state === "outcome_unknown" || state === "unverified",
     running,
+    spin: running,
+    still: false,
     out: output
       ? outputRuns(
           parts.body,
@@ -1862,7 +1873,33 @@ function toolCard(
  * border instead. The status is the card's own word, not the head's.
  */
 export function onHold(card: Card, status: string): Card {
-  return { ...card, status, running: false, mark: "?", warn: true };
+  return {
+    ...card,
+    status,
+    running: false,
+    spin: false,
+    still: false,
+    mark: "?",
+    warn: true,
+  };
+}
+
+/** What stands where a spinner would turn when motion is reduced (TUIMARK_MOTION). */
+export const STILL_GLYPH = "⠿";
+
+/**
+ * `card` as a running call shows: the engine's spinner, or with `still` (motion
+ * reduced) the still glyph in its place. A call that goes on after it was held.
+ */
+export function runningCard(card: Card, still = false): Card {
+  return {
+    ...card,
+    status: "running",
+    running: true,
+    spin: !still,
+    still,
+    mark: still ? STILL_GLYPH : "",
+  };
 }
 
 // ------------------------------------------------------------------------ views
@@ -1968,14 +2005,23 @@ export function thinkingTail(text: string): string {
   return nl >= 0 && nl < tail.length - 1 ? tail.slice(nl + 1) : tail;
 }
 
+/** A running card with its spinner replaced by the still glyph; any other card as it is. */
+function stillCard(card: Card): Card {
+  return card.running
+    ? { ...card, spin: false, still: true, mark: STILL_GLYPH }
+    : card;
+}
+
 /** An in-flight tool call: requested, waiting for approval, or running. */
 export function liveToolView(
   call: ToolCall | undefined,
   name: string,
   state: "requested" | "approval" | "running",
+  still = false,
 ): LiveView {
+  const card = toolCard(name, call, state);
   return {
-    ...view("live", "tool", [], toolCard(name, call, state)),
+    ...view("live", "tool", [], still ? stillCard(card) : card),
     active: true,
     tail: [],
   };

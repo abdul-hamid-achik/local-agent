@@ -58,6 +58,8 @@
         "bad": false,
         "warn": false,
         "running": false,
+        "spin": false,
+        "still": false,
         "out": []
       },
       "links": [],
@@ -85,6 +87,8 @@
         "bad": false,
         "warn": false,
         "running": false,
+        "spin": false,
+        "still": false,
         "out": [
           "output line 1\noutput line 2\noutput line 3\noutput line 4\noutput line 5\noutput line 6\noutput line 7\noutput line 8",
           {
@@ -134,6 +138,8 @@
         "bad": false,
         "warn": false,
         "running": false,
+        "spin": false,
+        "still": false,
         "out": []
       },
       "links": [],
@@ -166,6 +172,8 @@
       "bad": false,
       "warn": false,
       "running": false,
+      "spin": false,
+      "still": false,
       "out": []
     },
     "links": [],
@@ -673,6 +681,8 @@
       "bad": false,
       "warn": false,
       "running": false,
+      "spin": false,
+      "still": false,
       "out": []
     },
     "links": [],

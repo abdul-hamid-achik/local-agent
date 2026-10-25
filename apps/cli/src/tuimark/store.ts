@@ -25,6 +25,7 @@ import {
   mcpParts,
   NO_CARD,
   type Run,
+  STILL_GLYPH,
   type ThinkingView,
   type ToolReceipt,
 } from "#cli/tuimark/blocks";
@@ -290,8 +291,22 @@ const HEAD_PHASE_TEXT: Record<HeadPhase, string> = {
   answer: "waiting for your answer",
 };
 
-/** Stands where the spinner was while the turn waits on the person. */
-export const HEAD_STILL_GLYPH = "⠿";
+/** Stands where the spinner was while the turn waits on the person, or motion is reduced. */
+export const HEAD_STILL_GLYPH = STILL_GLYPH;
+
+/**
+ * Whether the person asked for no motion: `TUIMARK_MOTION=reduce` (or `0`),
+ * the switch Tuimark plans for its own animations (tuimark 0.5.1 has none yet,
+ * and the engine inherits this environment, so the two will agree). Then
+ * every spinner the client renders is the still glyph. NO_COLOR is not part
+ * of it: the engine already paints no color for it.
+ */
+export function reducedMotion(
+  env: Record<string, string | undefined>,
+): boolean {
+  const motion = env.TUIMARK_MOTION?.trim().toLowerCase();
+  return motion === "reduce" || motion === "0";
+}
 
 /**
  * The head of the assistant's live message, from the moment a turn starts.
@@ -305,7 +320,7 @@ export interface HeadView {
   on: boolean;
   /** The spinner turns: the turn is working. */
   spin: boolean;
-  /** The static glyph shows instead: the turn waits on the person. */
+  /** The static glyph shows instead: the turn waits on the person, or motion is reduced. */
   still: boolean;
   glyph: string;
   /** "<phase> · <elapsed>", dim; the elapsed alone while the reply streams. */
@@ -320,13 +335,22 @@ export const NO_HEAD: HeadView = Object.freeze({
   text: "",
 }) as HeadView;
 
-/** The head for `phase` after `seconds` of the turn's own time. */
-export function headState(phase: HeadPhase, seconds: number): HeadView {
+/**
+ * The head for `phase` after `seconds` of the turn's own time. The glyph
+ * stands still while the turn waits on the person, and always when `calm`
+ * (motion reduced). The elapsed time keeps counting: it is information, and
+ * the only sign of life beside a still glyph.
+ */
+export function headState(
+  phase: HeadPhase,
+  seconds: number,
+  calm = false,
+): HeadView {
   const waiting = phase === "approval" || phase === "answer";
   return {
     on: true,
-    spin: !waiting,
-    still: waiting,
+    spin: !waiting && !calm,
+    still: waiting || calm,
     glyph: HEAD_STILL_GLYPH,
     text: [HEAD_PHASE_TEXT[phase], formatElapsed(seconds)]
       .filter(Boolean)

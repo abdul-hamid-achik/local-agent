@@ -58,6 +58,8 @@
         "bad": false,
         "warn": false,
         "running": false,
+        "spin": false,
+        "still": false,
         "out": []
       },
       "links": [],
@@ -319,6 +321,8 @@
         "bad": false,
         "warn": false,
         "running": false,
+        "spin": false,
+        "still": false,
         "out": []
       },
       "links": [
@@ -352,6 +356,8 @@
         "bad": false,
         "warn": false,
         "running": false,
+        "spin": false,
+        "still": false,
         "out": [
           "1: export function reassemble(chunks) {\n2:   return chunks.join('');"
         ]
@@ -381,6 +387,8 @@
         "bad": true,
         "warn": false,
         "running": false,
+        "spin": false,
+        "still": false,
         "out": [
           {
             "text": "exit 1",
@@ -419,6 +427,8 @@
       "bad": false,
       "warn": false,
       "running": false,
+      "spin": false,
+      "still": false,
       "out": []
     },
     "links": [],
@@ -785,6 +795,8 @@
       "bad": false,
       "warn": false,
       "running": false,
+      "spin": false,
+      "still": false,
       "out": []
     },
     "links": [],

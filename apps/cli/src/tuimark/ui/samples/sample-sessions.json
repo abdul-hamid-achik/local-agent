@@ -58,6 +58,8 @@
         "bad": false,
         "warn": false,
         "running": false,
+        "spin": false,
+        "still": false,
         "out": []
       },
       "links": [],
@@ -185,6 +187,8 @@
         "bad": false,
         "warn": false,
         "running": false,
+        "spin": false,
+        "still": false,
         "out": []
       },
       "links": [],
@@ -212,6 +216,8 @@
         "bad": false,
         "warn": false,
         "running": false,
+        "spin": false,
+        "still": false,
         "out": [
           "Updated src/fetch.ts. Verification has not been run.\n  import { sleep } from './util';\n",
           {
@@ -266,6 +272,8 @@
         "bad": false,
         "warn": false,
         "running": false,
+        "spin": false,
+        "still": false,
         "out": []
       },
       "links": [],
@@ -298,6 +306,8 @@
       "bad": false,
       "warn": false,
       "running": false,
+      "spin": false,
+      "still": false,
       "out": []
     },
     "links": [],
@@ -683,6 +693,8 @@
       "bad": false,
       "warn": false,
       "running": false,
+      "spin": false,
+      "still": false,
       "out": []
     },
     "links": [],
