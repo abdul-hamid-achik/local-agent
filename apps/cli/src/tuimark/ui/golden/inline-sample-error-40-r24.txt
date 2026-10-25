@@ -1,0 +1,6 @@
+=== grid 40x5 ===
+ Local Agent        build  LOCAL        
+╔══════════════════════════════════════╗
+║ Add a retry to the fetch helper.     ║
+╚══════════════════════════════════════╝
+ Ollama request fai… ^P commands        

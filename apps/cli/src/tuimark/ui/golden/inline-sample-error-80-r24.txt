@@ -1,0 +1,6 @@
+=== grid 80x5 ===
+ Local Agent      build  LOCAL  qwen3-coder:30b      ctx 9.6k/32k  ███▋░░░░░░░░ 
+╔══════════════════════════════════════════════════════════════════════════════╗
+║ Add a retry to the fetch helper.                                             ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+ Ollama request failed: connection refused   ^P commands  ^Y copy  ctrl+c quit  

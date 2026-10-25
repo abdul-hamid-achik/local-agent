@@ -543,6 +543,87 @@ const extraDumps: {
     contains: ["y allow"],
   },
 ];
+// The size matrix: the four main screens (the welcome, a conversation with an
+// applied edit, an approval, an error) at the common 80x24 and a wide 160x40
+// (the narrowest, 40x24, and 60x24 and 80x10 are above, for the screens whose
+// squeeze has a fact to keep; the error gets its 40x24 here), in both
+// documents. The loop above dumps at 80/120 columns and 30 rows only. An
+// inline error is the status row and nothing else (the history is the
+// terminal's own scrollback), so inline.tui is dumped from the app's error
+// sample: the store is the same.
+{
+  const sizes = [
+    { cols: 80, rows: 24 },
+    { cols: 160, rows: 40 },
+  ];
+  const screens: [sample: string, contains: string[]][] = [
+    ["sample", ["Message the model", "last 1m 06s"]],
+    ["sample-approval", ["Deny", "Allow"]],
+    ["sample-error", ["connection refused"]],
+    ["sample-empty", ["Local Agent", "/help lists keys"]],
+  ];
+  for (const [sample, contains] of screens)
+    for (const { cols, rows } of sizes)
+      extraDumps.push({
+        doc: "app.tui",
+        sample,
+        cols,
+        rows,
+        golden: `${sample}-${cols}-r${rows}.txt`,
+        contains,
+      });
+  extraDumps.push({
+    doc: "app.tui",
+    sample: "sample-error",
+    cols: 40,
+    rows: 24,
+    golden: "sample-error-40-r24.txt",
+    // The status ends in an ellipsis at 40 columns; the history keeps it whole.
+    contains: ["Ollama request failed", "^P commands"],
+  });
+  const inlineScreens: [sample: string, contains: string[]][] = [
+    ["inline-sample", ["^P commands"]],
+    ["inline-sample-approval", ["y allow"]],
+    ["inline-sample-empty", ["^P commands"]],
+    ["sample-error", ["connection refused"]],
+  ];
+  for (const [sample, contains] of inlineScreens) {
+    const golden = (cols: number, rows: number) =>
+      `${sample.startsWith("inline-") ? sample : "inline-sample-error"}-${cols}-r${rows}.txt`;
+    for (const { cols, rows } of sizes)
+      extraDumps.push({
+        doc: "inline.tui",
+        sample,
+        cols,
+        rows,
+        inline: true,
+        golden: golden(cols, rows),
+        contains,
+      });
+    // The error at 40x24, and the short terminal for the idle screens (the
+    // approval's own 15-row check is above).
+    if (sample === "sample-error")
+      extraDumps.push({
+        doc: "inline.tui",
+        sample,
+        cols: 40,
+        rows: 24,
+        inline: true,
+        golden: golden(40, 24),
+        contains: ["Ollama request fai…", "^P commands"],
+      });
+    if (sample === "inline-sample" || sample === "inline-sample-empty")
+      extraDumps.push({
+        doc: "inline.tui",
+        sample,
+        cols: 80,
+        rows: 15,
+        inline: true,
+        golden: golden(80, 15),
+        contains,
+      });
+  }
+}
 for (const d of extraDumps) {
   const args = [
     "dump",
@@ -687,6 +768,97 @@ for (const name of namedThemes(join(ui, "themes"))) {
         failures.push(`${label}: paints only ${painted.size} colors`);
     } finally {
       await rm(dirname(themed), { recursive: true, force: true });
+    }
+  }
+}
+
+// Every theme, as colors. The text goldens cannot see a color, and the loop
+// above only proves a theme paints its own tokens, not which token paints
+// what. So each shipped theme (the builtin dark and light, then the named
+// ones) gets a golden of a conversation with an applied edit in app.tui and
+// of an approval in inline.tui, both at 80x24, as the runs of each row that
+// site-screens.ts writes into themes.json: [text, fg, bg, flags], flags
+// bold 1, dim 2, italic 4, underline 8, with the colors spelled out so a
+// change to one token reads as a change to its rows.
+const FLAGS: Record<string, number> = {
+  bold: 1,
+  dim: 2,
+  italic: 4,
+  underline: 8,
+};
+type StyledDump = {
+  errors: unknown[];
+  grid: string[];
+  styles: { x: number; w: number; fg?: string; bg?: string; a?: string[] }[][];
+};
+function styledRuns(dump: StyledDump, label: string): string {
+  const lines = dump.grid.map((text, y) => {
+    const cells = Array.from(text);
+    let at = 0;
+    const runs = (dump.styles[y] ?? []).map((run) => {
+      if (run.x !== at)
+        failures.push(`${label} row ${y}: a run starts at ${run.x}, not ${at}`);
+      at = run.x + run.w;
+      const flags = (run.a ?? []).reduce(
+        (bits, a) => bits | (FLAGS[a] ?? 0),
+        0,
+      );
+      return [
+        cells.slice(run.x, run.x + run.w).join(""),
+        run.fg ?? "",
+        run.bg ?? "",
+        flags,
+      ];
+    });
+    if (at !== cells.length)
+      failures.push(`${label} row ${y}: runs end at ${at} of ${cells.length}`);
+    return JSON.stringify(runs);
+  });
+  return `${lines.join("\n")}\n`;
+}
+for (const name of ["dark", "light", ...namedThemes(join(ui, "themes"))]) {
+  const builtin = name === "dark" || name === "light";
+  for (const [doc, sample, inline, golden] of [
+    ["app.tui", "sample", false, `styled-app-${name}-80-r24.txt`],
+    [
+      "inline.tui",
+      "inline-sample-approval",
+      true,
+      `styled-inline-${name}-80-r24.txt`,
+    ],
+  ] as const) {
+    // A builtin theme is the host's own --theme; a named one is a themed
+    // copy of the document on a host pinned to dark, as launch.ts runs it.
+    const themed = builtin ? doc : await themedDocument(ui, doc, name);
+    if (!builtin) scratchDirs.add(dirname(themed));
+    const label = `dump ${sample} --theme ${name}`;
+    try {
+      const run = tuimark([
+        "dump",
+        themed,
+        "--data",
+        `samples/${sample}.json`,
+        "--cols",
+        "80",
+        "--rows",
+        "24",
+        "--theme",
+        builtin ? name : "dark",
+        ...(inline ? ["--inline"] : []),
+        "--styles",
+        "--format",
+        "json",
+      ]);
+      const json = parsed(run.out) as StyledDump;
+      if (json.errors.length > 0)
+        failures.push(`${label}: ${JSON.stringify(json.errors)}`);
+      await matches(
+        join(ui, "golden", golden),
+        styledRuns(json, label),
+        "golden",
+      );
+    } finally {
+      if (!builtin) await rm(dirname(themed), { recursive: true, force: true });
     }
   }
 }

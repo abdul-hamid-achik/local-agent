@@ -1,0 +1,25 @@
+=== grid 80x24 ===
+ Local Agent      build  LOCAL  qwen3-coder:30b      ctx 9.6k/32k  ███▋░░░░░░░░ 
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ You                                                                          │
+│ Add a retry to the fetch helper.                                             │
+│                                                                              │
+│ Error                                                                        │
+│  Ollama request failed: connection refused                                   │
+│  Is the daemon running on 127.0.0.1:11434?                                   │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+╔══════════════════════════════════════════════════════════════════════════════╗
+║ Add a retry to the fetch helper.                                             ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+ Ollama request failed: connection refused   ^P commands  ^Y copy  ↑/↓ history  

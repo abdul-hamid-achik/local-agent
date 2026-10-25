@@ -1,0 +1,25 @@
+=== grid 40x24 ===
+ Local Agent        build  LOCAL        
+┌──────────────────────────────────────┐
+│ You                                  │
+│ Add a retry to the fetch helper.     │
+│                                      │
+│ Error                                │
+│  Ollama request failed: connection   │
+│  refused                             │
+│  Is the daemon running on            │
+│  127.0.0.1:11434?                    │
+│                                      │
+│                                      │
+│                                      │
+│                                      │
+│                                      │
+│                                      │
+│                                      │
+│                                      │
+│                                      │
+└──────────────────────────────────────┘
+╔══════════════════════════════════════╗
+║ Add a retry to the fetch helper.     ║
+╚══════════════════════════════════════╝
+ Ollama request fai… ^P commands        

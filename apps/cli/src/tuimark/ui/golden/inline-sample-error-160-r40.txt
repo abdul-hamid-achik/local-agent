@@ -1,0 +1,6 @@
+=== grid 160x5 ===
+ Local Agent                               build  Ollama / loopback  qwen3-coder:30b                                session a1b2c3d  ctx 9.6k/32k  ███▋░░░░░░░░ 
+╔══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╗
+║ Add a retry to the fetch helper.                                                                                                                             ║
+╚══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╝
+ Ollama request failed: connection refused   ^P commands  ^Y copy  ctrl+c quit  ↑/↓ history  pgup/pgdn scroll  ^L latest  shift+tab mode                        
