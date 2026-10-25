@@ -439,6 +439,68 @@ function namesContinue(have: string, piece: string, declared: Set<string>) {
   );
 }
 
+/** Where the 500-unit excerpt of unparsable arguments ends: never between
+ * the halves of a surrogate pair. */
+function invalidCut(args: string): number {
+  const code = args.charCodeAt(499);
+  return code >= 0xd800 && code <= 0xdbff ? 499 : 500;
+}
+
+const maxFailureBytes = 4096;
+const maxFailureChars = 200;
+const failureReadMs = 1_000;
+
+/**
+ * What a failed request's body says, for the error: the server's
+ * `error.message` or else its text, on one line without control characters,
+ * at most 200 characters. Reads no more than 4 KiB, for no longer than a
+ * second, and lets the body go.
+ */
+async function failureDetail(response: Response): Promise<string> {
+  const reader = response.body?.getReader();
+  if (!reader) return "";
+  const decoder = new TextDecoder();
+  let text = "";
+  let bytes = 0;
+  // Ends a read that waits on a body the server keeps open.
+  const timer = setTimeout(
+    () => void reader.cancel().catch(() => undefined),
+    failureReadMs,
+  );
+  try {
+    while (bytes < maxFailureBytes) {
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      bytes += chunk.value.byteLength;
+      text += decoder.decode(chunk.value, { stream: true });
+    }
+  } catch {
+    // The body failed too: the status alone then.
+  } finally {
+    clearTimeout(timer);
+    await reader.cancel().catch(() => undefined);
+  }
+  try {
+    const parsed = JSON.parse(text) as { error?: unknown; message?: unknown };
+    const said =
+      typeof parsed.error === "object" && parsed.error !== null
+        ? (parsed.error as { message?: unknown }).message
+        : (parsed.error ?? parsed.message);
+    if (typeof said === "string") text = said;
+  } catch {
+    // Not JSON: the text as it is.
+  }
+  const flat = Bun.stripANSI(text)
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: remove control characters from what the server sent
+    .replace(/[\s\u0000-\u001f\u007f-\u009f]+/g, " ")
+    .trim();
+  // By code point: a cut never leaves half of a surrogate pair.
+  const chars = Array.from(flat);
+  return chars.length > maxFailureChars
+    ? `${chars.slice(0, maxFailureChars).join("")}…`
+    : flat;
+}
+
 /** Loopback OpenAI-compatible transport (llama.cpp, LM Studio, vLLM): SSE mirroring the Ollama seam. */
 async function* openAILocalChat(
   config: OpenAILocalProvider,
@@ -468,10 +530,12 @@ async function* openAILocalChat(
         : {}),
     }),
   });
-  if (!response.ok)
+  if (!response.ok) {
+    const detail = await failureDetail(response);
     throw new Error(
-      `OpenAI-compatible chat request failed (${response.status})`,
+      `OpenAI-compatible chat request failed (${response.status})${detail ? `: ${detail}` : ""}`,
     );
+  }
   if (!response.body) throw new Error("OpenAI-compatible response had no body");
   let outputSize = 0;
   let callCount = 0;
@@ -498,7 +562,9 @@ async function* openAILocalChat(
         arguments_ === null ||
         Array.isArray(arguments_)
       )
-        arguments_ = { [INVALID_ARGUMENTS]: call.args.slice(0, 500) };
+        arguments_ = {
+          [INVALID_ARGUMENTS]: call.args.slice(0, invalidCut(call.args)),
+        };
       yield RunEventSchema.parse({
         type: "tool_call",
         call: {

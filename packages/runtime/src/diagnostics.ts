@@ -179,10 +179,31 @@ function unavailable(error: unknown): string {
   } ---`;
 }
 
-function cap(text: string): string {
-  return text.length <= MAX_BLOCK_CHARS
+function cap(text: string, limit = MAX_BLOCK_CHARS): string {
+  return text.length <= limit
     ? text
-    : `${text.slice(0, MAX_BLOCK_CHARS)}\n${TRUNCATION_NOTE}`;
+    : `${text.slice(0, limit)}\n${TRUNCATION_NOTE}`;
+}
+
+/**
+ * The sections as one block of at most MAX_BLOCK_CHARS: a short one keeps
+ * all it has, and the rest is shared evenly among the long ones, so a long
+ * biome report does not push the tsc section out.
+ */
+function capSections(sections: readonly string[]): string {
+  let room = MAX_BLOCK_CHARS - 2 * (sections.length - 1);
+  const limits: number[] = [];
+  const bySize = sections
+    .map((section, index) => ({ length: section.length, index }))
+    .sort((a, b) => a.length - b.length);
+  bySize.forEach(({ length, index }, rank) => {
+    const limit = Math.min(length, Math.floor(room / (bySize.length - rank)));
+    limits[index] = limit;
+    room -= limit;
+  });
+  return sections
+    .map((section, index) => cap(section, limits[index]))
+    .join("\n\n");
 }
 
 /**
@@ -224,10 +245,12 @@ export async function postEditDiagnostics(
       signal,
     );
     if (biome.cancelled || signal.aborted) return "";
+    if (biome.exitCode === null)
+      throw new Error("biome did not finish (timed out or was killed)");
     sections.push(
       biome.exitCode === 0
         ? "--- diagnostics: clean (biome) ---"
-        : cap(`--- diagnostics (biome) ---\n${biome.output.trim()}`),
+        : `--- diagnostics (biome) ---\n${biome.output.trim()}`,
     );
   } catch (error) {
     sections.push(unavailable(error));
@@ -249,12 +272,14 @@ export async function postEditDiagnostics(
         TSC_TIMEOUT_MS,
         signal,
       );
+      if (!tsc.cancelled && !signal.aborted && tsc.exitCode === null)
+        throw new Error("tsc did not finish (timed out or was killed)");
       if (!tsc.cancelled && !signal.aborted && tsc.exitCode !== 0)
-        sections.push(cap(`--- diagnostics (tsc) ---\n${tsc.output.trim()}`));
+        sections.push(`--- diagnostics (tsc) ---\n${tsc.output.trim()}`);
     } catch (error) {
       sections.push(unavailable(error));
     }
   }
   if (sections.length === 0) return "";
-  return `\n\n${cap(sections.join("\n\n"))}`;
+  return `\n\n${capSections(sections)}`;
 }

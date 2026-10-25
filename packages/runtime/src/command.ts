@@ -95,15 +95,17 @@ export function parseArgv(value: string | readonly string[]): string[] {
   if (typeof value !== "string") return [...value];
   const text = value.trim();
   if (text.startsWith("[")) {
+    let parsed: unknown;
     try {
-      const parsed: unknown = JSON.parse(text);
-      if (
-        Array.isArray(parsed) &&
-        parsed.every((item) => typeof item === "string")
-      )
-        return parsed as string[];
+      parsed = JSON.parse(text);
     } catch {
       // Not JSON: treated as a command line below.
+    }
+    if (Array.isArray(parsed)) {
+      // A JSON array that is not argv is refused, not run as a command line.
+      if (!parsed.every((item) => typeof item === "string"))
+        throw new Error("A JSON argv must be an array of strings");
+      return parsed as string[];
     }
   }
   return splitCommandLine(text);
@@ -466,6 +468,20 @@ function appendOutput(
   if (kept.byteLength !== chunk.byteLength) state.truncated = true;
 }
 
+/**
+ * The bytes up to the end of the last whole UTF-8 character: a cut at the
+ * output cap can leave half of one, which would read back as U+FFFD.
+ */
+function wholeCharacters(bytes: Buffer): Buffer {
+  for (let back = 1; back <= Math.min(3, bytes.length); back++) {
+    const byte = bytes.at(-back) ?? 0;
+    if ((byte & 0xc0) === 0x80) continue;
+    const length = byte >= 0xf0 ? 4 : byte >= 0xe0 ? 3 : byte >= 0xc0 ? 2 : 1;
+    return length > back ? bytes.subarray(0, bytes.length - back) : bytes;
+  }
+  return bytes;
+}
+
 async function validateProposal(
   proposal: ApprovedCommandProposal,
 ): Promise<void> {
@@ -684,7 +700,10 @@ export async function executeApprovedCommand(
       }
       const gone = await cleanupGroup();
       resolve({
-        output: Buffer.concat(chunks).toString("utf8"),
+        output: (outputState.truncated
+          ? wholeCharacters(Buffer.concat(chunks))
+          : Buffer.concat(chunks)
+        ).toString("utf8"),
         exitCode: leaderExitCode,
         signal: leaderSignal,
         timedOut,

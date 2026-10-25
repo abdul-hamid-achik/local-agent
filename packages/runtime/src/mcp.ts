@@ -217,6 +217,8 @@ export type McpToolResult = {
   text: string;
 };
 
+const isHighSurrogate = (code: number) => code >= 0xd800 && code <= 0xdbff;
+
 function boundedText(result: CallToolResult): string {
   const parts = result.content
     .filter(
@@ -224,7 +226,12 @@ function boundedText(result: CallToolResult): string {
     )
     .map((part) => part.text)
     .join("\n");
-  return parts.length > MAX_TEXT ? `${parts.slice(0, MAX_TEXT)}…` : parts;
+  if (parts.length <= MAX_TEXT) return parts;
+  // A cut between the halves of a surrogate pair would leave a lone one.
+  const end = isHighSurrogate(parts.charCodeAt(MAX_TEXT - 1))
+    ? MAX_TEXT - 1
+    : MAX_TEXT;
+  return `${parts.slice(0, end)}…`;
 }
 
 function validateHttp(

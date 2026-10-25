@@ -324,8 +324,13 @@ export async function readPermissionFile(
   let text: string;
   try {
     text = await readFile(permissionsPath(workspaceRoot), "utf8");
-  } catch {
-    return { ...NO_PERMISSIONS };
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT" || code === "ENOTDIR") return { ...NO_PERMISSIONS };
+    return {
+      ...NO_PERMISSIONS,
+      warning: `permissions.json is unreadable (${code ?? (error as Error).message}); ignored`,
+    };
   }
   let parsed: unknown;
   try {

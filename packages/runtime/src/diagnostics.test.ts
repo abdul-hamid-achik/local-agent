@@ -36,7 +36,7 @@ function fakeRunner(
     };
     return {
       output: result.output ?? "",
-      exitCode: result.exitCode ?? 0,
+      exitCode: result.exitCode === undefined ? 0 : result.exitCode,
       cancelled: result.cancelled ?? false,
     };
   };
@@ -185,6 +185,38 @@ test("the diagnostics block is capped at 20k chars keeping the head", async () =
   expect(appended.length).toBeLessThanOrEqual(20_100);
   expect(appended).toContain("…(diagnostics truncated at 20k chars)");
   expect(appended.endsWith("…(diagnostics truncated at 20k chars)")).toBe(true);
+});
+
+test("a biome run that never finished is reported, not shown as an empty finding", async () => {
+  const appended = await postEditDiagnostics(
+    ["src/a.ts"],
+    process.cwd(),
+    signal,
+    fakeRunner([{ exitCode: null, output: "" }]),
+    ON,
+    TOOLS,
+  );
+  expect(appended).toContain("diagnostics unavailable");
+  expect(appended).toContain("did not finish");
+  expect(appended).not.toContain("--- diagnostics (biome) ---");
+});
+
+test("a long biome report does not push the tsc section out", async () => {
+  const appended = await postEditDiagnostics(
+    ["src/a.ts"],
+    process.cwd(),
+    signal,
+    fakeRunner([
+      { exitCode: 1, output: "x".repeat(50_000) },
+      { exitCode: 2, output: "src/a.ts(1,7): error TS2322: bad type" },
+    ]),
+    { ...ON, LOCAL_AGENT_DIAGNOSTICS_TSC: "1" },
+    TOOLS,
+  );
+  expect(appended).toContain("--- diagnostics (biome) ---");
+  expect(appended).toContain("--- diagnostics (tsc) ---");
+  expect(appended).toContain("error TS2322");
+  expect(appended.length).toBeLessThanOrEqual(20_200);
 });
 
 test("a cancelled diagnostic run appends nothing", async () => {

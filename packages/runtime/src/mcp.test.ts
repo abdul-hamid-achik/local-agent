@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { createMcpHandler, McpServer } from "@modelcontextprotocol/server";
 import { describe, expect, test } from "vitest";
 import { z } from "zod";
+import { LIMITS } from "#runtime/limits";
 import {
   connectMcp,
   connectMcpServers,
@@ -257,6 +258,44 @@ describe("MCP adapter boundary", () => {
           value: "ok",
         });
         expect(result.text).toBe("pong:ok");
+      } finally {
+        await adapter.close();
+      }
+    } finally {
+      server.stop(true);
+      await handler.close();
+    }
+  }, 15_000);
+
+  test("cuts a long text result without splitting a surrogate pair", async () => {
+    const limit = LIMITS.mcpTextChars;
+    const handler = createMcpHandler(
+      () => {
+        const server = new McpServer({ name: "long", version: "1.0.0" });
+        // The limit falls between the two halves of the emoji.
+        server.registerTool("text", { inputSchema: {} }, async () => ({
+          content: [
+            { type: "text" as const, text: `${"a".repeat(limit - 1)}😀tail` },
+          ],
+        }));
+        return server;
+      },
+      { responseMode: "json" },
+    );
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch: (request) => handler.fetch(request),
+    });
+    try {
+      const adapter = await connectMcp({
+        name: "long",
+        transport: { kind: "http", url: `${server.url}mcp` },
+      });
+      try {
+        const { text } = await adapter.callTool("long__text", {});
+        expect(text.isWellFormed()).toBe(true);
+        expect(text).toBe(`${"a".repeat(limit - 1)}…`);
       } finally {
         await adapter.close();
       }

@@ -4,6 +4,7 @@ import { admitOpenAILocalModel, getJSON } from "#runtime/admission";
 import { resolveProvider } from "#runtime/config";
 import {
   chat,
+  INVALID_ARGUMENTS,
   parseOpenAISSE,
   providerRetryDelayMs,
   type RunEvent,
@@ -304,6 +305,24 @@ describe("tool_call fragments", () => {
       server.stop(true);
     }
   };
+
+  test("unparsable arguments are cut short without splitting a surrogate pair", async () => {
+    const [event] = await run(
+      [
+        {
+          index: 0,
+          function: { name: "read", arguments: `${"x".repeat(499)}😀 more` },
+        },
+      ],
+      declare("read"),
+    );
+    const call = (
+      event as { call: { function: { arguments: Record<string, string> } } }
+    ).call;
+    const kept = call.function.arguments[INVALID_ARGUMENTS] ?? "";
+    expect(kept).toBe("x".repeat(499));
+    expect(kept.isWellFormed()).toBe(true);
+  });
 
   test("a later fragment of the same index neither clobbers the id nor doubles the name", async () => {
     expect(
@@ -844,6 +863,73 @@ describe("metadata reads and replayable bodies", () => {
       );
       expect(response.status).toBe(503);
       expect(count).toBe(sends);
+    }
+  });
+  /** An error answer whose body never ends: only a cancel lets it go. */
+  const openBody = (text: string) => {
+    const state = { cancelled: false };
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encode(text));
+      },
+      cancel() {
+        state.cancelled = true;
+      },
+    });
+    return { state, body };
+  };
+
+  test("a metadata read answered with an HTTP error releases the body", async () => {
+    const { state, body } = openBody("overloaded");
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(new Response(body, { status: 500 }));
+    try {
+      await expect(
+        getJSON("http://127.0.0.1/api/tags", new AbortController().signal),
+      ).rejects.toThrow(/\(500\)/);
+      expect(state.cancelled).toBe(true);
+    } finally {
+      fetchMock.mockRestore();
+    }
+  });
+
+  test("an openai_local chat error carries the server's message and releases the body", async () => {
+    const { state, body } = openBody(
+      JSON.stringify({ error: { message: "context length exceeded" } }),
+    );
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(new Response(body, { status: 400 }));
+    try {
+      await expect(
+        events(localProvider("http://127.0.0.1/v1")),
+      ).rejects.toThrow(/\(400\).*context length exceeded/);
+      expect(state.cancelled).toBe(true);
+    } finally {
+      fetchMock.mockRestore();
+    }
+  });
+
+  test("an openai_local chat error shows a plain-text body on one line, cut short", async () => {
+    const server = serve(
+      () =>
+        new Response(`bad\u001b[31m\nrequest ${"x".repeat(5_000)}`, {
+          status: 500,
+        }),
+    );
+    try {
+      const error = await events(
+        localProvider(`${server.url.origin}/v1`),
+      ).catch((caught: Error) => caught);
+      expect(error).toBeInstanceOf(Error);
+      const message = (error as Error).message;
+      expect(message).toContain("(500): bad request x");
+      expect(message).not.toContain("\u001b");
+      expect(message).not.toContain("\n");
+      expect(message.length).toBeLessThan(400);
+    } finally {
+      server.stop(true);
     }
   });
 });

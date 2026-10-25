@@ -98,6 +98,23 @@ test("bounds combined stdout and stderr", async () => {
   expect(result.truncated).toBe(true);
 });
 
+test("a cut at the output cap never leaves half of a character", async () => {
+  const root = await temp();
+  // One ASCII byte, then two-byte characters: the cap falls on a lead byte.
+  const proposal = await createCommandProposal(
+    [process.execPath, "-e", "process.stdout.write('a' + 'é'.repeat(600000))"],
+    root,
+    5000,
+  );
+  const result = await executeApprovedCommand(
+    proposal,
+    new AbortController().signal,
+  );
+  expect(result.truncated).toBe(true);
+  expect(result.output).not.toContain("\ufffd");
+  expect(result.output.endsWith("é")).toBe(true);
+});
+
 test("terminates a process group and its grandchild on timeout", async () => {
   const root = await temp();
   const proposal = await createCommandProposal(
@@ -335,6 +352,13 @@ test("parseArgv keeps an array as it is and also reads a JSON array sent as a st
     "src",
   ]);
   expect(parseArgv("ls -la")).toEqual(["ls", "-la"]);
+});
+
+test("parseArgv refuses a JSON array with a non-string element instead of running it as a command line", () => {
+  expect(() => parseArgv('["ls", 1]')).toThrow("strings");
+  expect(() => parseArgv('["rm", ["-rf"]]')).toThrow("strings");
+  // Not JSON: still a command line (here the `[` builtin).
+  expect(parseArgv("[ -f x ]")).toEqual(["[", "-f", "x", "]"]);
 });
 
 test("a command whose arguments name a secret path is flagged on its proposal, and still runs", async () => {

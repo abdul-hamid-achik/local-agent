@@ -175,6 +175,10 @@ async function readCapped(response: Response, what: string) {
   return bytes;
 }
 
+/** Lets go of a body that will not be read, so its connection is not held. */
+const release = (response: Response) =>
+  response.body?.cancel().catch(() => undefined);
+
 /**
  * GET or POST JSON metadata, redirects refused and the body capped at 1 MiB.
  * `retry` waits out a refused connection or a 503 "model loading" (see
@@ -190,8 +194,10 @@ export async function getJSON(
   const response = retry
     ? await withRetries(send, signal, init?.body)
     : await send();
-  if (!response.ok)
+  if (!response.ok) {
+    await release(response);
     throw new Error(`Ollama metadata request failed (${response.status})`);
+  }
   return JSON.parse(
     new TextDecoder().decode(
       await readCapped(response, "Ollama metadata response"),
@@ -395,19 +401,23 @@ export async function admitOpenAILocalModel(
         }),
       metadataSignal,
     );
-    if (response.status === 404)
+    if (response.status === 404) {
+      await release(response);
       return {
         status: "unverified",
         kind: "unlisted",
         message:
           "Server does not expose GET /v1/models; skipped model validation",
       };
-    if (!response.ok)
+    }
+    if (!response.ok) {
+      await release(response);
       return {
         status: "unverified",
         kind: "unlisted",
         message: `Model list request failed (${response.status})`,
       };
+    }
     // A body we cannot read as a model list proves nothing about the model:
     // say so, instead of "unreachable" or an empty list that rejects it.
     let payload: unknown;

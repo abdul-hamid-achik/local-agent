@@ -391,6 +391,20 @@ test("loadPermissionFile: schema violations carry a warning, never throw", async
   expect(effects.warning).toBeTruthy();
 });
 
+test("loadPermissionFile: an unreadable file carries a warning, and appendRule will not write over it", async () => {
+  const root = await tempRoot();
+  // A directory where the file belongs: readFile fails with EISDIR, not ENOENT.
+  await mkdir(join(root, ".local-agent", "permissions.json"), {
+    recursive: true,
+  });
+  const loaded = await loadPermissionFile(root);
+  expect(loaded.rules).toEqual([]);
+  expect(loaded.warning).toContain("unreadable");
+  await expect(
+    appendRule(root, rule("deny", "run_command", "rm *")),
+  ).rejects.toThrow("unreadable");
+});
+
 test("appendRule: creates the file, adds the gitignore entry, reads back", async () => {
   const root = await tempRoot();
   await writeFile(join(root, ".gitignore"), "dist/\n");
