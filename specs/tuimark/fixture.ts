@@ -7,7 +7,9 @@
 //
 // The reply depends only on the last message, so one run can hold several turns:
 //
-//   last message is a tool result  -> "edit applied N" (N counts tool replies) or "edit denied";
+//   last message is a tool result  -> by its result: "edit applied N" (N counts applied
+//                                      edits), "edit denied", or "TOOL STATUS: first line of
+//                                      its output" for anything else;
 //                                      an ask_user answer -> "noted: " and the answer, on one line;
 //                                      a goal_status receipt -> "status recorded: STATE"
 //   a goal message on "tidy the notes" ([goal N/M] …) -> by N: 1, a goal_status continue;
@@ -18,6 +20,7 @@
 //   prompt contains "ask for text" -> one ask_user call with a typed answer
 //   prompt contains "read the long file" -> one `read` tool call on long.txt
 //                                      (20 lines: its card truncates, /details does not)
+//   prompt contains "read outside" -> one `read` tool call on a path outside the workspace
 //   prompt contains "edit again"   -> one `edit` tool call, after -> final
 //   prompt contains "edit"         -> one `edit` tool call on notes.txt
 //   prompt contains "fail"         -> HTTP 500, so the turn fails
@@ -134,7 +137,7 @@ const goalStatus = (args: object) => ({
   function: { name: "goal_status", arguments: args },
 });
 
-/** Tool-result replies so far: "edit applied 2" proves a second edit landed. */
+/** Edits applied so far: "edit applied 2" proves a second edit landed. */
 let toolReplies = 0;
 
 // Any free port: the client is given the server's own URL.
@@ -157,7 +160,7 @@ const server = Bun.serve({
     if (request.method !== "POST" || path !== "/api/chat")
       return new Response("not found", { status: 404 });
     const body = (await request.json()) as {
-      messages?: Array<{ role?: string; content?: string }>;
+      messages?: Array<{ role?: string; content?: string; tool_name?: string }>;
     };
     const last = body.messages?.at(-1);
     const answered =
@@ -168,18 +171,18 @@ const server = Bun.serve({
       last?.role === "tool" ? recorded(last.content ?? "") : undefined;
     if (state !== undefined)
       return stream([assistant(`status recorded: ${state}`), done], 5);
-    if (last?.role === "tool")
-      return stream(
-        [
-          assistant(
-            mode === "edit-approve" || mode === "edit-session"
-              ? `edit applied ${++toolReplies}`
-              : "edit denied",
-          ),
-          done,
-        ],
-        5,
-      );
+    if (last?.role === "tool") {
+      // The reply says what the call's result was, so a spec's wait proves
+      // what the client did, not only the mode the fixture runs in.
+      const result = JSON.parse(last.content ?? "{}") as { status?: string; output?: unknown };
+      const reply =
+        last.tool_name === "edit" && result.status === "succeeded"
+          ? `edit applied ${++toolReplies}`
+          : last.tool_name === "edit" && result.status === "denied"
+            ? "edit denied"
+            : `${last.tool_name} ${result.status}: ${String(result.output ?? "").split("\n")[0]}`;
+      return stream([assistant(reply), done], 5);
+    }
     const prompt = last?.content ?? "";
     const goalTurn = /^\[goal (\d+)\/\d+\] .*tidy the notes/u.exec(prompt)?.[1];
     if (goalTurn !== undefined) {
@@ -272,6 +275,18 @@ const server = Bun.serve({
                   arguments: { path: "long.txt" },
                 },
               },
+            ],
+          }),
+          done,
+        ],
+        5,
+      );
+    if (prompt.includes("read outside"))
+      return stream(
+        [
+          assistant("", {
+            tool_calls: [
+              { function: { name: "read", arguments: { path: "../outside.txt" } } },
             ],
           }),
           done,

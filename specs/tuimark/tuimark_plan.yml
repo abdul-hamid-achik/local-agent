@@ -1,0 +1,65 @@
+version: 1
+name: bun_tuimark_plan
+intent: |
+    in plan mode the Tuimark client offers only the read-only tools: an edit
+    the model asks for is denied without an approval card and notes.txt stays
+    as it was, and a read of a path outside the workspace fails with its
+    reason; the fixture's replies say what each call's result was.
+target:
+    cmd: ["bun", "specs/tuimark/fixture.ts", "chat"]
+    cwd: "${projectRoot}"
+terminal:
+    cols: 100
+    rows: 32
+    alternateScreen: require
+steps:
+    - wait:
+        screen:
+            contains: "Message the model"
+        timeoutMs: 15000
+    - type: "/mode plan"
+    - press: enter
+    - wait:
+        screen:
+            contains: "Mode changed to plan"
+        timeoutMs: 10000
+    # No key is pressed: an approval card would hold the turn and this wait
+    # would time out.
+    - type: "edit the notes"
+    - press: enter
+    - wait:
+        screen:
+            contains: "edit denied"
+        timeoutMs: 15000
+    - wait:
+        screen:
+            contains: "Plan mode does not permit edits"
+        timeoutMs: 10000
+    - snapshot: plan_edit_denied
+    - wait:
+        screen:
+            contains: "Message the model"
+        timeoutMs: 10000
+    - type: "read outside"
+    - press: enter
+    - wait:
+        screen:
+            contains: "read failed: Workspace path escapes root"
+        timeoutMs: 15000
+    - snapshot: read_outside
+    - wait:
+        screen:
+            contains: "Message the model"
+        timeoutMs: 10000
+    - press: ctrl+c
+    - wait:
+        process:
+            exitCode: 0
+        timeoutMs: 10000
+outcomes:
+    - id: tuimark_plan
+      description: plan mode denies an edit without asking and leaves notes.txt unchanged, and a read outside the workspace fails with its reason
+      verify:
+        process:
+            exitCode: 0
+contractHash: sha256:38438d959b8e6f14a048e32b54058e5738fdfcb49e87681e36b9b51d70877672
