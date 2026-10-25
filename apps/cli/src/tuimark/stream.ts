@@ -71,12 +71,13 @@ const PREFIX = "l";
  * of an emoji, or an escape sequence (`ESC`, `ESC [ 3`, `ESC ] 0 ; title`)
  * still waiting for its end. Cleaned alone, the escape's ESC would go and the
  * rest of it would show. Only the last OPEN_END_MAX units are looked at, so a
- * longer sequence is not waited for.
+ * longer sequence is not waited for; it is long enough for an OSC's payload
+ * (a title, a link's URL), the one kind that runs long.
  */
 const OPEN_END =
   // biome-ignore lint/suspicious/noControlCharactersInRegex: ESC and BEL are what the pattern looks for
   /(?:[\ud800-\udbff]|\u001b(?:\[[0-?]*[ -/]*|\][^\u0007\u001b]*|[ -/]*)?)$/;
-const OPEN_END_MAX = 64;
+const OPEN_END_MAX = 4096;
 
 /** Splits `text` into what is whole and the end that waits for the next piece. */
 function splitOpenEnd(text: string): [whole: string, open: string] {

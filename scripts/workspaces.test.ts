@@ -17,9 +17,12 @@ const workspaces = {
 // type-only imports the transpiler drops.
 function specifiers(source: string): string[] {
   const loaded = transpiler.scanImports(source).map((each) => each.path);
-  const named = [...source.matchAll(/\bfrom\s*(['"])([^'"]+)\1/g)].map(
-    (match) => match[2] as string,
-  );
+  // An import or export statement's `from`, not one in a comment.
+  const named = [
+    ...source.matchAll(
+      /^\s*(?:import|export)\b[^;]*?\bfrom\s*(['"])([^'"]+)\1/gm,
+    ),
+  ].map((match) => match[2] as string);
   return [...new Set([...loaded, ...named])];
 }
 
@@ -61,6 +64,8 @@ test("the boundary check sees relative, dynamic, re-exported and type-only reach
         'import type { E } from "@local-agent/runtime";',
         'import { f } from "#runtime/agent";',
         'import "@thelacanians/chalupa-cli";',
+        '// re-exported from "../../runtime/src/elsewhere" once',
+        'import {\n  g,\n  type H,\n} from "@local-agent/runtime/multi";',
         "console.log(a, b, c, d, f);",
       ].join("\n"),
     ),
@@ -70,6 +75,7 @@ test("the boundary check sees relative, dynamic, re-exported and type-only reach
     "@local-agent/runtime",
     "#runtime/agent",
     "@thelacanians/chalupa-cli",
+    "@local-agent/runtime/multi",
   ]);
   expect(
     violations(

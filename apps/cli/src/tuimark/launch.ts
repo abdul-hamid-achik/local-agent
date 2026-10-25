@@ -317,6 +317,8 @@ export interface LaunchDeps {
     name: string,
   ) => Promise<string>;
   resolve?: () => Promise<string>;
+  /** Replaces process.stderr for the line said once the host is gone (tests). */
+  stderr?: { write(chunk: string): unknown };
   stdout?: {
     isTTY?: boolean;
     columns?: number;
@@ -465,6 +467,8 @@ export async function runTuimark(
       resetTerminal();
       throw failure;
     }
+    if (client.exitNotice)
+      (deps.stderr ?? process.stderr).write(`note: ${client.exitNotice}\n`);
   } finally {
     signal.removeEventListener("abort", stop);
     stdout.off?.("resize", onResize);

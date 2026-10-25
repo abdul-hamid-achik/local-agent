@@ -13,7 +13,6 @@ import {
   MessageSchema,
   type RunEvent,
   RunEventSchema,
-  type ToolCall,
 } from "#runtime/schemas";
 
 const streamIdleError = (timeoutMs: number) =>

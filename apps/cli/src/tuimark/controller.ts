@@ -486,6 +486,8 @@ export class TuimarkClient {
   private commitChain: Promise<void> = Promise.resolve();
   /** Store writes the host refused (a path the markup does not read, a dead host). */
   readonly writeErrors: string[] = [];
+  /** A line for stderr once the host is gone: an inline quit whose last prints never landed. */
+  exitNotice: string | undefined;
   private readonly inline: boolean;
   // the live message: the answer and the reasoning stream through `stream`,
   // a tool call is one value of its own
@@ -2514,10 +2516,12 @@ export class TuimarkClient {
       // to end the session, so the prints get `quitPrintMs` and no more.
       if (this.inline) {
         let timer: ReturnType<typeof setTimeout> | undefined;
+        let printed = false;
         await Promise.race([
           (async () => {
             await this.commitStreamTail();
             await this.flushSpill();
+            printed = true;
           })().catch(() => {}),
           new Promise<void>((resolve) => {
             timer = setTimeout(
@@ -2527,6 +2531,10 @@ export class TuimarkClient {
           }),
         ]);
         clearTimeout(timer);
+        // The host is about to go: what it did not print is said after it,
+        // on stderr (launch.ts), since the scrollback above lacks it.
+        if (!printed)
+          this.exitNotice = `The terminal host stopped answering as the session ended: the end of the conversation may be missing above${this.session ? ", but the session keeps it" : ""}.`;
       }
       this.abort();
       return "quit";

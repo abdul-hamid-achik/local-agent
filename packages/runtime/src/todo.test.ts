@@ -49,7 +49,7 @@ async function session(calls: Call[], intent: "plan" | "build" = "build") {
         workspace,
         intent,
         signal: AbortSignal.timeout(10_000),
-        approve: (async (proposal: ApprovalRequest) => true) as never,
+        approve: (async (_proposal: ApprovalRequest) => true) as never,
       },
     ))
       events.push(event);

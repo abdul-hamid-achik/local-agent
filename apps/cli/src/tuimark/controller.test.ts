@@ -5351,7 +5351,7 @@ test("F8: refused pre-tool text prints before the tool card", async () => {
   await client.idle();
   const out = printed(ui);
   const pre = out.findIndex((s) => s.includes("pre-tool text"));
-  const card = out.findIndex((s) => s === "tool edit applied");
+  const card = out.indexOf("tool edit applied");
   expect(pre).toBeGreaterThanOrEqual(0);
   expect(card).toBeGreaterThan(pre);
 });
@@ -7879,7 +7879,18 @@ test("inline: ctrl+c quits even when the host stops acking the exit prints", asy
   await client.idle();
   // The refused prints are owed to the scrollback; now the host goes silent.
   ui.commit = () => new Promise(() => {});
+  expect(client.exitNotice).toBeUndefined();
   expect(await ui.fire("quit_request")).toBe("quit");
+  // What never reached the scrollback is said once the host is gone.
+  expect(client.exitNotice).toContain("may be missing above");
+});
+
+test("inline: a quit whose prints all land leaves no exit notice", async () => {
+  const { ui, client } = setup(reply("ok"), { ...inline, quitPrintMs: 20 });
+  await ui.fire("send", "hi");
+  await client.idle();
+  expect(await ui.fire("quit_request")).toBe("quit");
+  expect(client.exitNotice).toBeUndefined();
 });
 
 test("/model shows the typed name cleaned: no escape sequence reaches the status line", async () => {

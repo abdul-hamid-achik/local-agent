@@ -962,6 +962,8 @@ export class Workspace implements Disposable {
         verify();
         // A new file is published only where nothing is: the kernel checks
         // and renames in one step, so one created since `verify` survives.
+        // Where the libc or the file system lacks the flag this is a plain
+        // rename, and only the `verify` just above stands between them.
         if (proposal.created) renameAtNoReplace(parent, tempName, name);
         else renameAt(parent, tempName, name);
         change.published = true;

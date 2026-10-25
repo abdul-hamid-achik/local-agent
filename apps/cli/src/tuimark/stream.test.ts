@@ -177,6 +177,22 @@ test("a piece that ends in half an emoji or half an escape waits for the rest", 
   expect(thought()).toBe("plan 😀 now");
 });
 
+test("a long OSC split between pieces waits for its end: its payload never shows", () => {
+  const r = rig();
+  const seen = () =>
+    runsText([...r.live().blocks, ...r.live().tail].flatMap((b) => b.runs));
+  // A title, or a link's URL, runs past a CSI's few units.
+  for (const piece of [`hi \u001b]0;${"T".repeat(70)}`, "TTTTT\u0007 after"]) {
+    r.stream.pushText(piece);
+    r.advance(FLUSH_MS);
+    r.drain();
+    expect(seen()).not.toMatch(/T/);
+  }
+  r.advance(REPARSE_MS);
+  r.drain();
+  expect(seen()).toBe("hi  after");
+});
+
 test("a piece that never finishes is dropped when the reply ends, not shown", () => {
   for (const unfinished of ["\ud83d", "\u001b[3"]) {
     const r = rig();

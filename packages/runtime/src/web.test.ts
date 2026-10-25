@@ -119,7 +119,7 @@ async function session(
         workspace,
         intent,
         signal,
-        approve: (async (proposal: ApprovalRequest) => true) as never,
+        approve: (async (_proposal: ApprovalRequest) => true) as never,
         mcp,
         fetchPolicy: { resolve: resolveHost },
         ...(readDenial ? { deniedRead: readDenial } : {}),
@@ -1034,10 +1034,10 @@ test("fetch sends browser headers and a same-origin referer on image requests", 
       entry.url.startsWith("http://img.example"),
     );
     expect(request?.headers["user-agent"]).toContain("Mozilla/5.0");
-    expect(request?.headers["accept"]).toBe(
+    expect(request?.headers.accept).toBe(
       "text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8",
     );
-    expect(request?.headers["referer"]).toBe("http://img.example");
+    expect(request?.headers.referer).toBe("http://img.example");
   } finally {
     restoreFetch();
     await run.cleanup();

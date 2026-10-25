@@ -1002,7 +1002,9 @@ function sameEvent(row: EventRow, event: ExecutionEvent): boolean {
     row.approval === (event.approval ?? "") &&
     row.arguments_sha256 === event.argumentsSha256 &&
     row.result_sha256 === (event.resultSha256 ?? "") &&
-    row.result_receipt === (event.resultReceipt ?? "") &&
+    // A row written before receipts were bounded holds the whole result.
+    (row.result_receipt === (event.resultReceipt ?? "") ||
+      ledgerReceipt(row.result_receipt) === (event.resultReceipt ?? "")) &&
     row.detail === (event.detail ?? "")
   );
 }

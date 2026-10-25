@@ -191,17 +191,24 @@ A resumed session first closes the calls it was interrupted before running.`);
         `--mcp-status needs --mcp-config PATH or ${defaultMcpConfigPath()}`,
       );
     const controller = new AbortController();
-    const stop = () => controller.abort();
-    process.once("SIGINT", stop);
-    process.once("SIGTERM", stop);
+    const stopFor = (code: number) => () => {
+      interrupted ||= code;
+      controller.abort();
+    };
+    const interrupt = stopFor(130);
+    const terminate = stopFor(143);
+    process.once("SIGINT", interrupt);
+    process.once("SIGTERM", terminate);
     try {
       const report = await inspectMcpStatus(source.path, controller.signal);
       console.log(JSON.stringify(report));
       if (report.servers.some((server) => server.status === "unavailable"))
         process.exitCode = 1;
+      // A probe a signal stopped exits with its code, as a run does.
+      if (interrupted) process.exitCode = interrupted;
     } finally {
-      process.off("SIGINT", stop);
-      process.off("SIGTERM", stop);
+      process.off("SIGINT", interrupt);
+      process.off("SIGTERM", terminate);
     }
   } else {
     const mode = values.mode ?? "fullscreen";
