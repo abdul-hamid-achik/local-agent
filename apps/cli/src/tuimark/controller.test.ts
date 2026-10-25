@@ -304,7 +304,7 @@ test("while busy, a slash command says Busy and a prompt is queued and runs next
   await ui.fire("send", "second prompt");
   // Queued: the draft cleared, the status says so, and nothing ran yet.
   expect(store(ui).draft).toBe("");
-  expect(store(ui).status).toBe("Queued: second prompt");
+  expect(store(ui).status).toBe("Queued: second prompt · ↑ edits it");
   expect(seen).toHaveLength(1);
   // A slash command while one is queued is still refused and keeps the queue.
   await ui.fire("send", "/mode plan");
@@ -346,15 +346,109 @@ test("a second send while one is queued is added to it, never in its place", asy
   });
   await ui.fire("send", "go");
   await ui.fire("send", "first queued");
-  expect(store(ui).status).toBe("Queued: first queued");
+  expect(store(ui).status).toBe("Queued: first queued · ↑ edits it");
   await ui.fire("send", "replacement\nsecond line");
-  expect(store(ui).status).toBe("Added to the queued message: replacement");
+  expect(store(ui).status).toBe(
+    "Added to the queued message: replacement · ↑ edits it",
+  );
   release();
   await client.idle();
   expect(seen).toHaveLength(2);
   expect(seen[1]?.messages.at(-1)).toBe(
     "user:first queued\n\nreplacement\nsecond line",
   );
+});
+
+test("up in an empty composer takes the queued send back to edit while the turn goes on", async () => {
+  let release: () => void = () => {};
+  const gate = new Promise<void>((r) => {
+    release = r;
+  });
+  let calls = 0;
+  const { ui, client, seen } = setup(async function* () {
+    calls++;
+    if (calls === 1) await gate;
+    yield {
+      type: "message",
+      message: { role: "assistant", content: `answer ${calls}` },
+    };
+  });
+  await ui.fire("send", "go");
+  await ui.fire("send", "first");
+  await ui.fire("send", "second");
+  await ui.fire("history_prev", "");
+  expect(store(ui).draft).toBe("first\n\nsecond");
+  expect(store(ui).status).toBe(
+    "Queued message back to edit · the turn goes on",
+  );
+  // Sent again, the edit is what is queued: the old text is not kept too.
+  await ui.fire("send", "first, edited");
+  expect(store(ui).status).toBe("Queued: first, edited · ↑ edits it");
+  expect(seen).toHaveLength(1);
+  release();
+  await client.idle();
+  expect(seen).toHaveLength(2);
+  expect(seen[1]?.messages).toEqual([
+    "user:go",
+    "assistant:answer 1",
+    "user:first, edited",
+  ]);
+});
+
+test("a queued send taken back to edit does not run when the turn ends", async () => {
+  let release: () => void = () => {};
+  const gate = new Promise<void>((r) => {
+    release = r;
+  });
+  const { ui, client, seen } = setup(async function* () {
+    await gate;
+    yield {
+      type: "message",
+      message: { role: "assistant", content: "answer" },
+    };
+  });
+  await ui.fire("send", "go");
+  await ui.fire("send", "later");
+  expect(store(ui).status).toBe("Queued: later · ↑ edits it");
+  await ui.fire("history_prev", "");
+  release();
+  await client.idle();
+  // The turn was not cancelled: its reply is there, and nothing else ran.
+  expect(seen).toHaveLength(1);
+  const last = store(ui).messages.at(-1);
+  expect(last && viewText(last)).toBe("answer");
+  expect(store(ui).draft).toBe("later");
+  expect(store(ui).status).toBe("build · last <1s");
+});
+
+test("up over a draft recalls the history and leaves the queued send queued", async () => {
+  let release: () => void = () => {};
+  const gate = new Promise<void>((r) => {
+    release = r;
+  });
+  let calls = 0;
+  const { ui, client, seen } = setup(async function* () {
+    calls++;
+    if (calls === 1) await gate;
+    yield {
+      type: "message",
+      message: { role: "assistant", content: `answer ${calls}` },
+    };
+  });
+  await ui.fire("send", "go");
+  await ui.fire("send", "queued one");
+  await ui.fire("history_prev", "half-typed");
+  expect(store(ui).draft).toBe("queued one");
+  // A recalled message emptied by hand: up goes on through the history.
+  await ui.fire("history_prev", "");
+  expect(store(ui).draft).toBe("go");
+  await ui.fire("history_next", "go");
+  await ui.fire("history_next", "queued one");
+  expect(store(ui).draft).toBe("half-typed");
+  release();
+  await client.idle();
+  expect(seen).toHaveLength(2);
+  expect(seen[1]?.messages.at(-1)).toBe("user:queued one");
 });
 
 test("a send past what a message holds stays in the composer, and so does one the queue cannot take", async () => {
@@ -382,7 +476,7 @@ test("a send past what a message holds stays in the composer, and so does one th
   await ui.fire("send", "go");
   await ui.fire("send", most);
   await ui.fire("send", "z");
-  expect(store(ui).status).toBe("Added to the queued message: z");
+  expect(store(ui).status).toBe("Added to the queued message: z · ↑ edits it");
   store(ui).draft = "z";
   await ui.fire("send", "z");
   expect(store(ui).status).toMatch(
@@ -433,7 +527,7 @@ test("ctrl+c while a cancelled turn winds down gives a send queued behind it bac
   expect(await ui.fire("quit_request")).toBeUndefined();
   // Typed and sent while the cancelled turn has not ended yet.
   await ui.fire("send", "after the cancel");
-  expect(store(ui).status).toBe("Queued: after the cancel");
+  expect(store(ui).status).toBe("Queued: after the cancel · ↑ edits it");
   expect(await ui.fire("quit_request")).toBeUndefined();
   expect(store(ui).draft).toBe("after the cancel");
   expect(store(ui).status).toBe("Queued message back in the composer");
@@ -454,7 +548,7 @@ test("esc cancels the turn and gives the queued message back to the composer", a
   });
   await ui.fire("send", "slow one");
   await ui.fire("send", "queued one");
-  expect(store(ui).status).toBe("Queued: queued one");
+  expect(store(ui).status).toBe("Queued: queued one · ↑ edits it");
   store(ui).draft = "typed meanwhile";
   await ui.fire("typed", "typed meanwhile");
   await ui.fire("cancel");
@@ -464,6 +558,28 @@ test("esc cancels the turn and gives the queued message back to the composer", a
   );
   // After what was typed since, never in its place.
   expect(store(ui).draft).toBe("typed meanwhile\nqueued one");
+  expect(seen).toHaveLength(1);
+  expect(isBusy(ui)).toBe(false);
+});
+
+test("esc after a queued send was taken back to edit cancels the turn and leaves the edit alone", async () => {
+  const { ui, client, seen } = setup(async function* ({ options }) {
+    await new Promise((_, reject) =>
+      options.signal.addEventListener("abort", () =>
+        reject(new Error("aborted")),
+      ),
+    );
+    yield* [] as AgentEvent[];
+  });
+  await ui.fire("send", "slow one");
+  await ui.fire("send", "queued one");
+  await ui.fire("history_prev", "");
+  expect(store(ui).draft).toBe("queued one");
+  await ui.fire("cancel");
+  await client.idle();
+  // Nothing was queued any more: the edit is not given back a second time.
+  expect(store(ui).status).toBe("Cancelled");
+  expect(store(ui).draft).toBe("queued one");
   expect(seen).toHaveLength(1);
   expect(isBusy(ui)).toBe(false);
 });
@@ -2446,7 +2562,7 @@ test("inline: a queued prompt is committed only when its turn starts", async () 
   }, inline);
   await ui.fire("send", "first one");
   await ui.fire("send", "second one");
-  expect(store(ui).status).toBe("Queued: second one");
+  expect(store(ui).status).toBe("Queued: second one · ↑ edits it");
   // Only the running turn is in print; the queued prompt is not yet.
   expect(printed(ui)).toEqual(["You: first one"]);
   release();
@@ -3895,7 +4011,7 @@ test("a send queued behind a turn that leaves a call unknown goes back to the co
   await ui.fire("send", "deploy it");
   store(ui).draft = "and then report";
   await ui.fire("send", "and then report");
-  expect(store(ui).status).toBe("Queued: and then report");
+  expect(store(ui).status).toBe("Queued: and then report · ↑ edits it");
   release();
   await client.idle();
   expect(seen).toHaveLength(1);
@@ -5988,7 +6104,7 @@ test("ctrl+c between a goal's turns gives a queued send back instead of running 
   };
   await ui.fire("send", "/goal make the tests pass");
   await ui.fire("send", "also run lint");
-  expect(store(ui).status).toBe("Queued: also run lint");
+  expect(store(ui).status).toBe("Queued: also run lint · ↑ edits it");
   release();
   await client.idle();
   expect(await presses[0]).toBeUndefined();
@@ -7242,10 +7358,50 @@ test("a send queued while the turn runs shows as 'Queued', then as '1 queued' on
   });
   await ui.fire("send", "go");
   await ui.fire("send", "later");
-  expect(store(ui).status).toBe("Queued: later");
+  expect(store(ui).status).toBe("Queued: later · ↑ edits it");
   toResult();
   await until(() => store(ui).status === "build · 1 queued");
   end();
+  await client.idle();
+});
+
+test("a queued send taken back to edit gives way to the ambient bar, which no longer counts it", async () => {
+  const gates = [0, 1, 2].map(() => {
+    let open: () => void = () => {};
+    const gate = new Promise<void>((r) => {
+      open = r;
+    });
+    return { gate, open };
+  });
+  const { ui, client } = setup(async function* (ctx) {
+    if (ctx.messages.at(-1)?.content !== "go") return;
+    for (const [i, id] of ["r1", "r2"].entries()) {
+      yield { type: "tool_requested", id, name: "read" };
+      yield { type: "tool_start", id, name: "read" };
+      await gates[i]?.gate;
+      yield {
+        type: "tool_result",
+        id,
+        name: "read",
+        status: "succeeded",
+        output: "o",
+      };
+    }
+    await gates[2]?.gate;
+  });
+  await ui.fire("send", "go");
+  await ui.fire("send", "later");
+  // A tool result has given the ambient bar back before the take-back, so
+  // the take-back's own status is what the next result must replace.
+  gates[0]?.open();
+  await until(() => store(ui).status === "build · 1 queued");
+  await ui.fire("history_prev", "");
+  expect(store(ui).status).toBe(
+    "Queued message back to edit · the turn goes on",
+  );
+  gates[1]?.open();
+  await until(() => store(ui).status === "build");
+  gates[2]?.open();
   await client.idle();
 });
 

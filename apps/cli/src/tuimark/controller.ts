@@ -2623,7 +2623,8 @@ export class TuimarkClient {
       if (!raw.trim()) return;
       // A queue of one message: this send runs when the turn ends (after an
       // error too — it is the user's latest intent), and a further send is
-      // added to it, never in its place (esc gives it all back to edit). It
+      // added to it, never in its place (up in an empty composer gives it
+      // all back to edit, and esc with the turn cancelled). It
       // joins the draft history now; its view is only shown (inline:
       // committed) when it actually starts.
       const added = this.queued !== undefined;
@@ -2647,8 +2648,8 @@ export class TuimarkClient {
         {
           path: "status",
           value: added
-            ? `Added to the queued message: ${firstLine}`
-            : `Queued: ${firstLine}`,
+            ? `Added to the queued message: ${firstLine} · ↑ edits it`
+            : `Queued: ${firstLine} · ↑ edits it`,
         },
       ]);
       return;
@@ -2843,8 +2844,26 @@ export class TuimarkClient {
     if (this.sent.length > MAX_SENT) this.sent.shift();
   }
 
-  /** `up` on the first line of the composer: the message sent before the one shown. */
+  /**
+   * `up` on the first line of the composer: the message sent before the one
+   * shown. In an empty composer with a send queued, the queued send instead,
+   * taken off the queue to edit while the turn goes on.
+   */
   private async recallPrev(ev: HostEvent): Promise<void> {
+    const draft = typeof ev.value === "string" ? ev.value : "";
+    if (this.queued !== undefined && this.recall === undefined && !draft) {
+      const queued = this.queued;
+      this.queued = undefined;
+      if (this.busy) this.flashed = true;
+      await this.write([
+        { path: "draft", value: queued },
+        {
+          path: "status",
+          value: "Queued message back to edit · the turn goes on",
+        },
+      ]);
+      return;
+    }
     if (this.sent.length === 0) return;
     if (this.recall === undefined) {
       this.recalledFrom = typeof ev.value === "string" ? ev.value : "";
