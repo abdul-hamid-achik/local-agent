@@ -58,13 +58,27 @@ See [Providers](/providers).
 
 ## Themes
 
-`--theme` accepts `dark`, `light`, `auto`, or a named theme. Two named themes
-are bundled: `midnight` and `sepia`. Themes apply to the tuimark client only.
-In every theme, each text color reads at WCAG AA (at least 4.5:1) on the
-background, panels, raised surfaces and selected rows, and so does the label
-on a badge, a button or a segment.
+`--theme` accepts `dark`, `light`, `auto`, or a named theme. Themes apply to
+the tuimark client only. Eighteen named themes are bundled:
 
-`/theme dark|light|auto` changes the theme mid-session without restarting.
+| Family | Themes |
+| --- | --- |
+| local-agent | `midnight`, `sepia` |
+| Catppuccin | `catppuccin-mocha`, `catppuccin-macchiato`, `catppuccin-frappe`, `catppuccin-latte` |
+| Rosé Pine | `rose-pine`, `rose-pine-moon`, `rose-pine-dawn` |
+| Tokyo Night | `tokyo-night`, `tokyo-night-storm` |
+| Gruvbox | `gruvbox-dark`, `gruvbox-light` |
+| Others | `nord`, `dracula`, `one-dark`, `kanagawa`, `everforest` |
+
+An unknown name lists every theme. In every theme, each text color reads at
+WCAG AA (at least 4.5:1) on the background, panels, raised surfaces and
+selected rows, and so does the label on a badge, a button or a segment. Where
+a palette's original color falls short of that, the bundled theme lightens or
+darkens it along its own hue, so an adapted theme is close to its source but
+not always identical.
+
+`/theme dark|light|auto` changes the theme mid-session without restarting; a
+named theme is chosen at launch with `--theme`.
 Themes are presentation only; they do not affect authority, tool policy, or
 approvals. See [Command reference](/reference).
 

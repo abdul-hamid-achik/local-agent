@@ -21,7 +21,7 @@ are no subcommands. Run `local-agent --help` for the authoritative short list.
 | `-p`, `--prompt PROMPT` | Run one prompt; implies headless mode |
 | `--mode fullscreen\|inline\|headless` | Run mode; default `fullscreen` |
 | `--ui vue\|tuimark` | Client. `tuimark` is the default on macOS/Linux, `vue` on Windows; `tuimark` is rejected on Windows |
-| `--theme NAME` | `dark`, `light`, `auto`, or a named theme (`midnight`, `sepia`). Tuimark client only |
+| `--theme NAME` | `dark`, `light`, `auto`, or a named theme such as `midnight`, `catppuccin-mocha`, `tokyo-night`, `nord` or `dracula` ([all themes](/configuration#themes)). Tuimark client only |
 | `--json` | Emit NDJSON events on stdout in headless mode; implies headless |
 | `--workspace PATH` | Workspace directory; default is the current working directory |
 | `--intent plan\|build\|chat` | Starting intent; default `build` |

@@ -139,8 +139,11 @@ Named themes work with the tuimark client:
 
 ```bash
 bun run dev --theme midnight
-bun run dev --theme sepia
+bun run dev --theme catppuccin-mocha
+bun run dev --theme rose-pine-dawn
 ```
+
+[Configuration](/configuration#themes) lists all eighteen.
 
 ## Where to go next
 
