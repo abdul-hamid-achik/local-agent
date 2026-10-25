@@ -204,6 +204,26 @@ describe("provider configuration boundary", () => {
   });
 
   test.each([
+    "gpt-oss:120b-cloud",
+    "qwen3-coder:480b-cloud",
+    "gpt-oss:cloud",
+    "Kimi-K2:1T-CLOUD",
+  ])("refuses the Ollama cloud model %s under Chalupa", (model) => {
+    expect(() => resolveProvider(chalupa({ model }))).toThrow(
+      `Model ${model} is an Ollama cloud model: it runs on ollama.com, not on the Chalupa GPU, and your prompts would leave it. Select a model the GPU serves in Chalupa`,
+    );
+  });
+
+  test("keeps a Chalupa model that only mentions cloud, and local Ollama's cloud models", () => {
+    expect(resolveProvider(chalupa({ model: "cloudy-7b:latest" })).model).toBe(
+      "cloudy-7b:latest",
+    );
+    expect(resolveProvider({}, "gpt-oss:120b-cloud").model).toBe(
+      "gpt-oss:120b-cloud",
+    );
+  });
+
+  test.each([
     "http://gpu.example:11434",
     "http://203.0.113.7:11434",
     "http://192.168.1.20:11434",

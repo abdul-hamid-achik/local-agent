@@ -24,6 +24,7 @@ import {
   admitOpenAILocalModel,
   appendRule,
   ConversationFullError,
+  chalupaModelRefusal,
   clearRules,
   commandLine,
   type Disposition,
@@ -1711,6 +1712,15 @@ export class TuimarkClient {
     await this.write([
       { path: "status", value: `Switching model to ${shown}…` },
     ]);
+    // A Chalupa profile never switches to a model that runs on ollama.com.
+    const refusal =
+      this.provider.type === "ollama_remote"
+        ? chalupaModelRefusal(shown)
+        : undefined;
+    if (refusal !== undefined) {
+      await this.write([{ path: "status", value: oneLine(refusal) }]);
+      return false;
+    }
     const admit =
       this.options.admitModel ??
       (this.provider.type === "openai_local"

@@ -22,6 +22,7 @@ export {
 } from "#runtime/agent";
 export { commandLine, secretPathNotes, shellWord } from "#runtime/command";
 export {
+  chalupaModelRefusal,
   DEFAULT_OLLAMA_MODEL,
   type OpenAILocalProvider,
   type Provider,

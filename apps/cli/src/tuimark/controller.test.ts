@@ -4843,6 +4843,31 @@ test("/model on Chalupa asks the Ollama inventory behind it, as launch does", as
   }
 });
 
+test("/model on Chalupa refuses an Ollama cloud model before asking the inventory", async () => {
+  const asked: string[] = [];
+  const { ui } = setup(reply("ok"), {
+    provider: { ...provider, type: "ollama_remote" } as Provider,
+    admitModel: async (candidate) => {
+      asked.push(candidate.model);
+      return validated(candidate.model);
+    },
+  });
+  await ui.fire("send", "/model gpt-oss:120b-cloud");
+  expect(store(ui).status).toMatch(
+    /^Model gpt-oss:120b-cloud is an Ollama cloud model: it runs on ollama\.com, not on the Chalupa GPU/u,
+  );
+  expect(store(ui).header.model).toBe("fixture");
+  expect(asked).toEqual([]);
+});
+
+test("/model on local Ollama still takes a cloud model the user chose", async () => {
+  const { ui } = setup(reply("ok"), {
+    admitModel: async (candidate) => validated(candidate.model),
+  });
+  await ui.fire("send", "/model qwen3-coder:480b-cloud");
+  expect(store(ui).status).toBe("Model changed to qwen3-coder:480b-cloud");
+});
+
 test("/model switches nothing when the process quits during the check", async () => {
   const quit = new AbortController();
   const { ui } = setup(reply("ok"), {

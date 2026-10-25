@@ -340,6 +340,18 @@ export function parseThink(value: string, source = "--think"): boolean {
 const present = (value: string | undefined) =>
   value === undefined || value.trim() === "" ? undefined : value;
 
+/**
+ * Why a Chalupa profile may not run `model`, or undefined when it may. An
+ * Ollama cloud model (a tag ending `:cloud` or `-cloud`, such as
+ * `gpt-oss:120b-cloud`) runs on ollama.com, not on the rented GPU: the GPU
+ * hour would be wasted and the prompts would leave the user's infrastructure.
+ * Local Ollama is not asked: a user who pulled a cloud model chose it.
+ */
+export function chalupaModelRefusal(model: string): string | undefined {
+  if (!/[:-]cloud$/iu.test(model.trim())) return undefined;
+  return `Model ${model} is an Ollama cloud model: it runs on ollama.com, not on the Chalupa GPU, and your prompts would leave it. Select a model the GPU serves in Chalupa`;
+}
+
 /** Chalupa owns provisioning, model placement and the tunnel; we consume its process profile. */
 /** A provider profile from the environment, or one line saying what is wrong with it. */
 function parseProfile(raw: unknown, label: string): Provider {
@@ -378,6 +390,8 @@ export function resolveProvider(
     const profile = parseProfile(rawProfile, "Chalupa");
     if (profile.type !== "ollama_remote")
       throw new Error("Chalupa requires an ollama_remote profile");
+    const refusal = chalupaModelRefusal(profile.model);
+    if (refusal) throw new Error(refusal);
     if (model && model !== profile.model)
       throw new Error("Select the model in Chalupa before launching");
     // The negotiated context belongs to the Chalupa profile; the variable is ignored.
