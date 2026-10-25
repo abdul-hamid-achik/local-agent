@@ -47,6 +47,10 @@ a call with side effects was still running when the process ended,
 `--resume` refuses and names the `--recover` command that settles it first
 (see [Sessions](/sessions)).
 
+An Ollama cloud model (a tag that ends in `:cloud` or `-cloud`) is refused
+under a Chalupa profile, at startup and by `/model`: it runs on ollama.com,
+not on the GPU Chalupa provides, and your prompts would leave it.
+
 Once Chalupa is active, prompts and tool receipts go to the remote endpoint.
 That is exactly what the explicit `LOCAL_AGENT_LOCAL_ONLY=false`
 acknowledges. See [Safety and privacy](/safety).

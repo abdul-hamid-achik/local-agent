@@ -45,6 +45,11 @@ subagent: several `task` calls in one reply run in parallel, so chat can
 look into independent questions at once. A subagent gets the read-only set
 only, with no MCP, no todo list, and no `task` of its own.
 
+In the Tuimark client a running subagent's card names its objective, its
+turn budget and the seconds it has run; several running at once share one
+`Subagents` card with a row each. A finished card gives the turns it took
+and the first line of its answer; `/details N` shows the whole answer.
+
 Chat hard-denies `write`, `edit`, and `run_command` like plan. Unlike plan
 it keeps your configured MCP tools, each call behind its approval card, so
 a browser or search server can read a page for you. Use chat for

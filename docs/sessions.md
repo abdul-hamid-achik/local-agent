@@ -94,12 +94,14 @@ over with `/sessions new`.
 The Tuimark client and headless `--prompt` runs keep the saved state well
 under that cap: past 6 MiB, before the next request, they shorten it from
 the start, images first, then tool results the model has already read, then
-the reasoning of earlier turns. The current turn stays whole.
+the reasoning of earlier turns. The current turn stays whole. In the
+Tuimark client, `/compact` does the same at once, whatever the state weighs.
 
 A single tool result too large for the state to keep is saved as a short note
 in its place, with the call's status and its size, and the turn goes on: the
 model reads the note and can ask for less, for example a narrower read. The
-call's record in the session ledger keeps what the tool returned. When not
+call's record in the session ledger keeps the first 16 KiB of what the tool
+returned and a SHA-256 of all of it. When not
 even the note fits, nothing is saved for the call, the turn is refused with
 the sentence above, and the call is handled as
 [interrupted work](#interrupted-work).

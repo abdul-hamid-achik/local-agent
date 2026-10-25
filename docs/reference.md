@@ -59,9 +59,16 @@ the authoritative short list.
   be combined with `--approve-commands`. Headless, it stops the run before it
   starts where the sandbox is unavailable (Linux, Windows, a workspace that
   contains your home folder).
+- `--mode fullscreen` and `--mode inline` cannot be combined with `--prompt`
+  or `--json`, which run headless.
 - Interactive modes require a TTY.
-- Interactive runs pre-admit the Ollama model with a 15 s check before the
-  session starts.
+- Interactive runs check the Ollama model, for at most 15 s, before its first
+  turn. The Tuimark client opens at once and checks while it is up: the status
+  says `Checking model…`, a prompt sent meanwhile waits for the check, and a
+  model that is refused closes the client with the same message. The Vue
+  client checks before it opens.
+- A run stopped by `ctrl+c` (SIGINT), SIGTERM, or a closed terminal (SIGHUP)
+  exits 130, 143 or 129; any other failure exits 1.
 
 ## Run modes
 
@@ -117,15 +124,19 @@ instead. See [Safety](/safety#headless-approval).
 | `/provider` | Ask the model's endpoint, read-only: answer time, Ollama's version, whether the model is loaded and how much of it is in GPU memory |
 | `/sessions` | Open the session picker; needs `--session-db`. Loading a session closes the calls it stopped before they ran, or that only read, and tells the model; a call of unknown outcome loads but blocks the next prompt until `/recover` |
 | `/sessions new` | Start over: a new saved session with `--session-db`, otherwise a new temporary conversation |
+| `/new`, `/clear` | Tuimark client: the same as `/sessions new` |
+| `/diff` | Tuimark client: list the files this session's edits and writes changed, with their diffs and `+N −M` counts. Changes made by commands are not listed |
+| `/compact` | Tuimark client: shorten the conversation now, as the automatic compaction does past 6 MiB; refused while a turn runs |
 | `/recover` | Tuimark client, needs `--session-db`: list the session's calls whose outcome is unknown, numbered |
 | `/recover N applied\|not-applied\|undone [note]` | Tuimark client: record what you found in the workspace for the Nth call. Nothing runs again. Earlier calls are answered first. While one remains, a prompt waits and the status names `/recover` |
 | `/model [NAME]` | Show the current model, or switch to another installed Ollama model mid-session |
 | `/goal OBJECTIVE [--turns N]` | Tuimark client, build mode: run turns toward an objective until the model reports done or blocked, or a limit stops it (8 turns by default, 1 to 50) |
 | `/goal` | Show the running goal: its objective, turn, time and tokens left, and last status |
 | `/goal stop` | End the running goal; `esc` ends it too, and so does `ctrl+c` between its turns |
-| `/export` | Write the transcript to a markdown file |
+| `/export` | Write the transcript to a markdown file in the workspace root; it may hold tool output, so keep it out of commits |
 | `/export json` | Write the raw messages array as JSON |
 | `/find TEXT` | Search saved sessions for text; needs `--session-db` |
+| `/search [TEXT]` | Tuimark client: search this conversation: your messages, the replies and the tool cards, not the client's own notices. Fullscreen opens a search box (also `ctrl+f`); inline prints the matches into the scrollback. Refused while a turn runs |
 | `/mcp` | Show an MCP panel: server and tool counts, or a hint to use `--mcp-config` |
 | `/help` | Show the command and key overlay |
 
@@ -152,6 +163,7 @@ earlier messages are hidden.
 | `pgup`, `pgdn` | Scroll the log |
 | `ctrl+l` | Jump to the latest output |
 | `ctrl+y` | Tuimark client: copy the last reply, as `/copy` |
+| `ctrl+f` | Tuimark client, fullscreen: search this conversation, as `/search` |
 | `shift+tab` | Next intent: `build` → `plan` → `chat` → `build` |
 | `enter` | Send the draft; while a turn runs, queue it for when the turn ends (Tuimark client) |
 | `shift+enter`, `alt+enter` | Insert a newline without sending |
@@ -165,6 +177,7 @@ Context-sensitive keys:
 | Approval (Vue client) | `y` allows; `n`, `enter` or `esc` denies |
 | Question (Tuimark) | `up`/`down` choose, `enter` answers; or type the row's number, its label, or `y`/`n`; `esc` skips |
 | Panels and details | `q` or `esc` closes; arrows scroll |
+| Search box (Tuimark) | Type to search, in any case; `up`/`down` (or `ctrl+n`/`ctrl+p`) choose a match; `enter` opens it in the viewer, where `n`/`p` step through the matches and `esc` goes back to the box; `esc` closes |
 | Sessions picker | `up`/`down` choose, `enter` loads |
 
 The command palette mirrors the slash commands plus `ctrl+o` load-earlier

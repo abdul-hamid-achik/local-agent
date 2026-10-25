@@ -11,11 +11,12 @@ import ThemeGallery from './.vitepress/theme/ThemeGallery.vue'
 # Configuration
 
 There is no settings file: every setting is either a flag documented in the
-[Command reference](/reference) or a variable in the table below. Three files
+[Command reference](/reference) or a variable in the table below. Four files
 are read when they exist, each for one purpose:
 `~/.config/local-agent/mcp.json` lists your MCP servers ([MCP](/mcp)), the
 workspace's `.local-agent/permissions.json` holds its approval rules
-([Persistent rules](/safety#persistent-rules)), and the workspace's root
+([Persistent rules](/safety#persistent-rules)), its root `.agentignore` keeps
+paths away from the file tools ([Ignored paths](#ignored-paths)), and its root
 `AGENTS.md` is model context ([Repository instructions](#repository-instructions)).
 
 ## Environment variables
@@ -29,6 +30,7 @@ workspace's `.local-agent/permissions.json` holds its approval rules
 | `LOCAL_AGENT_LOCAL_ONLY` | Local-endpoint enforcement; must be `false` for `chalupa`, and for an `openai_local` server that is not on loopback |
 | `LOCAL_AGENT_PROVIDER_CONFIG` | The `chalupa` or `openai_local` profile JSON |
 | `TUIMARK_BINARY` | Path to the tuimark binary; otherwise a pinned release (0.5.1) is downloaded checksum-verified |
+| `TUIMARK_MOTION` | `reduce` or `0`: the Tuimark client draws a still glyph where its spinners would turn; elapsed seconds keep counting |
 | `LOCAL_AGENT_DIAGNOSTICS` | `1` appends a Biome check of each approved edit, using the workspace's own `@biomejs/biome` install and its root `biome.json` (default off) |
 | `LOCAL_AGENT_DIAGNOSTICS_TSC` | `1` also appends a `tsc --noEmit` section after `.ts` edits, using the workspace's own `typescript` and its root `tsconfig.json` (slow: full project) |
 | `LOCAL_AGENT_FETCH_PRIVATE` | `1` lets the `fetch` tool reach loopback and private-network hosts; by default it reaches public hosts only |
@@ -95,6 +97,24 @@ not always identical.
 named theme is chosen at launch with `--theme`.
 Themes are presentation only; they do not affect authority, tool policy, or
 approvals. See [Command reference](/reference).
+
+## Ignored paths
+
+A `.agentignore` file in the workspace root keeps paths away from the agent's
+file tools. It takes one pattern per line, and `#` starts a comment. `*`, `?`,
+`[abc]` and `**` are wildcards. A pattern without a `/` matches a name at any
+depth (`*.log`, `node_modules`); one with a `/` is relative to the root
+(`src/generated`). Ignoring a directory ignores everything in it, and a
+leading `!` brings a path back; the last matching line wins. Names match in
+any case.
+
+Ignored paths are hidden from list and search, and read, edit and write
+refuse them. The file is read once, when the run starts. A `.agentignore`
+that is a symlink, not a regular file, over 64 KiB or not UTF-8 stops the
+run; a malformed line is named once on stderr and skipped. The file itself
+is hidden from the tools, so the model cannot loosen it. It does not limit
+`run_command`: commands still ask for approval, or run in the
+[sandbox](/safety#sandboxed-commands-macos).
 
 ## Repository instructions
 
