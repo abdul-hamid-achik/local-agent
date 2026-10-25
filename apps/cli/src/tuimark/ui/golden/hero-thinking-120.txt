@@ -1,0 +1,31 @@
+=== grid 120x30 ===
+ Local Agent             build  Ollama / loopback  qwen3.5:4b-q4_K_M              temporary  ctx 2.1k/32k  ▊░░░░░░░░░░░ 
+┌──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│ You                                                                                                                  │
+│ Raise the provider timeout to 15 seconds and run its tests.                                                          │
+│                                                                                                                      │
+│ Assistant ⠋  thinking · 4s                                                                                           │
+│   The timeout lives in packages/runtime/src/provider.ts.                                                             │
+│   Read it, raise it to 15 seconds, then run the provider tests.                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+╔══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╗
+║ Type to queue a message                                                                                              ║
+╚══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╝
+ build   ^P commands  esc cancel  ^Y copy  ↑/↓ history  ^O earlier  pgup/pgdn scroll  ^L latest  shift+tab mode         

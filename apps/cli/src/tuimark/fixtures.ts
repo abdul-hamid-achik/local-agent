@@ -16,6 +16,7 @@ import { filterPalette, slashMatches, slashRows } from "#cli/tuimark/commands";
 import {
   APPROVAL_STATUS,
   APPROVAL_TRUNCATED_STATUS,
+  APPROVAL_WAIT_STATUS,
   approvalState,
   armedStatus,
   contextLabel,
@@ -386,6 +387,11 @@ export function approvalSample(): Store {
   store.head = headState("approval", 12);
   store.status = APPROVAL_STATUS;
   return store;
+}
+
+/** The same dialog in the moment before it arms: only the deny keys act. */
+export function unarmedApprovalSample(): Store {
+  return { ...approvalSample(), status: APPROVAL_WAIT_STATUS };
 }
 
 /** The hidden payload of the long diff; it must be reachable by keyboard. */
@@ -799,6 +805,155 @@ export function inlinePanelSample(): Store {
   return store;
 }
 
+// ---------------------------------------------------------------- the hero
+
+// The website's terminal plays these three frames of one build turn on the
+// default model, with no session database (sessions are opt-in): the model
+// thinking, its finished Read and Edit cards, then a command's approval.
+const HERO_PROVIDER = {
+  type: "ollama" as const,
+  base_url: "http://127.0.0.1:11434",
+  model: "qwen3.5:4b-q4_K_M",
+  context_size: 32_768,
+};
+const HERO_FILE = "packages/runtime/src/provider.ts";
+const HERO_MESSAGES: Message[] = [
+  {
+    role: "user",
+    content: "Raise the provider timeout to 15 seconds and run its tests.",
+  },
+  {
+    role: "assistant",
+    content:
+      "I'll read the provider, raise the timeout, then run the focused tests.",
+  },
+  {
+    role: "assistant",
+    content: "",
+    tool_calls: [
+      {
+        id: "call-1",
+        function: { name: "read", arguments: { path: HERO_FILE } },
+      },
+    ],
+  },
+  {
+    role: "tool",
+    tool_name: "read",
+    tool_call_id: "call-1",
+    content: JSON.stringify({
+      status: "succeeded",
+      output:
+        "1: import { fetchJSON } from './http';\n2: export const timeoutMs = 5_000;",
+    }),
+  },
+  {
+    role: "assistant",
+    content: "",
+    tool_calls: [
+      {
+        id: "call-2",
+        function: {
+          name: "edit",
+          arguments: {
+            path: HERO_FILE,
+            old_string: "export const timeoutMs = 5_000;",
+            new_string: "export const timeoutMs = 15_000;",
+          },
+        },
+      },
+    ],
+  },
+  {
+    role: "tool",
+    tool_name: "edit",
+    tool_call_id: "call-2",
+    content: JSON.stringify({
+      status: "succeeded",
+      output: `Updated ${HERO_FILE}. Verification has not been run.`,
+    }),
+  },
+];
+const HERO_COMMAND: ApprovalRequest = {
+  kind: "command",
+  argv: ["bun", "test", "packages/runtime/src/provider.test.ts"],
+  cwd: "/home/me/project",
+  timeoutMs: 120_000,
+};
+
+function heroBase(messages: Message[]): { store: Store; builder: ViewBuilder } {
+  const builder = new ViewBuilder(() => tableWidth(80, false));
+  const transcript = new Transcript();
+  for (const message of messages) {
+    const view = builder.fromMessage(message);
+    if (view) transcript.push(view);
+  }
+  const store = initialStore({
+    provider: HERO_PROVIDER,
+    intent: "build",
+    mcpServers: 0,
+    workspace: "project",
+    transcript: transcript.snapshot(),
+  });
+  store.header.ctx_label = contextLabel(2_100, HERO_PROVIDER.context_size);
+  store.header.ctx_pct = contextPct(2_100, HERO_PROVIDER.context_size);
+  store.status = idleStatus(0, "build", {}, undefined);
+  // Each card's duration, in the order the calls ran.
+  const took = ["0.2s", "0.4s"];
+  let card = 0;
+  store.messages = store.messages.map((m) =>
+    m.is_tool ? { ...m, card: { ...m.card, took: took[card++] ?? "" } } : m,
+  );
+  store.placeholder = PLACEHOLDER_BUSY;
+  return { store, builder };
+}
+
+/** The hero's first frame: the model reads the request before it acts. */
+export function heroThinkingSample(): Store {
+  const { store } = heroBase(HERO_MESSAGES.slice(0, 1));
+  store.thinking = thinkingView(
+    [
+      `The timeout lives in ${HERO_FILE}.`,
+      "Read it, raise it to 15 seconds, then run the provider tests.",
+    ].join("\n"),
+  );
+  store.head = headState("thinking", 4);
+  return store;
+}
+
+/** The hero's second frame: the Read and the Edit ran, the reply goes on. */
+export function heroCardsSample(): Store {
+  const { store } = heroBase(HERO_MESSAGES);
+  store.live = streamingView("Now the focused tests.");
+  store.head = headState("streaming", 9);
+  return store;
+}
+
+/** The hero's last frame: the test command waits for your decision. */
+export function heroApprovalSample(): Store {
+  const { store, builder } = heroBase(HERO_MESSAGES);
+  builder.fromMessage({
+    role: "assistant",
+    content: "",
+    tool_calls: [
+      {
+        id: "call-3",
+        function: {
+          name: "run_command",
+          arguments: {
+            argv: HERO_COMMAND.kind === "command" ? HERO_COMMAND.argv : [],
+          },
+        },
+      },
+    ],
+  });
+  store.live = liveToolView(builder.takeCall(), "run_command", "approval");
+  store.approval = approvalState(HERO_COMMAND, 80, "/home/me/project");
+  store.head = headState("approval", 11);
+  store.status = armedStatus(store.approval);
+  return store;
+}
+
 export const SAMPLES = {
   sample: idleSample,
   "sample-empty": emptySample,
@@ -809,6 +964,7 @@ export const SAMPLES = {
   "sample-links": linksSample,
   "sample-image": imageSample,
   "sample-approval": approvalSample,
+  "sample-approval-unarmed": unarmedApprovalSample,
   "sample-approval-long": longApprovalSample,
   "sample-approval-mcp": mcpApprovalSample,
   "sample-approval-truncated": truncatedApprovalSample,
@@ -831,6 +987,9 @@ export const SAMPLES = {
   "sample-remote": remoteSample,
   "sample-draft": draftSample,
   "sample-draft-long": longDraftSample,
+  "hero-thinking": heroThinkingSample,
+  "hero-cards": heroCardsSample,
+  "hero-approval": heroApprovalSample,
 } as const;
 
 // ----------------------------------------------------------------- inline stores

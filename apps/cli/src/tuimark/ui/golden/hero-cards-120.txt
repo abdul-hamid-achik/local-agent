@@ -1,0 +1,31 @@
+=== grid 120x30 ===
+ Local Agent             build  Ollama / loopback  qwen3.5:4b-q4_K_M              temporary  ctx 2.1k/32k  ▊░░░░░░░░░░░ 
+┌──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│ Raise the provider timeout to 15 seconds and run its tests.                                                          │
+│                                                                                                                      ┃
+│ Assistant                                                                                                            ┃
+│ I'll read the provider, raise the timeout, then run the focused tests.                                               ┃
+│                                                                                                                      ┃
+│ ╭─ Read ───────────────────────────────────────────────────────────────────────────────────────────────────────────╮ ┃
+│ │ ✓ succeeded · 0.2s                                                                                               │ ┃
+│ │ packages/runtime/src/provider.ts                                                                                 │ ┃
+│ │ 1: import { fetchJSON } from './http';                                                                           │ ┃
+│ │ 2: export const timeoutMs = 5_000;                                                                               │ ┃
+│ ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯ ┃
+│                                                                                                                      ┃
+│ ╭─ Edit ───────────────────────────────────────────────────────────────────────────────────────────────────────────╮ ┃
+│ │ ✓ succeeded · 0.4s                                                                                               │ ┃
+│ │ packages/runtime/src/provider.ts                                                                                 │ ┃
+│ │ Updated packages/runtime/src/provider.ts. Verification has not been run.                                         │ ┃
+│ │ - export const timeoutMs = 5_000;                                                                                │ ┃
+│ │ + export const timeoutMs = 15_000;                                                                               │ ┃
+│ ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯ ┃
+│                                                                                                                      ┃
+│ Assistant ⠋  9s                                                                                                      ┃
+│ Now the focused tests.                                                                                               ┃
+│                                                                                                                      ┃
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+╔══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╗
+║ Type to queue a message                                                                                              ║
+╚══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╝
+ build   ^P commands  esc cancel  ^Y copy  ↑/↓ history  ^O earlier  pgup/pgdn scroll  ^L latest  shift+tab mode         

@@ -1,0 +1,31 @@
+=== grid 120x30 ===
+ Local Agent           build  Ollama / loopback  qwen3-coder:30b            session a1b2c3d  ctx 9.6k/32k  ███▋░░░░░░░░ 
+┌──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│      catch (e) { if (attempt === tries) throw e; }                                                                   │
+│    }                                                                                                                 │
+│  }                  ╭─ Edit src/fetch.ts? ─────────────────────────────────────────────────────╮                     │
+│                     │                                                                          │                     │
+│ ╭─ Edit ────────────│  Apply this change to the workspace.                                     │───────────────────╮ │
+│ │ ✓ succeeded       │  ┌────────────────────────────────────────────────────────────────────┐  │                   │ │
+│ │ src/fetch.ts      │  │--- a/src/fetch.ts                                                  ┃  │                   │ │
+│ │ Updated src/fetch.│  │+++ b/src/fetch.ts                                                  ┃  │                   │ ┃
+│ │   import { sleep }│  │@@ -12,3 +12,9 @@                                                   ┃  │                   │ ┃
+│ │ - export const get│  │ import { sleep } from './util';                                    ┃  │                   │ ┃
+│ │ + export const get│  │-export const get = (url) => fetch(url);                            ┃  │                   │ ┃
+│ ╰───────────────────│  │+export async function fetchRetry(url, tries = 3) {                 ┃  │───────────────────╯ ┃
+│                     │  │+  for (let attempt = 1; ; attempt++) {                             ┃  │                     ┃
+│ Assistant           │  │+    try { return await fetch(url); }                               ┃  │                     ┃
+│ Done. The helper now│  │+    catch (e) { if (attempt === tries) throw e; await sleep(200 * a┃  │                     ┃
+│                     │  │↪ ttempt); }                                                        ┃  │                     ┃
+│ Assistant ⠿  waiting│  │+  }                                                                ┃  │                     ┃
+│                     │  │+}                                                                  │  │                     ┃
+│ ╭─ Edit ────────────│  └────────────────────────────────────────────────────────────────────┘  │───────────────────╮ ┃
+│ │ ⠋  waiting for app│  a allow file changes this session                                       │                   │ ┃
+│ │ src/fetch.ts      │                                                                          │                   │ ┃
+│ ╰───────────────────│                                                     [ Deny ]  [ Allow ]  │───────────────────╯ ┃
+│                     │                                                                          │                     ┃
+└─────────────────────╰──────────────────────────────────────────────────────────────────────────╯─────────────────────┘
+╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ Type to queue a message                                                                                              │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+ Waiting for approval · n deny · Esc deny   a session  ! always  pgup/pgdn scroll  home/end top/end                     

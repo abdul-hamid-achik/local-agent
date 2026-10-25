@@ -1,0 +1,718 @@
+{
+  "header": {
+    "provider": "Ollama / loopback",
+    "locality": "LOCAL",
+    "remote": false,
+    "model": "qwen3-coder:30b",
+    "mode": "build",
+    "session": "session a1b2c3d",
+    "workspace": "project",
+    "ctx_label": "9.6k/32k",
+    "ctx_pct": 30,
+    "ctx_warn": false,
+    "ctx_danger": false,
+    "grants": "",
+    "grants_on": false,
+    "sandbox_on": false,
+    "goal": "",
+    "goal_on": false
+  },
+  "empty": false,
+  "mouse_on": true,
+  "select_tip": "shift-drag selects text",
+  "messages": [
+    {
+      "id": "m0",
+      "is_user": true,
+      "is_asst": false,
+      "is_tool": false,
+      "is_notice": false,
+      "is_error": false,
+      "blocks": [
+        {
+          "id": "b0",
+          "para": true,
+          "head": false,
+          "quote": false,
+          "item": false,
+          "code": false,
+          "table": false,
+          "nest": false,
+          "marker": "",
+          "lang": "",
+          "runs": [
+            "Add a retry to the fetch helper and show me the result."
+          ]
+        }
+      ],
+      "card": {
+        "name": "",
+        "title": "",
+        "status": "",
+        "mark": "",
+        "took": "",
+        "args": "",
+        "args_path": false,
+        "args_line": false,
+        "ok": false,
+        "bad": false,
+        "warn": false,
+        "running": false,
+        "out": []
+      },
+      "links": [],
+      "images": [],
+      "images_more": 0
+    },
+    {
+      "id": "m1",
+      "is_user": false,
+      "is_asst": true,
+      "is_tool": false,
+      "is_notice": false,
+      "is_error": false,
+      "blocks": [
+        {
+          "id": "b0",
+          "para": true,
+          "head": false,
+          "quote": false,
+          "item": false,
+          "code": false,
+          "table": false,
+          "nest": false,
+          "marker": "",
+          "lang": "",
+          "runs": [
+            "Sure. I will wrap the call in a bounded retry with backoff:"
+          ]
+        },
+        {
+          "id": "b1",
+          "para": false,
+          "head": false,
+          "quote": false,
+          "item": false,
+          "code": true,
+          "table": false,
+          "nest": false,
+          "marker": "",
+          "lang": "ts",
+          "runs": [
+            {
+              "text": "export",
+              "class": "kw"
+            },
+            " ",
+            {
+              "text": "async",
+              "class": "kw"
+            },
+            " ",
+            {
+              "text": "function",
+              "class": "kw"
+            },
+            " fetchRetry(url, tries = ",
+            {
+              "text": "3",
+              "class": "num"
+            },
+            ") {\n  ",
+            {
+              "text": "// exponential backoff",
+              "class": "com"
+            },
+            "\n  ",
+            {
+              "text": "for",
+              "class": "kw"
+            },
+            " (",
+            {
+              "text": "let",
+              "class": "kw"
+            },
+            " attempt = ",
+            {
+              "text": "1",
+              "class": "num"
+            },
+            "; ; attempt++) {\n    ",
+            {
+              "text": "try",
+              "class": "kw"
+            },
+            " { ",
+            {
+              "text": "return",
+              "class": "kw"
+            },
+            " ",
+            {
+              "text": "await",
+              "class": "kw"
+            },
+            " fetch(url); }\n    ",
+            {
+              "text": "catch",
+              "class": "kw"
+            },
+            " (e) { ",
+            {
+              "text": "if",
+              "class": "kw"
+            },
+            " (attempt === tries) ",
+            {
+              "text": "throw",
+              "class": "kw"
+            },
+            " e; }\n  }\n}"
+          ]
+        }
+      ],
+      "card": {
+        "name": "",
+        "title": "",
+        "status": "",
+        "mark": "",
+        "took": "",
+        "args": "",
+        "args_path": false,
+        "args_line": false,
+        "ok": false,
+        "bad": false,
+        "warn": false,
+        "running": false,
+        "out": []
+      },
+      "links": [],
+      "images": [],
+      "images_more": 0
+    },
+    {
+      "id": "m2",
+      "is_user": false,
+      "is_asst": false,
+      "is_tool": true,
+      "is_notice": false,
+      "is_error": false,
+      "blocks": [],
+      "card": {
+        "name": "edit",
+        "title": "Edit",
+        "status": "succeeded",
+        "mark": "✓",
+        "took": "",
+        "args": "src/fetch.ts",
+        "args_path": true,
+        "args_line": false,
+        "ok": true,
+        "bad": false,
+        "warn": false,
+        "running": false,
+        "out": [
+          "Updated src/fetch.ts. Verification has not been run.\n  import { sleep } from './util';\n",
+          {
+            "text": "- export const get = (url) => fetch(url);",
+            "class": "del"
+          },
+          "\n",
+          {
+            "text": "+ export const get = (url) => fetchRetry(url);",
+            "class": "add"
+          }
+        ]
+      },
+      "links": [],
+      "images": [],
+      "images_more": 0
+    },
+    {
+      "id": "m3",
+      "is_user": false,
+      "is_asst": true,
+      "is_tool": false,
+      "is_notice": false,
+      "is_error": false,
+      "blocks": [
+        {
+          "id": "b0",
+          "para": true,
+          "head": false,
+          "quote": false,
+          "item": false,
+          "code": false,
+          "table": false,
+          "nest": false,
+          "marker": "",
+          "lang": "",
+          "runs": [
+            "Done. The helper now retries three times."
+          ]
+        }
+      ],
+      "card": {
+        "name": "",
+        "title": "",
+        "status": "",
+        "mark": "",
+        "took": "",
+        "args": "",
+        "args_path": false,
+        "args_line": false,
+        "ok": false,
+        "bad": false,
+        "warn": false,
+        "running": false,
+        "out": []
+      },
+      "links": [],
+      "images": [],
+      "images_more": 0
+    }
+  ],
+  "earlier": {
+    "n": 0
+  },
+  "live": {
+    "id": "live",
+    "is_user": false,
+    "is_asst": false,
+    "is_tool": true,
+    "is_notice": false,
+    "is_error": false,
+    "blocks": [],
+    "card": {
+      "name": "edit",
+      "title": "Edit",
+      "status": "waiting for approval",
+      "mark": "",
+      "took": "",
+      "args": "src/fetch.ts",
+      "args_path": true,
+      "args_line": false,
+      "ok": false,
+      "bad": false,
+      "warn": false,
+      "running": true,
+      "out": []
+    },
+    "links": [],
+    "images": [],
+    "images_more": 0,
+    "active": true,
+    "tail": []
+  },
+  "thinking": {
+    "on": false,
+    "runs": []
+  },
+  "head": {
+    "on": true,
+    "spin": false,
+    "still": true,
+    "glyph": "⠿",
+    "text": "waiting for your approval · 12s"
+  },
+  "approval": {
+    "open": true,
+    "title": "Edit src/fetch.ts?",
+    "body": "Apply this change to the workspace.",
+    "danger": false,
+    "no": "Deny",
+    "yes": "Allow",
+    "truncated": false,
+    "grant_hint": "a allow file changes this session",
+    "session_ok": true,
+    "always_ok": true,
+    "lines": [
+      {
+        "n": 0,
+        "t": "--- a/src/fetch.ts",
+        "add": false,
+        "del": false,
+        "note": false
+      },
+      {
+        "n": 1,
+        "t": "+++ b/src/fetch.ts",
+        "add": false,
+        "del": false,
+        "note": false
+      },
+      {
+        "n": 2,
+        "t": "@@ -12,3 +12,9 @@",
+        "add": false,
+        "del": false,
+        "note": false
+      },
+      {
+        "n": 3,
+        "t": " import { sleep } from './util';",
+        "add": false,
+        "del": false,
+        "note": false
+      },
+      {
+        "n": 4,
+        "t": "-export const get = (url) => fetch(url);",
+        "add": false,
+        "del": true,
+        "note": false
+      },
+      {
+        "n": 5,
+        "t": "+export async function fetchRetry(url, tries = 3) {",
+        "add": true,
+        "del": false,
+        "note": false
+      },
+      {
+        "n": 6,
+        "t": "+  for (let attempt = 1; ; attempt++) {",
+        "add": true,
+        "del": false,
+        "note": false
+      },
+      {
+        "n": 7,
+        "t": "+    try { return await fetch(url); }",
+        "add": true,
+        "del": false,
+        "note": false
+      },
+      {
+        "n": 8,
+        "t": "+    catch (e) { if (attempt === tries) throw e; await sleep(200 * a",
+        "add": true,
+        "del": false,
+        "note": false
+      },
+      {
+        "n": 9,
+        "t": "↪ ttempt); }",
+        "add": true,
+        "del": false,
+        "note": false
+      },
+      {
+        "n": 10,
+        "t": "+  }",
+        "add": true,
+        "del": false,
+        "note": false
+      },
+      {
+        "n": 11,
+        "t": "+}",
+        "add": true,
+        "del": false,
+        "note": false
+      },
+      {
+        "n": 12,
+        "t": "+export const get = (url) => fetchRetry(url);",
+        "add": true,
+        "del": false,
+        "note": false
+      }
+    ]
+  },
+  "question": {
+    "open": false,
+    "title": "",
+    "text": "",
+    "rows": [],
+    "choosing": false,
+    "hint": ""
+  },
+  "details": {
+    "open": false,
+    "title": "",
+    "args": "",
+    "lines": []
+  },
+  "panel": {
+    "open": false,
+    "title": "",
+    "args": "",
+    "lines": [],
+    "rows": [],
+    "picking": false
+  },
+  "palette": {
+    "open": false,
+    "query": "",
+    "cur": "mode-plan"
+  },
+  "found": {
+    "any": true,
+    "items": [
+      {
+        "id": "mode-plan",
+        "label": "Mode: plan (read only)",
+        "hint": "/mode plan"
+      },
+      {
+        "id": "mode-build",
+        "label": "Mode: build (read, edit, command)",
+        "hint": "/mode build"
+      },
+      {
+        "id": "mode-chat",
+        "label": "Mode: chat (conversational)",
+        "hint": "/mode chat"
+      },
+      {
+        "id": "theme-dark",
+        "label": "Theme: dark",
+        "hint": "/theme dark"
+      },
+      {
+        "id": "theme-light",
+        "label": "Theme: light",
+        "hint": "/theme light"
+      },
+      {
+        "id": "theme-auto",
+        "label": "Theme: auto",
+        "hint": "/theme auto"
+      },
+      {
+        "id": "mouse-on",
+        "label": "Mouse: on",
+        "hint": "/mouse on"
+      },
+      {
+        "id": "mouse-off",
+        "label": "Mouse: off",
+        "hint": "/mouse off"
+      },
+      {
+        "id": "copy",
+        "label": "Copy: the last reply",
+        "hint": "/copy"
+      },
+      {
+        "id": "copy-code",
+        "label": "Copy: its last code block",
+        "hint": "/copy code"
+      },
+      {
+        "id": "permissions",
+        "label": "Permissions: show",
+        "hint": "/permissions"
+      },
+      {
+        "id": "permissions-clear",
+        "label": "Permissions: clear all",
+        "hint": "/permissions clear"
+      },
+      {
+        "id": "permissions-trust",
+        "label": "Permissions: trust file rules",
+        "hint": "/permissions trust"
+      },
+      {
+        "id": "details",
+        "label": "Details: last tool output",
+        "hint": "/details"
+      },
+      {
+        "id": "status",
+        "label": "Status: effective config",
+        "hint": "/status"
+      },
+      {
+        "id": "provider",
+        "label": "Provider: check the endpoint",
+        "hint": "/provider"
+      },
+      {
+        "id": "model",
+        "label": "Model: show current",
+        "hint": "/model"
+      },
+      {
+        "id": "find",
+        "label": "Find in saved sessions",
+        "hint": "/find"
+      },
+      {
+        "id": "sessions",
+        "label": "Sessions: switch session",
+        "hint": "/sessions"
+      },
+      {
+        "id": "sessions-new",
+        "label": "Sessions: start a new one",
+        "hint": "/sessions new"
+      },
+      {
+        "id": "export",
+        "label": "Export transcript to markdown",
+        "hint": "/export"
+      },
+      {
+        "id": "export-json",
+        "label": "Export transcript to JSON",
+        "hint": "/export json"
+      },
+      {
+        "id": "mcp",
+        "label": "MCP servers",
+        "hint": "/mcp"
+      },
+      {
+        "id": "goal",
+        "label": "Goal: show the running goal",
+        "hint": "/goal"
+      },
+      {
+        "id": "goal-stop",
+        "label": "Goal: stop it",
+        "hint": "/goal stop"
+      },
+      {
+        "id": "help",
+        "label": "Help, commands and keys",
+        "hint": "/help"
+      },
+      {
+        "id": "load-earlier",
+        "label": "Load earlier messages",
+        "hint": "ctrl+o"
+      },
+      {
+        "id": "quit",
+        "label": "Quit",
+        "hint": "ctrl+c"
+      }
+    ]
+  },
+  "slash": {
+    "open": false,
+    "rows": []
+  },
+  "help": {
+    "open": false,
+    "cmds": [
+      {
+        "id": "/mode",
+        "cmd": "/mode plan|build|chat",
+        "desc": "plan reads only · build can edit · chat converses"
+      },
+      {
+        "id": "/model",
+        "cmd": "/model [NAME]",
+        "desc": "show or switch the Ollama model"
+      },
+      {
+        "id": "/theme",
+        "cmd": "/theme dark|light|auto",
+        "desc": "set the session theme"
+      },
+      {
+        "id": "/mouse",
+        "cmd": "/mouse on|off",
+        "desc": "toggle mouse reporting (fullscreen)"
+      },
+      {
+        "id": "/copy",
+        "cmd": "/copy [code]",
+        "desc": "copy the last reply, or its last code block (ctrl+y)"
+      },
+      {
+        "id": "/permissions",
+        "cmd": "/permissions [clear|trust]",
+        "desc": "show, clear or trust grants and rules"
+      },
+      {
+        "id": "/sandbox",
+        "cmd": "/sandbox on|off",
+        "desc": "run commands confined (macOS), without a card"
+      },
+      {
+        "id": "/details",
+        "cmd": "/details [N]",
+        "desc": "show tool output N, or the last"
+      },
+      {
+        "id": "/status",
+        "cmd": "/status",
+        "desc": "show the effective config (model, workspace, session)"
+      },
+      {
+        "id": "/provider",
+        "cmd": "/provider",
+        "desc": "ask the model's endpoint: answer time, what is loaded"
+      },
+      {
+        "id": "/sessions",
+        "cmd": "/sessions [new]",
+        "desc": "switch to a saved session, or start a new one"
+      },
+      {
+        "id": "/recover",
+        "cmd": "/recover [N outcome]",
+        "desc": "review calls whose outcome is unknown"
+      },
+      {
+        "id": "/find",
+        "cmd": "/find TEXT",
+        "desc": "search saved session messages (needs --session-db)"
+      },
+      {
+        "id": "/export",
+        "cmd": "/export [json]",
+        "desc": "write the conversation to a markdown or JSON file"
+      },
+      {
+        "id": "/mcp",
+        "cmd": "/mcp",
+        "desc": "show connected MCP servers and their tools"
+      },
+      {
+        "id": "/goal",
+        "cmd": "/goal [OBJECTIVE|stop]",
+        "desc": "run turns toward an objective until done or a limit"
+      }
+    ],
+    "select_key": "shift-drag",
+    "select_desc": "select text (mouse reporting is on)"
+  },
+  "draft": "",
+  "placeholder": "Type to queue a message",
+  "status": "Waiting for approval · n deny · Esc deny",
+  "commit_buf": {
+    "id": "commit",
+    "is_user": false,
+    "is_asst": false,
+    "is_tool": false,
+    "is_notice": false,
+    "is_error": false,
+    "blocks": [],
+    "card": {
+      "name": "",
+      "title": "",
+      "status": "",
+      "mark": "",
+      "took": "",
+      "args": "",
+      "args_path": false,
+      "args_line": false,
+      "ok": false,
+      "bad": false,
+      "warn": false,
+      "running": false,
+      "out": []
+    },
+    "links": [],
+    "images": [],
+    "images_more": 0
+  },
+  "commit_blocks": []
+}

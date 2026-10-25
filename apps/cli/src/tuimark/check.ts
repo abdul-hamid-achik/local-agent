@@ -430,6 +430,16 @@ const extraDumps: {
     golden: "sample-approval-60-r24.txt",
     contains: ["Deny", "Allow", "--- a/src/fetch.ts"],
   },
+  // Before it arms, the narrow status says only that n and Esc deny: the
+  // hints, which would name a and ! there, give the row to the status.
+  {
+    doc: "app.tui",
+    sample: "sample-approval-unarmed",
+    cols: 60,
+    rows: 24,
+    golden: "sample-approval-unarmed-60-r24.txt",
+    contains: ["Waiting for approval · n deny · Esc deny"],
+  },
   {
     doc: "app.tui",
     sample: "sample",

@@ -331,7 +331,7 @@
            on:change carries every edit, which is what opens the popup above. -->
       <textarea id="composer" bind="draft" placeholder="{placeholder}" on:change="typed" on:submit="send"/>
 
-      <row id="status" class="k-statusbar">
+      <row id="status" class="k-statusbar" class:approval-open="approval.open">
         <!-- Ambient facts, the same at rest and while a turn runs (what the
              turn is doing is the live message's head), or a transient message. -->
         <text class="la-statustext" wrap="truncate">{status}</text>
