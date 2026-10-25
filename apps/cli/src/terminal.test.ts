@@ -14,7 +14,7 @@ import {
   terminalOptions,
 } from "@local-agent/vue-tui";
 import { createTestRenderer } from "@local-agent/vue-tui/testing";
-import { afterEach, expect, test } from "vitest";
+import { afterEach, expect, test, vi } from "vitest";
 import { createRenderer } from "vue";
 import { createTerminalRoot } from "#cli/terminal";
 
@@ -375,6 +375,8 @@ test.each([
   ["/help", "/mode plan|build|chat"],
   ["/mcp", "MCP servers: 0"],
   ["/mode banana", "Unknown mode: banana"],
+  // What was typed comes back in the status line without its sequences.
+  ["/mode a\u001b]0;pwned\u0007b", "Unknown mode: ab"],
   [
     "/theme dark",
     "/theme, /mouse and /copy are available in the Tuimark client",
@@ -483,6 +485,108 @@ test("a send past what a message holds stays in the composer", async () => {
   );
   expect(requests).toBe(0);
 });
+
+test.each(["fullscreen", "inline"] as const)(
+  "a tool name the model chose reaches the %s screen without its escape sequences",
+  async (mode) => {
+    // An OSC title sequence and a bell inside the name of a tool that does
+    // not exist: the run reports it as an error under that name.
+    const name = "probe\u001b]0;pwned\u0007\u001b[2Jtool";
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      async fetch(request) {
+        const path = new URL(request.url).pathname;
+        if (path === "/api/tags")
+          return Response.json({ models: [{ name: "fixture", size: 1000 }] });
+        if (path === "/api/show")
+          return Response.json({
+            capabilities: ["completion", "tools"],
+            model_info: { "fixture.context_length": 16384 },
+          });
+        const body = (await request.json()) as {
+          messages?: Array<{ role?: string }>;
+        };
+        const message = body.messages?.some((entry) => entry.role === "tool")
+          ? { role: "assistant", content: "finished" }
+          : {
+              role: "assistant",
+              content: "",
+              tool_calls: [{ function: { name, arguments: {} } }],
+            };
+        return new Response(
+          `${JSON.stringify({ message, done: false })}\n${JSON.stringify({ message: { role: "assistant", content: "" }, done: true })}\n`,
+          { headers: { "content-type": "application/x-ndjson" } },
+        );
+      },
+    });
+    const root = await mkdtemp(join(tmpdir(), "local-agent-terminal-name-"));
+    const workspace = await Workspace.create(root);
+    const terminal = await createTestRenderer({
+      ...terminalOptions(mode),
+      width: 100,
+      height: 30,
+      kittyKeyboard: true,
+    });
+    const signal = new AbortController();
+    const app = createRenderer(createNodeOps(terminal.renderer)).createApp(
+      createTerminalRoot(
+        {
+          type: "ollama",
+          base_url: server.url.origin,
+          model: "fixture",
+          context_size: 16384,
+        },
+        mode,
+        signal.signal,
+        workspace,
+        "build",
+      ),
+    );
+    app.provide(rendererInjectionKey, terminal.renderer);
+    app.provide(exitInjectionKey, () => terminal.renderer.destroy());
+    app.mount(terminal.renderer.root);
+    cleanups.push(async () => {
+      signal.abort();
+      app.unmount();
+      terminal.renderer.destroy();
+      workspace.close();
+      server.stop(true);
+      await rm(root, { recursive: true, force: true });
+    });
+
+    // Inline writes the run to scrollback; fullscreen draws it.
+    let written = "";
+    const stdout = vi
+      .spyOn(process.stdout, "write")
+      .mockImplementation((chunk: string | Uint8Array) => {
+        written += String(chunk);
+        return true;
+      });
+    cleanups.push(async () => stdout.mockRestore());
+
+    await terminal.flush();
+    await terminal.mockInput.typeText("go");
+    terminal.mockInput.pressEnter();
+    // Two model turns go over loopback first: the wait is in real time,
+    // which render passes are not.
+    let shown = "";
+    for (let i = 0; i < 1500 && !shown.includes("finished"); i++) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      await terminal.flush();
+      shown = written + terminal.captureCharFrame();
+    }
+    expect(shown).toContain("finished");
+    expect(shown).toContain(
+      mode === "inline" ? "probetool: failed" : "Tool · probetool",
+    );
+    expect(shown).not.toContain("pwned");
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: the screen must hold none
+    expect(shown).not.toMatch(/[\u0000-\u0008\u000b-\u001f\u007f]/u);
+  },
+  // Past the 15 s the loop above may wait, so its own message is what fails.
+  20_000,
+);
 
 test("mode switch changes the Ollama tool catalog", async () => {
   const root = await mkdtemp(join(tmpdir(), "local-agent-terminal-tools-"));

@@ -213,9 +213,10 @@ export function createTerminalRoot(
               live.value = "";
             }
             if (event.type === "tool_result") {
-              status.value = `${event.name}: ${event.status}`;
+              // The name is the model's: a tool it made up reaches here too.
+              status.value = terminalText(`${event.name}: ${event.status}`);
               if (mode === "inline")
-                process.stdout.write(`\n${terminalText(status.value)}\n`);
+                process.stdout.write(`\n${status.value}\n`);
             }
             if (event.type === "text") {
               live.value += event.text;
@@ -287,7 +288,7 @@ export function createTerminalRoot(
                               message.role === "user"
                                 ? "You"
                                 : message.role === "tool"
-                                  ? `Tool · ${message.tool_name ?? "result"}`
+                                  ? `Tool · ${terminalText(message.tool_name ?? "result")}`
                                   : "Assistant",
                             ),
                             message.role === "assistant"
