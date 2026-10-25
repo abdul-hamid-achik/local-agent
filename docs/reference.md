@@ -126,7 +126,7 @@ instead. See [Safety](/safety#headless-approval).
 | `/sessions new` | Start over: a new saved session with `--session-db`, otherwise a new temporary conversation |
 | `/new`, `/clear` | Tuimark client: the same as `/sessions new` |
 | `/diff` | Tuimark client: list the files this session's edits and writes changed, with their diffs and `+N −M` counts. Changes made by commands are not listed |
-| `/compact` | Tuimark client: shorten the conversation now, as the automatic compaction does past 6 MiB; refused while a turn runs |
+| `/compact` | Tuimark client: shorten the conversation now, the way the automatic compaction does past 6 MiB, as far as it can go; refused while a turn runs |
 | `/recover` | Tuimark client, needs `--session-db`: list the session's calls whose outcome is unknown, numbered |
 | `/recover N applied\|not-applied\|undone [note]` | Tuimark client: record what you found in the workspace for the Nth call. Nothing runs again. Earlier calls are answered first. While one remains, a prompt waits and the status names `/recover` |
 | `/model [NAME]` | Show the current model, or switch to another installed Ollama model mid-session |

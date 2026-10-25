@@ -30,7 +30,7 @@ paths away from the file tools ([Ignored paths](#ignored-paths)), and its root
 | `LOCAL_AGENT_LOCAL_ONLY` | Local-endpoint enforcement; must be `false` for `chalupa`, and for an `openai_local` server that is not on loopback |
 | `LOCAL_AGENT_PROVIDER_CONFIG` | The `chalupa` or `openai_local` profile JSON |
 | `TUIMARK_BINARY` | Path to the tuimark binary; otherwise a pinned release (0.5.1) is downloaded checksum-verified |
-| `TUIMARK_MOTION` | `reduce` or `0`: the Tuimark client draws a still glyph where its spinners would turn; elapsed seconds keep counting |
+| `TUIMARK_MOTION` | `reduce` or `0`: the Tuimark client draws a still glyph where its spinners would turn; the turn's elapsed time keeps counting |
 | `LOCAL_AGENT_DIAGNOSTICS` | `1` appends a Biome check of each approved edit, using the workspace's own `@biomejs/biome` install and its root `biome.json` (default off) |
 | `LOCAL_AGENT_DIAGNOSTICS_TSC` | `1` also appends a `tsc --noEmit` section after `.ts` edits, using the workspace's own `typescript` and its root `tsconfig.json` (slow: full project) |
 | `LOCAL_AGENT_FETCH_PRIVATE` | `1` lets the `fetch` tool reach loopback and private-network hosts; by default it reaches public hosts only |
