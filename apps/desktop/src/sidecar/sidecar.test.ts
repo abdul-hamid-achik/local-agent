@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import {
   mkdir,
   mkdtemp,
@@ -492,6 +493,136 @@ test("workspace.list lists a broken link instead of failing, and no secrets", as
     side.child.kill();
     await side.child.exited;
     await rm(root, { recursive: true, force: true });
+  }
+});
+
+/**
+ * A repo whose `bun run test` starts a sleeping grandchild and says its pid.
+ * On SIGTERM the command takes 200 ms to clean up, then leaves `cleaned`.
+ */
+async function sleeperRepo() {
+  const root = await realpath(await mkdtemp(join(tmpdir(), "la-sidecar-")));
+  await writeFile(
+    join(root, "package.json"),
+    JSON.stringify({ scripts: { test: "bun grand.ts" } }),
+  );
+  await writeFile(
+    join(root, "grand.ts"),
+    [
+      'import { writeFileSync } from "node:fs";',
+      'process.on("SIGTERM", () => setTimeout(() => { writeFileSync("cleaned", ""); process.exit(0); }, 200));',
+      'const child = Bun.spawn(["sleep", "30"]);',
+      'await Bun.write("grandchild.pid", String(child.pid));',
+      "await child.exited;",
+    ].join("\n"),
+  );
+  return root;
+}
+
+async function grandchildPid(root: string): Promise<number> {
+  const file = join(root, "grandchild.pid");
+  for (let tries = 0; tries < 250; tries += 1) {
+    const text = await readFile(file, "utf8").catch(() => "");
+    if (text) return Number(text);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  throw new Error("the grandchild never started");
+}
+
+const alive = (pid: number) => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+async function gone(pid: number): Promise<boolean> {
+  for (let tries = 0; tries < 150 && alive(pid); tries += 1)
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  return !alive(pid);
+}
+
+test("a project cancel stops what the command started too", async () => {
+  const root = await sleeperRepo();
+  const side = sidecarChild({ DESKTOP_REPO_ROOT: root });
+  try {
+    side.send({
+      id: 1,
+      method: "project.run",
+      params: { name: "test", runId: "p1" },
+    });
+    expect(await side.frame((frame) => frame.id === 1)).toMatchObject({
+      ok: true,
+    });
+    const pid = await grandchildPid(root);
+    side.send({ id: 2, method: "project.cancel", params: { runId: "p1" } });
+    expect(await side.frame((frame) => frame.id === 2)).toMatchObject({
+      ok: true,
+      result: { cancelled: true },
+    });
+    await side.frame(
+      (frame) =>
+        frame.stream === "p1" &&
+        (frame.event as { type?: string }).type === "exit",
+    );
+    expect(await gone(pid)).toBe(true);
+  } finally {
+    side.child.kill();
+    await side.child.exited;
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+type SidecarProcess = ReturnType<typeof sidecarChild>["child"];
+
+for (const [how, end] of [
+  ["SIGTERM", (child: SidecarProcess) => child.kill("SIGTERM")],
+  ["closing stdin", (child: SidecarProcess) => void child.stdin.end()],
+] as const)
+  test(`${how} ends the sidecar and the commands it started`, async () => {
+    const root = await sleeperRepo();
+    const side = sidecarChild({ DESKTOP_REPO_ROOT: root });
+    try {
+      side.send({
+        id: 1,
+        method: "project.run",
+        params: { name: "test", runId: "p1" },
+      });
+      await side.frame((frame) => frame.id === 1);
+      const pid = await grandchildPid(root);
+      const started = Date.now();
+      end(side.child);
+      expect(await side.child.exited).toBe(0);
+      expect(await gone(pid)).toBe(true);
+      // The command stopped on SIGTERM, with the time it took to clean up,
+      // and the sidecar did not wait for the grace.
+      expect(existsSync(join(root, "cleaned"))).toBe(true);
+      expect(Date.now() - started).toBeLessThan(1500);
+    } finally {
+      side.child.kill();
+      await side.child.exited;
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+test("a request with an id but no method is answered, not dropped", async () => {
+  const side = sidecarChild({});
+  try {
+    side.send({ id: 5 });
+    side.send({ id: 6, method: "hello" });
+    expect(await side.frame((frame) => frame.id === 5)).toEqual({
+      id: 5,
+      ok: false,
+      error: "Malformed request",
+    });
+    expect(await side.frame((frame) => frame.id === 6)).toMatchObject({
+      ok: true,
+    });
+  } finally {
+    side.child.kill();
+    await side.child.exited;
   }
 });
 

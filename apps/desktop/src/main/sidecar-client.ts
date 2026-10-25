@@ -22,9 +22,49 @@ export type ExitHandler = (code: number | null, message?: string) => void;
 export type SidecarOptions = {
   resolveBun?: () => BunResolution;
   script?: string;
+  /** How long stop() waits after SIGTERM before SIGKILL. */
+  stopGraceMs?: number;
 };
 
 const STDERR_TAIL_CHARS = 2000;
+// Longer than the sidecar's own shutdown (it cancels its runs, waits two
+// seconds for them, then has their command groups killed), so a SIGKILL
+// never cuts that short and leaves the groups behind.
+const STOP_GRACE_MS = 5000;
+// A frame carries at most an 8 MB file, which JSON can double.
+const MAX_LINE_CHARS = 32 * 1024 * 1024;
+const PREVIEW_CHARS = 80;
+
+/** A line for a message: one line, no escape sequences, cut short. */
+function preview(line: string): string {
+  const flat = line
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: remove escape sequences from what the sidecar wrote
+    .replace(/\u001b\[[0-?]*[ -/]*[@-~]/gu, "")
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: and control characters
+    .replace(/[\s\u0000-\u001f\u007f-\u009f]+/gu, " ")
+    .trim();
+  // By code point: a cut never leaves half of a surrogate pair.
+  const chars = Array.from(flat);
+  return chars.length > PREVIEW_CHARS
+    ? `${chars.slice(0, PREVIEW_CHARS).join("")}…`
+    : flat;
+}
+
+/** SIGTERM, then SIGKILL once the grace is over; settles when it is gone. */
+function terminate(child: ChildProcess, graceMs: number): Promise<void> {
+  if (child.exitCode !== null || child.signalCode !== null)
+    return Promise.resolve();
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => child.kill("SIGKILL"), graceMs);
+    const done = () => {
+      clearTimeout(timer);
+      resolve();
+    };
+    child.once("exit", done);
+    child.once("error", done);
+    child.kill("SIGTERM");
+  });
+}
 
 export class SidecarClient {
   private child: ChildProcess | undefined;
@@ -94,7 +134,13 @@ export class SidecarClient {
     // the new child's decoder and stream.
     child.stdout?.on("data", (chunk: Buffer) => {
       if (child !== this.child) return;
-      for (const line of this.lines.push(chunk)) this.handleLine(line);
+      for (const line of this.lines.push(chunk)) {
+        // A line before this one may have ended the child.
+        if (child !== this.child) return;
+        this.handleLine(child, line);
+      }
+      if (child === this.child && this.lines.pending > MAX_LINE_CHARS)
+        this.broken(child, `a line over ${MAX_LINE_CHARS} characters`);
     });
     child.stderr?.on("data", (chunk: Buffer) => {
       if (child !== this.child) return;
@@ -121,12 +167,19 @@ export class SidecarClient {
     });
   }
 
-  stop(): void {
+  /**
+   * Stops the sidecar without reporting an exit. It settles once the child
+   * is gone: SIGTERM lets it cancel its runs and exit, and SIGKILL follows
+   * if it has not after the grace.
+   */
+  stop(): Promise<void> {
     const child = this.child;
     this.child = undefined;
     this.failure = new Error("Sidecar was stopped");
     this.rejectPending(this.failure);
-    child?.kill();
+    return child
+      ? terminate(child, this.options.stopGraceMs ?? STOP_GRACE_MS)
+      : Promise.resolve();
   }
 
   invoke(method: string, params?: unknown): Promise<unknown> {
@@ -166,17 +219,46 @@ export class SidecarClient {
     this.pending.clear();
   }
 
-  private handleLine(raw: string): void {
+  /**
+   * The sidecar's stdout carries frames only (its console goes to stderr),
+   * so any other line means the protocol broke: the answers it was meant to
+   * carry cannot be trusted to come. The sidecar is ended and every waiting
+   * invoke rejects, instead of waiting forever.
+   */
+  private broken(child: ChildProcess, what: string): void {
+    this.fail(
+      child,
+      null,
+      `The sidecar wrote ${what}, not a frame, and was stopped. Restart the sidecar.`,
+    );
+    void terminate(child, this.options.stopGraceMs ?? STOP_GRACE_MS);
+  }
+
+  private handleLine(child: ChildProcess, raw: string): void {
     const line = raw.trim();
     if (!line) return;
     let frame: unknown;
     try {
       frame = JSON.parse(line) as unknown;
     } catch {
+      this.broken(child, `"${preview(line)}"`);
       return;
     }
     if (isRpcResponse(frame)) this.handleResponse(frame);
     else if (isStreamEnvelope(frame)) this.onStream(frame);
+    else if (this.rejectMalformed(frame)) return;
+    else this.broken(child, `"${preview(line)}"`);
+  }
+
+  /** An answer to a waiting invoke in the wrong shape fails that invoke. */
+  private rejectMalformed(frame: unknown): boolean {
+    if (typeof frame !== "object" || frame === null) return false;
+    const id = (frame as Record<string, unknown>).id;
+    const entry = typeof id === "number" ? this.pending.get(id) : undefined;
+    if (!entry || typeof id !== "number") return false;
+    this.pending.delete(id);
+    entry.reject(new Error("The sidecar answered with a malformed frame"));
+    return true;
   }
 
   private handleResponse(frame: RpcResponse): void {
@@ -184,6 +266,13 @@ export class SidecarClient {
     if (!entry) return; // Duplicate/terminal frame from a streaming method.
     this.pending.delete(frame.id);
     if (frame.ok) entry.resolve(frame.result);
-    else entry.reject(new Error(frame.error));
+    else
+      entry.reject(
+        new Error(
+          typeof frame.error === "string" && frame.error
+            ? frame.error
+            : "Sidecar request failed",
+        ),
+      );
   }
 }

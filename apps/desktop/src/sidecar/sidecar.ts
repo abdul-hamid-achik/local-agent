@@ -4,6 +4,7 @@
  *
  * Run from the repository root: `bun apps/desktop/src/sidecar/sidecar.ts`.
  */
+import "#desktop/sidecar/frames-only";
 import { randomUUID } from "node:crypto";
 import { readdir } from "node:fs/promises";
 import { join, relative, resolve } from "node:path";
@@ -48,7 +49,11 @@ const repoRoot = (() => {
 const MAX_LINE_BYTES = 8 * 1024 * 1024;
 const MAX_OUTPUT_BYTES = 512 * 1024;
 
+// Set once the desktop stops reading: a write would only fail again.
+let stdoutClosed = false;
+
 function writeFrame(frame: RpcResponse | StreamEnvelope): void {
+  if (stdoutClosed) return;
   process.stdout.write(`${JSON.stringify(frame)}\n`);
 }
 
@@ -333,10 +338,11 @@ async function handleAgentStart(id: number, params: unknown): Promise<void> {
     emitStream(runId, { type: "run_done" });
   } finally {
     run.pending?.resolve(false);
-    activeRuns.delete(runId);
     await Promise.allSettled(mcp.map((connection) => connection.close()));
     store?.close();
     workspace?.close();
+    // Last, so a shutdown that waits for the runs waits for this cleanup.
+    activeRuns.delete(runId);
   }
 }
 
@@ -355,13 +361,17 @@ function handleAgentDecide(params: unknown): { decided: boolean } {
   return { decided: false };
 }
 
+function cancelRun(run: ActiveRun): void {
+  run.controller.abort();
+  run.pending?.resolve(false);
+  run.pending = undefined;
+}
+
 function handleAgentCancel(params: unknown): { cancelled: boolean } {
   if (!isRecord(params)) throw new Error("Invalid agent.cancel params");
   const run = activeRuns.get(requiredString(params, "runId"));
   if (!run) return { cancelled: false };
-  run.controller.abort();
-  run.pending?.resolve(false);
-  run.pending = undefined;
+  cancelRun(run);
   return { cancelled: true };
 }
 
@@ -533,6 +543,33 @@ async function handleOllamaModels(params: unknown) {
 
 type ProjectRun = { process: ReturnType<typeof Bun.spawn>; killed: boolean };
 const projectRuns = new Map<string, ProjectRun>();
+/** How long a stopped project command's group has before SIGKILL. */
+const PROJECT_KILL_GRACE_MS = 2_000;
+
+/** Signals a process group; false when no such group is left. */
+function signalGroup(pid: number, signal: NodeJS.Signals | 0): boolean {
+  try {
+    process.kill(-pid, signal);
+    return true;
+  } catch (error) {
+    // EPERM still means the group exists.
+    return error instanceof Error && "code" in error && error.code === "EPERM";
+  }
+}
+
+/**
+ * Stops a project command with what it started (`bun run test` runs its
+ * workers in the same group): SIGTERM, then SIGKILL for a group that is
+ * still there after the grace.
+ */
+function stopProjectRun(run: ProjectRun): void {
+  run.killed = true;
+  const pid = run.process.pid;
+  if (!signalGroup(pid, "SIGTERM")) return;
+  setTimeout(() => {
+    if (signalGroup(pid, 0)) signalGroup(pid, "SIGKILL");
+  }, PROJECT_KILL_GRACE_MS).unref();
+}
 
 async function handleProjectRun(id: number, params: unknown): Promise<void> {
   if (!isRecord(params)) throw new Error("Invalid project.run params");
@@ -549,6 +586,8 @@ async function handleProjectRun(id: number, params: unknown): Promise<void> {
     cwd: repoRoot,
     stdout: "pipe",
     stderr: "pipe",
+    // Its own group, so a cancel reaches what it started.
+    detached: true,
   });
   projectRuns.set(runId, { process: child, killed: false });
   writeFrame({ id, ok: true, result: { runId } });
@@ -592,8 +631,7 @@ function handleProjectCancel(params: unknown): { cancelled: boolean } {
   if (!isRecord(params)) throw new Error("Invalid project.cancel params");
   const run = projectRuns.get(requiredString(params, "runId"));
   if (!run) return { cancelled: false };
-  run.killed = true;
-  run.process.kill();
+  stopProjectRun(run);
   return { cancelled: true };
 }
 
@@ -710,6 +748,44 @@ const CONTROLS = new Set<string>([
 /** Requests waiting their turn before the reader stops taking more. */
 const MAX_QUEUED = 64;
 
+/** How long a shutdown waits for cancelled runs to close what they opened. */
+const SHUTDOWN_GRACE_MS = 2_000;
+let shuttingDown = false;
+
+/**
+ * Ends the sidecar: on SIGTERM, SIGINT or SIGHUP (the desktop's stop),
+ * when stdin ends or stdout breaks (the desktop went away). Runs are
+ * cancelled as agent.cancel does, project commands get SIGTERM with their
+ * groups, and the exit comes once the runs have closed their MCP servers
+ * and stores and the commands have ended, or after the grace, when what is
+ * left of those groups gets SIGKILL. At exit the runtime kills any command
+ * group of a run still live.
+ */
+function shutdown(): void {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  for (const run of activeRuns.values()) cancelRun(run);
+  const groups = [...projectRuns.values()];
+  for (const run of groups) stopProjectRun(run);
+  const deadline = Date.now() + SHUTDOWN_GRACE_MS;
+  const poll = setInterval(() => {
+    const running = activeRuns.size > 0 || projectRuns.size > 0;
+    if (running && Date.now() < deadline) return;
+    clearInterval(poll);
+    for (const run of groups)
+      if (signalGroup(run.process.pid, 0))
+        signalGroup(run.process.pid, "SIGKILL");
+    process.exit(0);
+  }, 25);
+}
+
+for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const)
+  process.on(signal, shutdown);
+process.stdout.on("error", () => {
+  stdoutClosed = true;
+  shutdown();
+});
+
 async function main(): Promise<void> {
   const reader = Bun.stdin.stream().getReader();
   const decoder = new TextDecoder();
@@ -736,14 +812,16 @@ async function main(): Promise<void> {
       let request: RpcRequest;
       try {
         request = JSON.parse(line) as RpcRequest;
-        if (
-          typeof request.id !== "number" ||
-          typeof request.method !== "string"
-        )
-          throw new Error("Malformed request");
       } catch {
         continue;
       }
+      if (typeof request?.method !== "string") {
+        // An id gets its answer, so the caller does not wait for one.
+        if (typeof request?.id === "number")
+          fail(request.id, new Error("Malformed request"));
+        continue;
+      }
+      if (typeof request.id !== "number") continue;
       const answer = () =>
         dispatch(request).catch((error: unknown) => fail(request.id, error));
       if (CONTROLS.has(request.method)) {
@@ -765,3 +843,5 @@ async function main(): Promise<void> {
 }
 
 await main();
+// stdin ended: no one is left to read an answer.
+shutdown();

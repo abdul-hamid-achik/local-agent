@@ -67,7 +67,8 @@ function startSidecar(): void {
   // stop() reports no exit, so a run on the replaced sidecar would wait for
   // a run_done that never comes: say it ended.
   const replaced = sidecar?.running ?? false;
-  sidecar?.stop();
+  // The old one cancels its runs and exits on its own time.
+  void sidecar?.stop();
   if (replaced) mainWindow?.webContents.send("desktop/sidecar-restarted");
   sidecar = new SidecarClient(repoRoot(), settings.providerEnv ?? {});
   sidecar.onStream = (envelope) => {
@@ -225,6 +226,14 @@ app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();
 });
 
-app.on("before-quit", () => {
-  sidecar?.stop();
+// Quitting waits for the sidecar to cancel its runs and exit (SIGKILL after
+// the grace), so no run or command it started outlives the app.
+let sidecarStopped = false;
+app.on("before-quit", (event) => {
+  if (sidecarStopped || !sidecar?.running) return;
+  event.preventDefault();
+  void sidecar.stop().finally(() => {
+    sidecarStopped = true;
+    app.quit();
+  });
 });

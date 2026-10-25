@@ -349,8 +349,9 @@ function trackGroup(pid: number): void {
         //
         // The contract: with a host listener installed, this hook leaves the
         // groups alone, so that listener must cancel the command or exit.
-        // Every host here does: main.ts aborts its controller, and
-        // tuimark/launch.ts aborts after host.exited.
+        // Every host here does: main.ts aborts its controller,
+        // tuimark/launch.ts aborts after host.exited, and the desktop
+        // sidecar cancels its runs and exits.
         if (process.listenerCount(signal) > 1) return;
         killLiveCommandGroups();
         process.kill(process.pid, signal);

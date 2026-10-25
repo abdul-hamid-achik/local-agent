@@ -1,5 +1,6 @@
 import {
   chmodSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
@@ -472,7 +473,6 @@ describe("SidecarClient lifecycle", () => {
         '  process.stdout.write(JSON.stringify({ stream: "r1", event: { type: "text", text: "late" } }) + "\\n");',
         "  setTimeout(() => process.exit(0), 50);",
         "});",
-        'process.stdout.write("ready\\n");',
         "setInterval(() => undefined, 1000);",
       ].join("\n"),
     );
@@ -494,6 +494,125 @@ describe("SidecarClient lifecycle", () => {
     client.stop();
     await new Promise((resolve) => setTimeout(resolve, 300));
     expect(streamed).toEqual([]);
+  });
+
+  /** A client on a child script made of `lines`. */
+  function scripted(name: string, lines: string[], stopGraceMs?: number) {
+    const script = join(dir, name);
+    writeFileSync(script, lines.join("\n"));
+    return new SidecarClient(
+      dir,
+      {},
+      {
+        resolveBun: () => ({
+          path: process.execPath,
+          tried: [process.execPath],
+        }),
+        script,
+        stopGraceMs,
+      },
+    );
+  }
+
+  const alive = (pid: number) => {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  async function gone(pid: number) {
+    for (let tries = 0; tries < 100 && alive(pid); tries += 1)
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    return !alive(pid);
+  }
+
+  test("a line that is not a frame stops the sidecar and rejects what waits", async () => {
+    const pidFile = join(dir, "child.pid");
+    const client = scripted("chatty.mjs", [
+      'import { writeFileSync } from "node:fs";',
+      `writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));`,
+      'process.stdin.on("data", () => process.stdout.write("\\u001b[31mloaded 3 plugins\\n"));',
+      "setInterval(() => undefined, 1000);",
+    ]);
+    const exits: (string | undefined)[] = [];
+    client.onExit = (_code, message) => exits.push(message);
+    client.start();
+    await expect(client.invoke("hello")).rejects.toThrow(
+      'The sidecar wrote "loaded 3 plugins", not a frame',
+    );
+    expect(exits).toHaveLength(1);
+    expect(client.running).toBe(false);
+    await expect(client.invoke("again")).rejects.toThrow("not a frame");
+    expect(await gone(Number(readFileSync(pidFile, "utf8")))).toBe(true);
+  });
+
+  test("an answer in the wrong shape fails only its own invoke", async () => {
+    const client = scripted("odd.mjs", [
+      'process.stdin.setEncoding("utf8");',
+      'process.stdin.on("data", (data) => {',
+      '  for (const line of data.split("\\n").filter(Boolean)) {',
+      "    const { id, method } = JSON.parse(line);",
+      "    const frame =",
+      '      method === "odd" ? { id, ok: "yes" }',
+      '      : method === "bare" ? { id, ok: false }',
+      "      : { id, ok: true, result: 7 };",
+      '    process.stdout.write(JSON.stringify(frame) + "\\n");',
+      "  }",
+      "});",
+    ]);
+    let exits = 0;
+    client.onExit = () => {
+      exits += 1;
+    };
+    client.start();
+    try {
+      await expect(client.invoke("odd")).rejects.toThrow("malformed frame");
+      await expect(client.invoke("bare")).rejects.toThrow(
+        "Sidecar request failed",
+      );
+      await expect(client.invoke("fine")).resolves.toBe(7);
+      expect(client.running).toBe(true);
+      expect(exits).toBe(0);
+    } finally {
+      await client.stop();
+    }
+  });
+
+  test("a line too long to be a frame stops the sidecar", async () => {
+    const client = scripted("endless.mjs", [
+      'process.stdin.on("data", () => process.stdout.write("x".repeat(33 * 1024 * 1024)));',
+      "setInterval(() => undefined, 1000);",
+    ]);
+    client.start();
+    await expect(client.invoke("hello")).rejects.toThrow(
+      "a line over 33554432 characters",
+    );
+    expect(client.running).toBe(false);
+  });
+
+  test("stop kills a child that ignores SIGTERM once the grace is over", async () => {
+    const pidFile = join(dir, "stubborn.pid");
+    const client = scripted(
+      "stubborn.mjs",
+      [
+        'import { writeFileSync } from "node:fs";',
+        `writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));`,
+        'process.on("SIGTERM", () => undefined);',
+        "setInterval(() => undefined, 1000);",
+      ],
+      200,
+    );
+    client.start();
+    for (let tries = 0; tries < 100 && !existsSync(pidFile); tries += 1)
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    const pid = Number(readFileSync(pidFile, "utf8"));
+    const started = Date.now();
+    await client.stop();
+    expect(Date.now() - started).toBeGreaterThanOrEqual(150);
+    expect(alive(pid)).toBe(false);
   });
 
   test("decodes multi-byte replies and stream frames from the child", async () => {
