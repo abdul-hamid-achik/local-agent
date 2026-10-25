@@ -253,6 +253,50 @@ function guardedFetch(signal: AbortSignal, timeoutMs: number): typeof fetch {
   );
 }
 
+/**
+ * Ollama's client skips a stream line that is not JSON with a warning on
+ * stderr, under a fullscreen client's screen, and the reply goes on without
+ * it: a tool call or the reply's end could be lost unseen. Such a line
+ * fails the stream instead, naming its start.
+ */
+function checkedNdjson(response: Response): Response {
+  if (!response.ok || !response.body) return response;
+  const decoder = new TextDecoder();
+  let pending = "";
+  const check = (line: string) => {
+    if (!line.trim()) return;
+    try {
+      JSON.parse(line);
+    } catch {
+      const start = Bun.stripANSI(line)
+        // biome-ignore lint/suspicious/noControlCharactersInRegex: remove control characters from what the server sent
+        .replace(/[\s\u0000-\u001f\u007f-\u009f]+/g, " ")
+        .trim()
+        .slice(0, 60);
+      throw new Error(`Ollama sent a line that is not JSON: ${start}`);
+    }
+  };
+  const body = response.body.pipeThrough(
+    new TransformStream<Uint8Array, Uint8Array>({
+      transform(chunk, controller) {
+        pending += decoder.decode(chunk, { stream: true });
+        const lines = pending.split("\n");
+        pending = lines.pop() ?? "";
+        for (const line of lines) check(line);
+        controller.enqueue(chunk);
+      },
+      flush() {
+        check(pending + decoder.decode());
+      },
+    }),
+  );
+  return new Response(body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: response.headers,
+  });
+}
+
 type OpenAIStreamPart = {
   choices?: Array<{
     finish_reason?: string | null;
@@ -551,9 +595,17 @@ export async function* chat(
     );
     return;
   }
+  const fetchGuarded = guardedFetch(
+    signal,
+    providerStreamIdleTimeoutMs(config),
+  );
   const client = new Ollama({
     host: config.base_url,
-    fetch: guardedFetch(signal, providerStreamIdleTimeoutMs(config)),
+    fetch: Object.assign(
+      async (...args: Parameters<typeof fetch>) =>
+        checkedNdjson(await fetchGuarded(...args)),
+      { preconnect: fetch.preconnect },
+    ),
   });
   try {
     const stream = await client.chat({

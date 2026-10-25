@@ -158,6 +158,135 @@ test("fails a provider that never sends response headers with an idle timeout", 
   }
 });
 
+// The network cuts a stream where it likes: a line in two reads (here
+// inside an emoji's bytes and inside a tool call), or two lines in one.
+test("an Ollama stream cut anywhere reads as the same events", async () => {
+  const lines = [
+    { message: { role: "assistant", content: "Hola 🛶" }, done: false },
+    { message: { role: "assistant", content: " otra vez" }, done: false },
+    {
+      message: {
+        role: "assistant",
+        content: "",
+        tool_calls: [
+          { function: { name: "read", arguments: { path: "README.md" } } },
+        ],
+      },
+      done: false,
+    },
+    {
+      message: { role: "assistant", content: "" },
+      done: true,
+      prompt_eval_count: 9,
+      eval_count: 4,
+    },
+  ];
+  const bytes = new TextEncoder().encode(
+    `${lines.map((line) => JSON.stringify(line)).join("\n")}\n`,
+  );
+  const first = bytes.indexOf(0xf0) + 2; // two of the emoji's four bytes
+  const call = new TextDecoder().decode(bytes).indexOf("README") + 3;
+  const second = new TextEncoder().encode(
+    new TextDecoder().decode(bytes).slice(0, call),
+  ).length;
+  const cuts = [0, 5, first, second - 40, second, bytes.length];
+  expect(cuts.every((cut, at) => at === 0 || cut > (cuts[at - 1] ?? 0))).toBe(
+    true,
+  );
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch() {
+      return new Response(
+        new ReadableStream<Uint8Array>({
+          async start(controller) {
+            for (let at = 1; at < cuts.length; at++) {
+              controller.enqueue(bytes.slice(cuts[at - 1], cuts[at]));
+              await Bun.sleep(1);
+            }
+            controller.close();
+          },
+        }),
+        { headers: { "Content-Type": "application/x-ndjson" } },
+      );
+    },
+  });
+  try {
+    const provider = resolveProvider(
+      { OLLAMA_HOST: server.url.origin },
+      "fixture",
+    );
+    const events = [];
+    for await (const event of chat(
+      provider,
+      [{ role: "user", content: "Hello" }],
+      new AbortController().signal,
+    ))
+      events.push(event);
+    expect(events).toEqual([
+      { type: "text", text: "Hola 🛶" },
+      { type: "text", text: " otra vez" },
+      {
+        type: "tool_call",
+        call: { function: { name: "read", arguments: { path: "README.md" } } },
+      },
+      {
+        type: "done",
+        inputTokens: 9,
+        outputTokens: 4,
+        promptEvalCount: 9,
+        evalCount: 4,
+      },
+    ]);
+  } finally {
+    await server.stop(true);
+  }
+});
+
+test("a stream line that is not JSON fails the reply instead of being skipped", async () => {
+  for (const [body, start] of [
+    // A proxy's page in the middle of the stream, escape sequence and all.
+    [
+      `{"message":{"role":"assistant","content":"a"},"done":false}\n<html>\u001b[31m 502\n{"message":{"role":"assistant","content":"b"},"done":true}\n`,
+      "<html> 502",
+    ],
+    // The last line, with no newline after it.
+    [
+      `{"message":{"role":"assistant","content":"a"},"done":false}\n{"done":tr`,
+      '{"done":tr',
+    ],
+  ] as const) {
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch: () =>
+        new Response(body, {
+          headers: { "Content-Type": "application/x-ndjson" },
+        }),
+    });
+    try {
+      const provider = resolveProvider(
+        { OLLAMA_HOST: server.url.origin },
+        "fixture",
+      );
+      const events: unknown[] = [];
+      await expect(
+        (async () => {
+          for await (const event of chat(
+            provider,
+            [{ role: "user", content: "Hello" }],
+            new AbortController().signal,
+          ))
+            events.push(event);
+        })(),
+      ).rejects.toThrow(`Ollama sent a line that is not JSON: ${start}`);
+      expect(events).not.toContainEqual({ type: "text", text: "b" });
+    } finally {
+      await server.stop(true);
+    }
+  }
+});
+
 test("fails when an Ollama stream goes idle between chunks", async () => {
   const encoder = new TextEncoder();
   const server = Bun.serve({
