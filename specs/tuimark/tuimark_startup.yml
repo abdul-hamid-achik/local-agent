@@ -1,10 +1,13 @@
 version: 1
 name: bun_tuimark_startup
 intent: |
-    Performance guard for the Tuimark client: it must reach the composer
-    (ready for input) within the startup budget, complete a streamed reply
-    (13 chunks at ~50ms) within the streaming budget, and tear down cleanly
-    on ctrl+c.
+    Startup and streaming guard for the Tuimark client, against explicit
+    ceilings: the composer is ready for input within 15 s of launch, a
+    streamed reply of 13 chunks at ~50 ms completes within 10 s of enter,
+    the idle composer is back within 10 s of that, and ctrl+c exits cleanly
+    within 10 s. A wait past its ceiling fails the spec. The ceilings are
+    set for the slower CI runners, so they catch a hang or a gross
+    regression, not a small slowdown; no step is timed more finely.
 target:
     cmd: ["bun", "specs/tuimark/fixture.ts", "chat"]
     cwd: "${projectRoot}"
@@ -24,17 +27,13 @@ steps:
         screen:
             contains: "stream complete"
         timeoutMs: 10000
-    - wait:
-        screen:
-            contains: "Message the model"
-        timeoutMs: 10000
-    - snapshot: reply_done
     # The turn has ended (the idle placeholder is back), so ctrl+c quits
     # instead of cancelling it.
     - wait:
         screen:
             contains: "Message the model"
-        timeoutMs: 15000
+        timeoutMs: 10000
+    - snapshot: reply_done
     - press: ctrl+c
     - wait:
         process:
@@ -42,8 +41,8 @@ steps:
         timeoutMs: 10000
 outcomes:
     - id: tuimark_startup
-      description: the Tuimark client starts, streams a reply to completion, and exits cleanly within budget
+      description: the Tuimark client starts, streams a reply to completion, and exits cleanly, each within its ceiling
       verify:
         process:
             exitCode: 0
-contractHash: sha256:7497aa54e2e9920d802148ef0ee40316af470664caebacf7a8994aa8d493b934
+contractHash: sha256:918b83a57ef293d4caa99934de4321d1a00a01e92016f532ed2c136eb9471a11

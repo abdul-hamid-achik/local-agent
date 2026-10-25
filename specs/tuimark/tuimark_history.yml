@@ -16,12 +16,14 @@ steps:
         screen:
             contains: "Message the model"
         timeoutMs: 15000
+    # Up with nothing sent yet recalls nothing: what is typed after it is
+    # all the composer holds.
     - press: up
+    - type: "count alpha"
     - wait:
         screen:
-            matches: "║ Message the model\\s*║"
+            matches: "║ count alpha\\s*║"
         timeoutMs: 3000
-    - type: "count alpha"
     - press: enter
     - wait:
         screen:
@@ -54,7 +56,15 @@ steps:
             matches: "║ count alpha\\s*║"
         timeoutMs: 10000
     - snapshot: oldest
+    # Up at the oldest stays there. Keys arrive in order, so the "!" typed
+    # after it lands on whatever up left: still "count alpha".
     - press: up
+    - type: "!"
+    - wait:
+        screen:
+            matches: "║ count alpha!\\s*║"
+        timeoutMs: 3000
+    - press: backspace
     - wait:
         screen:
             matches: "║ count alpha\\s*║"

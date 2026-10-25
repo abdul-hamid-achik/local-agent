@@ -23,9 +23,10 @@ steps:
             contains: "Message the model"
         timeoutMs: 3000
     - type: "hello"
+    # The composer's own row holds what was typed, before enter sends it.
     - wait:
         screen:
-            contains: "hello"
+            matches: "│hello\\s*│"
         timeoutMs: 3000
     - press: enter
     - wait:

@@ -16,9 +16,10 @@ steps:
             contains: "Message the model"
         timeoutMs: 10000
     - type: "edit"
+    # The composer's own row holds what was typed, before enter sends it.
     - wait:
         screen:
-            contains: "edit"
+            matches: "│edit\\s*│"
         timeoutMs: 3000
     - press: enter
     - wait:
@@ -41,3 +42,4 @@ outcomes:
       verify:
         process:
             exitCode: 0
+contractHash: sha256:f37bdd050a84bba68a5ef8c809c8b509a08982c97b3c6a3934f3f60fde603bda
