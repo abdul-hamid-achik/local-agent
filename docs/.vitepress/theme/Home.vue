@@ -161,7 +161,7 @@ const ecosystemGroups = [
         <div
           class="la-terminal"
           role="img"
-          aria-label="Illustrative local-agent terminal session (a demo, not a real run) showing a local Ollama model, finished tool cards with an edit's diff, and a command waiting for approval"
+          aria-label="Illustrative local-agent terminal session (a demo, not a real run) showing a local Ollama model, finished tool cards with an edit's diff, and a command waiting for approval while the reply's head says it waits on you"
           aria-describedby="terminal-caption"
         >
           <div aria-hidden="true">
@@ -185,7 +185,18 @@ const ecosystemGroups = [
 
             <div class="la-terminal-body">
               <div class="la-terminal-message la-play" style="--step: 0">
-                <span class="la-terminal-speaker">assistant</span>
+                <span class="la-terminal-head">
+                  <span class="la-terminal-speaker">assistant</span>
+                  <!-- The reply's head, as the client draws it: a spinner while
+                       the turn works, still while the approval below waits. -->
+                  <span class="la-head">
+                    <span class="la-head-run">
+                      <span class="la-spin"><span><i>⠋</i><i>⠙</i><i>⠹</i><i>⠸</i><i>⠼</i><i>⠴</i><i>⠦</i><i>⠧</i><i>⠇</i><i>⠏</i></span></span>
+                      thinking · 4s
+                    </span>
+                    <span class="la-head-wait"><span class="la-still">⠿</span> waiting for your approval · 6s</span>
+                  </span>
+                </span>
                 <p>I’ll inspect the provider boundary, then run the focused checks.</p>
               </div>
 
@@ -225,23 +236,14 @@ const ecosystemGroups = [
 
             <div class="la-terminal-footer">
               <span>Waiting for approval</span>
-              <span class="la-pace">
-                <i style="--h: 0.35; --i: 0"></i>
-                <i style="--h: 0.8; --i: 1"></i>
-                <i style="--h: 1; --i: 2"></i>
-                <i style="--h: 0.85; --i: 3"></i>
-                <i style="--h: 0.6; --i: 4"></i>
-                <i style="--h: 0.08; --i: 5"></i>
-                <i style="--h: 0.08; --i: 6"></i>
-                <i style="--h: 0.08; --i: 7"></i>
-              </span>
-              <span>y allow · a session · n deny</span>
+              <span>y allow · a session · ! always · n deny</span>
             </div>
           </div>
         </div>
         <figcaption id="terminal-caption">
           An illustrative build session in the Tuimark client: a demo, not a real run. Each tool card
-          says how it ended and what an edit changed; a command waits for your decision before it runs.
+          says how it ended and what an edit changed; a command waits for your decision before it runs,
+          and the reply's head says the turn is waiting on you.
         </figcaption>
       </figure>
     </section>

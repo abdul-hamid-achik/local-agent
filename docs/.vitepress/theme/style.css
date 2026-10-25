@@ -561,24 +561,55 @@ body {
   animation: la-fill 900ms var(--la-ease) 700ms both;
 }
 
-/* The stream's pace, as the client's status bar draws it: flat while the
-   turn waits on an approval. */
-.la-pace {
-  display: inline-flex;
-  align-items: flex-end;
-  gap: 2px;
-  height: 12px;
+/* The reply's head, as the client draws it: a braille spinner and the
+   phase while the turn works, then a still glyph once the approval card
+   (step 3 of .la-play) waits on the reader. The two states share one cell
+   of a grid and trade places. */
+.la-terminal-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 10px;
 }
 
-.la-pace i {
+.la-head {
+  display: inline-grid;
+  min-width: 0;
+  color: var(--la-terminal-muted);
+  font-size: 11px;
+}
+
+.la-head-run,
+.la-head-wait {
+  grid-area: 1 / 1;
+}
+
+.la-head-run {
+  animation: la-head-out 1ms linear calc(260ms + 3 * 240ms) both;
+}
+
+.la-head-wait {
+  animation: la-head-in 1ms linear calc(260ms + 3 * 240ms) both;
+}
+
+/* Ten frames in a strip, one line tall, stepped like the client's spinner. */
+.la-spin {
+  display: inline-block;
+  height: 1.2em;
+  overflow: hidden;
+  vertical-align: bottom;
+  color: var(--la-terminal-phosphor);
+}
+
+.la-spin > span {
   display: block;
-  width: 3px;
-  height: 12px;
-  background: var(--la-terminal-phosphor);
-  opacity: 0.85;
-  transform: scaleY(var(--h));
-  transform-origin: bottom;
-  animation: la-pace 1.2s ease-in-out calc(var(--i) * -150ms) 3 alternate;
+  line-height: 1.2em;
+  animation: la-spin 800ms steps(10) infinite;
+}
+
+.la-spin i {
+  display: block;
+  font-style: normal;
 }
 
 .la-approval-card {
@@ -1669,13 +1700,25 @@ body {
   }
 }
 
-@keyframes la-pace {
+@keyframes la-spin {
+  to {
+    transform: translateY(-12em);
+  }
+}
+
+@keyframes la-head-out {
+  to {
+    visibility: hidden;
+  }
+}
+
+@keyframes la-head-in {
   from {
-    transform: scaleY(calc(var(--h) * 0.5));
+    visibility: hidden;
   }
 
   to {
-    transform: scaleY(var(--h));
+    visibility: visible;
   }
 }
 
@@ -2037,7 +2080,9 @@ body {
   .la-goal-run .la-goal-step,
   .la-budget-bar i,
   .la-ctx-meter i,
-  .la-pace i,
+  .la-spin > span,
+  .la-head-run,
+  .la-head-wait,
   .la-cursor,
   .la-status-dot {
     animation: none;
@@ -2045,6 +2090,11 @@ body {
 
   .la-goal-run.is-armed .la-goal-step {
     opacity: 1;
+  }
+
+  /* The head rests on its final state: the approval is waiting. */
+  .la-head-run {
+    visibility: hidden;
   }
 
   .la-budget.is-armed .la-budget-bar i {
