@@ -60,6 +60,16 @@ case "$version" in
   *) fail "not a release tag: $version" ;;
 esac
 
+# The command link replaces only a link this installer made: any other
+# local-agent there (a wrapper script, another install) stays untouched.
+link="$bin_dir/local-agent"
+if [ -e "$link" ] || [ -L "$link" ]; then
+  case "$(readlink "$link" 2>/dev/null || true)" in
+    "$home_dir"/*) ;;
+    *) fail "$link exists and is not a link to $home_dir; move it away or set LOCAL_AGENT_BIN_DIR" ;;
+  esac
+fi
+
 archive="local-agent_${version#v}_${os}_${arch}.tar.gz"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT INT TERM
@@ -92,10 +102,10 @@ rm -rf "$target"
 mv "$target.partial" "$target"
 
 mkdir -p "$bin_dir"
-ln -sfn "$target/local-agent" "$bin_dir/local-agent"
+ln -sfn "$target/local-agent" "$link"
 
-printf 'Installed %s\n' "$("$bin_dir/local-agent" --version)"
-printf '  %s -> %s\n' "$bin_dir/local-agent" "$target/local-agent"
+printf 'Installed %s\n' "$("$link" --version)"
+printf '  %s -> %s\n' "$link" "$target/local-agent"
 # The hint prints $PATH itself, for the user to paste.
 # shellcheck disable=SC2016
 case ":$PATH:" in

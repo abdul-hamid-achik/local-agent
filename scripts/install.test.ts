@@ -1,7 +1,7 @@
 // docs/public/install.sh against a release served from loopback: a fake
 // archive whose `local-agent` is a shell script, and its SHA256SUMS.txt.
 
-import { existsSync, readlinkSync } from "node:fs";
+import { existsSync, readFileSync, readlinkSync } from "node:fs";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -124,4 +124,20 @@ test("a version that is not a plain tag is refused before anything is written", 
     expect(run.stderr).toContain(`not a release tag: ${version}`);
   }
   expect(existsSync(join(home, ".local"))).toBe(false);
+});
+
+test("a local-agent the installer did not make is left alone", async () => {
+  const home = await mkdtemp(join(scratch, "home-"));
+  const bin = join(home, ".local/bin");
+  await mkdir(bin, { recursive: true });
+  await writeFile(join(bin, "local-agent"), "#!/bin/sh\necho wrapper\n", {
+    mode: 0o755,
+  });
+  const run = await install(home);
+  expect(run.exitCode).not.toBe(0);
+  expect(run.stderr).toContain("exists and is not a link to");
+  expect(readFileSync(join(bin, "local-agent"), "utf8")).toContain("wrapper");
+  expect(existsSync(join(home, ".local/share/local-agent", VERSION))).toBe(
+    false,
+  );
 });

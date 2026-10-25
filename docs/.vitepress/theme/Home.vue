@@ -67,7 +67,50 @@ onMounted(() => {
   playObserver.observe(el)
 })
 
-onBeforeUnmount(() => playObserver?.disconnect())
+onBeforeUnmount(() => {
+  playObserver?.disconnect()
+  clearTimeout(copiedTimer)
+})
+
+const installCommands = [
+  { label: 'macOS and Linux', command: 'curl -fsSL https://local-agent.dev/install.sh | sh' },
+  { label: 'Homebrew', command: 'brew install --cask abdul-hamid-achik/tap/local-agent' },
+]
+
+// Copy says so in place and to screen readers. Without clipboard access it
+// selects the command instead, ready for the keyboard's copy.
+const copied = ref('')
+const copyLabel = ref('')
+const copyNote = ref('')
+let copiedTimer: ReturnType<typeof setTimeout> | undefined
+
+async function copy(command: string, event: MouseEvent) {
+  // Read before the await: the event's currentTarget is gone after dispatch.
+  const code = (event.currentTarget as HTMLElement).previousElementSibling
+  let label = 'Copied'
+  let note = 'Copied to the clipboard'
+  try {
+    await navigator.clipboard.writeText(command)
+  } catch {
+    const selection = window.getSelection()
+    if (code && selection) {
+      selection.selectAllChildren(code)
+      label = 'Selected'
+      note = 'Command selected; copy it with your keyboard'
+    } else {
+      label = 'Copy failed'
+      note = 'Could not copy; select the command by hand'
+    }
+  }
+  copied.value = command
+  copyLabel.value = label
+  copyNote.value = note
+  clearTimeout(copiedTimer)
+  copiedTimer = setTimeout(() => {
+    copied.value = ''
+    copyNote.value = ''
+  }, 2000)
+}
 
 const ecosystemGroups = [
   {
@@ -496,14 +539,27 @@ const ecosystemGroups = [
 
     <section class="la-final-cta" aria-labelledby="start-title">
       <div>
-        <p class="la-kicker">Start from source</p>
+        <p class="la-kicker">Install</p>
         <h2 id="start-title">Bring the agent to where your code already lives.</h2>
-        <p>Clone the repository, connect Ollama, and begin with a read-only request in plan mode.</p>
+        <p>Install the command, connect Ollama, and begin with a read-only request in plan mode.</p>
       </div>
 
       <div class="la-install-block">
-        <span>Run with Bun</span>
-        <code>bun install --frozen-lockfile && bun run dev</code>
+        <div v-for="item in installCommands" :key="item.command" class="la-install-row">
+          <span>{{ item.label }}</span>
+          <div class="la-install-line">
+            <code>{{ item.command }}</code>
+            <button
+              type="button"
+              class="la-copy"
+              :aria-label="`Copy the ${item.label} install command`"
+              @click="copy(item.command, $event)"
+            >
+              {{ copied === item.command ? copyLabel : 'Copy' }}
+            </button>
+          </div>
+        </div>
+        <p class="la-sr-only" aria-live="polite">{{ copyNote }}</p>
         <div class="la-actions">
           <a class="la-button la-button-primary" :href="withBase('/getting-started')">
             Follow the quickstart <span aria-hidden="true">→</span>

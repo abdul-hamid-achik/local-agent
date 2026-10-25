@@ -1,25 +1,59 @@
 ---
 title: Getting started
-description: Install the Bun CLI from source, connect Ollama, and complete a first approval-gated session.
+description: Install local-agent on macOS or Linux, connect Ollama, and complete a first approval-gated session.
 outline: deep
 ---
 
 # Getting started
 
-Local Agent is a local coding agent that runs from source in a Bun workspace.
-There are no released binaries of the TypeScript client yet. The default model
-runs on [Ollama](https://ollama.com/) on the same machine.
+Local Agent is a local coding agent for the terminal. The default model runs
+on [Ollama](https://ollama.com/) on the same machine.
 
 ## Prerequisites
 
-- macOS or Linux
-- [Bun](https://bun.sh/) 1.4.2
+- macOS or Linux, on arm64 or x86-64
 - Ollama running locally with the default model `qwen3.5:4b-q4_K_M` pulled
+  (`ollama pull qwen3.5:4b-q4_K_M`)
 
 Interactive runs pre-admit the model with a 15-second check; a missing model
 is rejected up front, not mid-session.
 
-## Install from source
+## Install
+
+The installer downloads the release for your platform, checks it against the
+release's `SHA256SUMS.txt`, unpacks it under `~/.local/share/local-agent/<tag>` and
+links `~/.local/bin/local-agent`. It needs no root and changes nothing else;
+if `~/.local/bin/local-agent` is already something it did not install, it
+stops before downloading:
+
+```bash
+curl -fsSL https://local-agent.dev/install.sh | sh
+```
+
+Read [the script](https://local-agent.dev/install.sh) first if you prefer.
+`LOCAL_AGENT_VERSION=v0.52.0` pins a release; the checksum catches a corrupt
+or truncated download, and is not a signature. Or with Homebrew:
+
+```bash
+brew install --cask abdul-hamid-achik/tap/local-agent
+```
+
+Then check it:
+
+```bash
+local-agent --version
+```
+
+The release is one executable next to a `ui/` folder, with the LICENSE and
+README. The Tuimark host it drives is downloaded on first run and checked
+against a pinned checksum; if that fails and `--ui` was not given, it starts
+the Vue client instead and says so.
+Every [release](https://github.com/abdul-hamid-achik/local-agent/releases)
+carries the four archives, a source tarball and their checksums.
+
+### From source
+
+Building from a checkout needs [Bun](https://bun.sh/) 1.4.2:
 
 ```bash
 git clone https://github.com/abdul-hamid-achik/local-agent.git
@@ -28,22 +62,18 @@ bun install --frozen-lockfile
 bun run dev
 ```
 
-`bun run dev` starts the fullscreen tuimark client with the default model,
-from the repository root. To put `local-agent` on your PATH, run `bun link`
-in `apps/cli`.
-
-Tags are releases: the [releases page](https://github.com/abdul-hamid-achik/local-agent/releases)
-carries a source tarball with checksums for every `v*` tag (there are no
-prebuilt binaries of the TypeScript client yet), and `--version` prints the
-installed one.
+`bun run dev` takes the same flags as `local-agent`, run from the repository
+root. `bun link` in `apps/cli` puts a `local-agent` command on your PATH that
+runs the checkout.
 
 ## First session
 
-Point a run at the repository you want the agent to inspect or change — the
-workspace defaults to the current directory:
+Start it in the repository you want the agent to inspect or change — the
+workspace is the current directory unless you pass `--workspace`:
 
 ```bash
-bun run dev --workspace /path/to/your/repository
+cd /path/to/your/repository
+local-agent
 ```
 
 The fullscreen client takes over the terminal and shows a welcome screen.
@@ -132,15 +162,15 @@ Tuimark inline mode prints finished blocks into your terminal's own
 scrollback:
 
 ```bash
-bun run dev --ui tuimark --mode inline
+local-agent --ui tuimark --mode inline
 ```
 
 Named themes work with the tuimark client:
 
 ```bash
-bun run dev --theme midnight
-bun run dev --theme catppuccin-mocha
-bun run dev --theme rose-pine-dawn
+local-agent --theme midnight
+local-agent --theme catppuccin-mocha
+local-agent --theme rose-pine-dawn
 ```
 
 [Configuration](/configuration#themes) lists all eighteen.

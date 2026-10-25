@@ -21,7 +21,7 @@ agent battery reliably. You set nothing to use it.
 ## Selecting a model
 
 ```bash
-bun run dev --model qwen3.5:9b
+local-agent --model qwen3.5:9b
 ```
 
 Or set `LOCAL_AGENT_MODEL`; the flag overrides the environment. A missing

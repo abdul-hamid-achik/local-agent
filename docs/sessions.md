@@ -18,7 +18,7 @@ facts across unrelated sessions.
 ## Enabling the session database
 
 ```bash
-bun run dev --session-db ~/.local-agent/sessions.db
+local-agent --session-db ~/.local-agent/sessions.db
 ```
 
 `--session-db PATH` opts into durable sessions stored in a separate SQLite
@@ -36,7 +36,7 @@ older local-agent refuses a v3 database, so keep a copy if you may go back.
 ## Resuming a session
 
 ```bash
-bun run dev --session-db ~/.local-agent/sessions.db --resume HANDLE
+local-agent --session-db ~/.local-agent/sessions.db --resume HANDLE
 ```
 
 `--resume HANDLE` loads a completed session from the session database by its
@@ -63,7 +63,7 @@ These commands only read the database. They contact no model and run no tools.
 Example:
 
 ```bash
-bun run dev --session-db ~/.local-agent/sessions.db --sessions
+local-agent --session-db ~/.local-agent/sessions.db --sessions
 ```
 
 ## Switching interactively
@@ -130,14 +130,14 @@ From the shell:
 
 ```bash
 # List the calls awaiting a decision (JSON)
-bun run dev --session-db ~/.local-agent/sessions.db --recover HANDLE
+local-agent --session-db ~/.local-agent/sessions.db --recover HANDLE
 
 # Show what would be recorded (a dry run)
-bun run dev --session-db ~/.local-agent/sessions.db --recover HANDLE \
+local-agent --session-db ~/.local-agent/sessions.db --recover HANDLE \
   --resolve EXECUTION=applied --note "the file was written"
 
 # Record it
-bun run dev --session-db ~/.local-agent/sessions.db --recover HANDLE \
+local-agent --session-db ~/.local-agent/sessions.db --recover HANDLE \
   --resolve EXECUTION=applied --note "the file was written" --apply
 ```
 

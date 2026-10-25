@@ -23,7 +23,7 @@ repository you clone cannot add a server. `--no-mcp` starts without it, and
 `--mcp-config PATH` loads another file instead:
 
 ```bash
-bun run dev --mcp-config mcp-servers.json
+local-agent --mcp-config mcp-servers.json
 ```
 
 Either file holds a JSON array of server configurations. It is limited to 16
@@ -157,8 +157,8 @@ names.
 ## Checking status
 
 ```bash
-bun run dev --mcp-status
-bun run dev --mcp-config mcp-servers.json --mcp-status
+local-agent --mcp-status
+local-agent --mcp-config mcp-servers.json --mcp-status
 ```
 
 `--mcp-status` is a standalone check of your own `mcp.json`, or of the file

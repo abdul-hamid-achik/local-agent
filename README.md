@@ -12,14 +12,34 @@ The current client supports fullscreen panels, inline native terminal scrollback
 headless JSON events, local Ollama and Chalupa process profiles, bounded file
 reads, approved exact edits and commands, MCP tools, optional SQLite sessions,
 and a bounded foreground goal loop (`/goal`, Tuimark client only). Recovery
-reconciliation, durable goals/memory, the full tool catalog and standalone
-distribution remain incomplete. Root `AGENTS.md` is loaded; full skills/profile
+reconciliation, durable goals/memory and the full tool catalog remain
+incomplete. Root `AGENTS.md` is loaded; full skills/profile
 and nested-instruction parity is still pending.
 
 The [Go implementation reference](reference/GO_IMPLEMENTATION.md) preserves the
 historical feature manual, implementation details, source revision, and complete
 file/symbol/test inventory. Public documentation at [local-agent.dev](https://local-agent.dev)
-continues to describe historical released functionality and labels that scope.
+describes released functionality.
+
+## Install
+
+macOS and Linux, arm64 and x86-64, with [Ollama](https://ollama.com) running:
+
+```bash
+curl -fsSL https://local-agent.dev/install.sh | sh
+# or
+brew install --cask abdul-hamid-achik/tap/local-agent
+```
+
+The installer checks the archive against the release's `SHA256SUMS.txt`,
+unpacks it under `~/.local/share/local-agent/<tag>` and links
+`~/.local/bin/local-agent` (it stops if something it did not install is
+already there); `LOCAL_AGENT_VERSION` pins a tag. A release archive
+holds one executable (`bun build --compile`, which never reads the workspace's
+`bunfig.toml` or `.env`), the Tuimark client's `ui/` folder next to it, the
+LICENSE and this README.
+`scripts/release-binary.ts` builds it and `scripts/release-smoke.ts` checks it;
+`.github/workflows/release.yml` does both on each platform for a `v*` tag.
 
 ## Development and usage
 
@@ -339,7 +359,8 @@ and `#tui/*` (`#playground/*` in the SFC demo). Cross-package imports use `@loca
 This keeps runtime and typechecker resolution aligned without duplicated aliases.
 Unit/component tests run through Vitest with Bun (`bun run test`), with
 `bun run test:watch` for development. Do not invoke them with `bun test`.
-The CLI build is for this installed workspace, not a standalone release binary.
+`bun run build` is for this installed workspace; release executables come from
+`scripts/release-binary.ts` (see [Install](#install)).
 
 In fullscreen, assistant messages render Markdown with separate role labels.
 Inline keeps streamed plain text in native terminal scrollback. In either

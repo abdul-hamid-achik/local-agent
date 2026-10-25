@@ -6,9 +6,10 @@ outline: deep
 
 # Command reference
 
-The CLI is started with `bun run dev` from the repository root (or `local-agent`
-after `bun link` in `apps/cli`). It has one command surface: startup flags. There
-are no subcommands. Run `local-agent --help` for the authoritative short list.
+The CLI is the `local-agent` command (see [Install](/getting-started#install);
+from a checkout, `bun run dev` takes the same flags). It has one command
+surface: startup flags. There are no subcommands. Run `local-agent --help` for
+the authoritative short list.
 
 ## CLI flags
 

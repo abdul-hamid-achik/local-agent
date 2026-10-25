@@ -1222,7 +1222,11 @@ body {
   background: var(--la-panel-muted);
 }
 
-.la-install-block > span {
+.la-install-row + .la-install-row {
+  margin-top: 18px;
+}
+
+.la-install-row > span {
   color: var(--la-faint);
   font-family: var(--vp-font-family-mono);
   font-size: 10px;
@@ -1231,14 +1235,52 @@ body {
   text-transform: uppercase;
 }
 
-.la-install-block > code {
-  display: block;
-  margin-top: 13px;
+.la-install-line {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  margin-top: 9px;
+}
+
+.la-install-line > code {
+  flex: 1;
+  min-width: 0;
   overflow-wrap: anywhere;
   color: var(--la-ink);
   background: transparent;
   font-size: 11px;
+  font-variant-ligatures: none;
   line-height: 1.65;
+}
+
+.la-copy {
+  flex: none;
+  min-width: 62px;
+  padding: 2px 9px;
+  border: 1px solid var(--la-line-strong);
+  border-radius: 6px;
+  color: var(--la-muted);
+  background: var(--la-panel);
+  font-family: var(--vp-font-family-mono);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  line-height: 1.65;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.la-copy:hover {
+  color: var(--la-ink);
+}
+
+.la-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 
 .la-install-block .la-actions {
