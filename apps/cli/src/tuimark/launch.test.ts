@@ -161,7 +161,7 @@ async function until(ok: () => boolean) {
 }
 
 test("the pinned release is a release at or above the minimum, not the pre-release the SDK is packed as", () => {
-  expect(PINNED_TUIMARK).toBe("0.5.2");
+  expect(PINNED_TUIMARK).toBe("0.5.3");
   expect(PINNED_TUIMARK).toMatch(/^\d+\.\d+\.\d+$/);
   expect(versionAtLeast(PINNED_TUIMARK, MIN_TUIMARK)).toBe(true);
 });
