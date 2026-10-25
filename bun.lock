@@ -15,7 +15,7 @@
     },
     "apps/cli": {
       "name": "@local-agent/cli",
-      "version": "0.53.0",
+      "version": "0.53.1",
       "bin": {
         "local-agent": "./launcher.ts",
       },
