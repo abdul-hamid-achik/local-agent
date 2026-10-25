@@ -9,6 +9,7 @@ import { expect, test, vi } from "vitest";
 import {
   ConversationFullError,
   type ExecutionEvent,
+  ledgerReceipt,
   MAX_STATE_BYTES,
   type SessionMessage,
   SessionStore,
@@ -535,7 +536,8 @@ test("commitOutcome saves a short note in place of a result the state cannot hol
   expect(parsed.output).toContain("Ask for less");
   expect(parsed.output).not.toContain("yyyy");
   expect(saved.messages.slice(0, -1)).toEqual([...earlier, asked]);
-  // The ledger ends the call with the full receipt, and no hazard is left.
+  // The ledger ends the call with its bounded receipt, and no hazard is
+  // left.
   expect(store.listHazards(session.id, session.workspaceId)).toHaveLength(0);
   const rows = ledgerRows(db);
   expect(rows.map((row) => row.event_type)).toEqual([
@@ -544,7 +546,7 @@ test("commitOutcome saves a short note in place of a result the state cannot hol
     "completed",
   ]);
   expect(rows[2]).toMatchObject({
-    result_receipt: content,
+    result_receipt: ledgerReceipt(content),
     result_sha256: sha256(content),
     detail: expect.stringContaining("too large"),
   });
@@ -677,35 +679,44 @@ test("a note that does not fit either writes nothing, and the call stays started
   store.close();
 });
 
-test("a receipt past the ledger's bound is replaced by the note there, its hash still of the whole", async () => {
+test("a receipt keeps the head of a long result within 16 KiB, its hash still of the whole", async () => {
   const { db, workspace } = await fixture();
   const store = await SessionStore.open(db);
   const session = await store.createSession(workspace);
   store.appendEvent(event(session.id, session.workspaceId, "requested"));
   store.appendEvent(event(session.id, session.workspaceId, "started"));
-  const receipt = "r".repeat(1_000_001);
-  const saved = store.commitOutcome(
-    {
-      ...event(session.id, session.workspaceId, "completed"),
-      resultSha256: sha256(receipt),
-      resultReceipt: receipt,
-    },
-    session.revision,
-    [
-      ...bulk(MAX_STATE_BYTES - 100_000),
-      asked,
-      {
-        role: "tool",
-        tool_name: "read",
-        tool_call_id: "call-1",
-        content: "q".repeat(200_000),
-      },
-    ],
-  );
+  // Emoji are four bytes: the cut must fall between two of them.
+  const receipt = `a${"😀".repeat(100_000)}`;
+  const ended = {
+    ...event(session.id, session.workspaceId, "completed"),
+    resultSha256: sha256(receipt),
+    resultReceipt: receipt,
+  };
+  store.commitOutcome(ended, session.revision, [
+    asked,
+    { role: "tool", tool_name: "read", tool_call_id: "call-1", content: "ok" },
+  ]);
   const stored = ledgerRows(db).at(-1);
   expect(stored?.result_sha256).toBe(sha256(receipt));
-  expect(stored?.result_receipt).toBe(saved.messages.at(-1)?.content);
+  const kept = stored?.result_receipt ?? "";
+  expect(Buffer.byteLength(kept)).toBeLessThanOrEqual(16 * 1024);
+  expect(kept.isWellFormed()).toBe(true);
+  const [head, note] = kept.split("\n");
+  expect(receipt.startsWith(head ?? "-")).toBe(true);
+  expect(head?.length).toBeGreaterThan(8_000);
+  expect(note).toBe(
+    `…(${Buffer.byteLength(receipt) - Buffer.byteLength(head ?? "")} more bytes not kept; result_sha256 is of the whole result)`,
+  );
   store.close();
+});
+
+test("a receipt that fits is kept whole, and a long one is cut the same way every time", () => {
+  expect(ledgerReceipt("short")).toBe("short");
+  const fits = "x".repeat(16 * 1024);
+  expect(ledgerReceipt(fits)).toBe(fits);
+  const long = "y".repeat(1_000_001);
+  expect(ledgerReceipt(long)).toBe(ledgerReceipt(long));
+  expect(ledgerReceipt(long)).not.toBe(long);
 });
 
 test("uses an exclusive cross-process lease", async () => {

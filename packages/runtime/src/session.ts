@@ -10,8 +10,26 @@ import { tryLockFile } from "#runtime/workspace_native";
 const SCHEMA_VERSION = 3;
 /** The most a session's saved state may hold, as UTF-8 JSON. */
 export const MAX_STATE_BYTES = 8 * 1024 * 1024;
-/** The longest result receipt the ledger takes, in characters (EventSchema). */
-const MAX_RECEIPT_CHARS = 1_000_000;
+/** The longest result receipt the ledger keeps, in UTF-8 bytes (ADR 0001). */
+const MAX_RECEIPT_BYTES = 16 * 1024;
+/** Room kept for the note that says how much of a result was left out. */
+const RECEIPT_NOTE_BYTES = 96;
+
+/**
+ * What the ledger keeps of a result: all of it within MAX_RECEIPT_BYTES,
+ * else its head, cut on a character, and how much was left out. The events
+ * cannot be erased, so they never keep a whole large output;
+ * `result_sha256` stands for the whole result.
+ */
+export function ledgerReceipt(result: string): string {
+  const size = Buffer.byteLength(result, "utf8");
+  if (size <= MAX_RECEIPT_BYTES) return result;
+  const { read, written } = new TextEncoder().encodeInto(
+    result,
+    new Uint8Array(MAX_RECEIPT_BYTES - RECEIPT_NOTE_BYTES),
+  );
+  return `${result.slice(0, read)}\n…(${size - written} more bytes not kept; result_sha256 is of the whole result)`;
+}
 /** How long a write waits for another process's lock before SQLITE_BUSY. */
 const BUSY_TIMEOUT_MS = 5000;
 const EVENT_TYPES = [
@@ -421,8 +439,8 @@ export class SessionStore {
    *
    * A result the state cannot hold (the history would pass 8 MiB) is saved
    * as a short note in its place (`shortenedResult`), with the event, and
-   * the returned session holds the note. The ledger keeps the full
-   * receipt. Only when the note does not fit either is nothing written and
+   * the returned session holds the note. The ledger keeps the receipt it
+   * keeps of any result (ledgerReceipt). Only when the note does not fit either is nothing written and
    * ConversationFullError thrown: the call stays `started`, to recover.
    */
   commitOutcome(
@@ -456,12 +474,6 @@ export class SessionStore {
       }
       ended = {
         ...event,
-        // The receipt is what the tool returned, as far as the ledger can
-        // hold it; past that the note stands for it.
-        resultReceipt:
-          (event.resultReceipt ?? "").length <= MAX_RECEIPT_CHARS
-            ? (event.resultReceipt ?? "")
-            : note.content,
         detail: [event.detail, "result too large for the session to keep"]
           .filter(Boolean)
           .join("; ")
@@ -510,7 +522,13 @@ export class SessionStore {
     this.db.transaction(() => this.appendEventUnsafe(event)).immediate();
   }
 
-  private appendEventUnsafe(event: ExecutionEvent): void {
+  private appendEventUnsafe(given: ExecutionEvent): void {
+    // What is kept, and what a replay is compared with, is the bounded
+    // receipt.
+    const event =
+      given.resultReceipt === undefined
+        ? given
+        : { ...given, resultReceipt: ledgerReceipt(given.resultReceipt) };
     validateEvent(event);
     const session = this.db
       .query<{ workspace_id: string }, [number]>(
@@ -943,7 +961,10 @@ const EventSchema = z.strictObject({
     .string()
     .regex(/^[0-9a-f]{64}$/)
     .optional(),
-  resultReceipt: z.string().max(MAX_RECEIPT_CHARS).optional(),
+  resultReceipt: z
+    .string()
+    .refine((receipt) => Buffer.byteLength(receipt) <= MAX_RECEIPT_BYTES)
+    .optional(),
   detail: z.string().max(4096).optional(),
 });
 function validateEvent(event: ExecutionEvent): void {
