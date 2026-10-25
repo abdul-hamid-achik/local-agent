@@ -134,6 +134,45 @@ test("compaction frees images first, then read results, oldest first", () => {
     status: "succeeded",
     source: "external",
   });
+  // An MCP result keeps its envelope's fields; only the server's text goes.
+  const mcp = compactHistory(
+    [
+      {
+        role: "assistant",
+        content: "",
+        tool_calls: [
+          { id: "m", function: { name: "hub__snapshot", arguments: {} } },
+        ],
+      },
+      {
+        role: "tool",
+        tool_name: "hub__snapshot",
+        tool_call_id: "m",
+        content: JSON.stringify({
+          status: "unverified",
+          source: "external",
+          transport: "success",
+          domain: "unknown",
+          evidence: "unverified",
+          isError: false,
+          output: "M".repeat(5_000),
+        }),
+      },
+      { role: "assistant", content: "read it" },
+      { role: "user", content: "next" },
+    ],
+    1_000,
+  );
+  const elided = JSON.parse(mcp.messages[1]?.content ?? "");
+  expect(elided).toMatchObject({
+    status: "unverified",
+    source: "external",
+    transport: "success",
+    domain: "unknown",
+    evidence: "unverified",
+    isError: false,
+  });
+  expect(elided.output).toMatch(/^M{240}\n\[4760 more characters elided/);
   // Enough was freed: the current turn's reasoning is untouched.
   expect(more.messages[5]?.thinking).toBe(history[5]?.thinking);
   // The input is not changed.

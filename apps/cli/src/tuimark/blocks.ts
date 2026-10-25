@@ -1889,18 +1889,34 @@ export function resultSummary(
   return head ? [head.text, body].join("\n") : body;
 }
 
-/** The `{status, output}` of a tool message's content, or the content as it is. */
+/**
+ * The `{status, output}` of a tool message's content, or the content as it
+ * is. An MCP result carries its envelope's fields beside the server's text
+ * (`output`); they are put back together as the envelope a live result's
+ * output is, so a resumed card reads the same.
+ */
 function parseReceipt(content: string): { status: string; output: string } {
   let status = "unknown";
   let output = content;
   try {
-    const result = JSON.parse(content) as {
-      status?: unknown;
-      output?: unknown;
-    };
+    const result = JSON.parse(content) as Record<string, unknown>;
     if (typeof result.output === "string") {
       output = result.output;
       if (typeof result.status === "string") status = result.status;
+      const { transport, domain, evidence, isError } = result;
+      if (
+        typeof transport === "string" &&
+        typeof domain === "string" &&
+        typeof evidence === "string" &&
+        typeof isError === "boolean"
+      )
+        output = JSON.stringify({
+          transport,
+          domain,
+          evidence,
+          isError,
+          text: result.output,
+        });
     }
   } catch {
     // Not the runtime's {status, output} receipt: show the content.

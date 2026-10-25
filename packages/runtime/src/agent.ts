@@ -33,6 +33,7 @@ import {
   gatewayTarget,
   type McpConnection,
   McpStoppedError,
+  type McpToolResult,
 } from "#runtime/mcp";
 import { assertFetchTarget, type FetchPolicy, fetchPolicy } from "#runtime/net";
 import { sandboxUnavailable } from "#runtime/sandbox";
@@ -1629,6 +1630,16 @@ function endedByMistake(
 /** The receipt `source` of a fetch, web_search, MCP or subagent result. */
 export const EXTERNAL_SOURCE = "external";
 
+/**
+ * An MCP result's tool message: the envelope's fields beside the server's
+ * text as `output`, after the external mark. The envelope as one JSON
+ * string inside this JSON would escape the text twice, so each quote of a
+ * JSON text took four characters.
+ */
+function mcpReceipt(status: string, { text, ...fields }: McpToolResult) {
+  return { status, source: EXTERNAL_SOURCE, ...fields, output: text };
+}
+
 /** JSON with object keys sorted, so equal arguments give equal text. */
 function sortedJson(value: unknown): string {
   return JSON.stringify(value, (_key, item: unknown) =>
@@ -2404,6 +2415,8 @@ async function* agentTurn(
       let effectAttempted = false;
       let uncertain = false;
       let fromServer = false;
+      // An MCP result as the model reads it, its text already capped.
+      let mcpResult: McpToolResult | undefined;
       let repeated = false;
       let output: string;
       const images: string[] = [];
@@ -2919,10 +2932,11 @@ async function* agentTurn(
                 signal,
               );
               status = result.isError ? "failed" : "unverified";
-              output = JSON.stringify({
+              mcpResult = {
                 ...result,
                 text: capOutput(result.text, outputLimit, ""),
-              });
+              };
+              output = JSON.stringify(mcpResult);
               // The server wrote this text, an error's too.
               fromServer = true;
             }
@@ -2938,6 +2952,7 @@ async function* agentTurn(
           error instanceof NotAppliedError || error instanceof McpStoppedError;
         uncertain = effectAttempted && !notSent;
         status = "failed";
+        mcpResult = undefined;
         output = signal.aborted
           ? "Cancelled; tool did not report successful completion"
           : mcpConnection && effectAttempted && !notSent
@@ -2965,9 +2980,11 @@ async function* agentTurn(
         tool_name: name,
         tool_call_id: call.id,
         content: JSON.stringify(
-          external
-            ? { status, source: EXTERNAL_SOURCE, output }
-            : { status, output },
+          mcpResult
+            ? mcpReceipt(status, mcpResult)
+            : external
+              ? { status, source: EXTERNAL_SOURCE, output }
+              : { status, output },
         ),
       };
       if (images.length) message.images = images.splice(0);

@@ -266,6 +266,81 @@ test("what the web or an MCP server returned is marked external", async () => {
   }
 });
 
+test("an MCP result reaches the model as its envelope's fields and its text, escaped once", async () => {
+  const text = JSON.stringify({
+    processes: Array.from({ length: 40 }, (_, i) => ({
+      name: `p${i}`,
+      cpu_percent: i / 3,
+    })),
+  });
+  const mcp: McpConnection[] = [
+    {
+      tools: [
+        {
+          name: "monitor__snapshot",
+          description: "snapshot",
+          inputSchema: { type: "object" },
+          readOnly: true,
+        },
+      ],
+      async callTool() {
+        return {
+          transport: "success" as const,
+          domain: "unknown" as const,
+          evidence: "unverified" as const,
+          isError: false,
+          text,
+        };
+      },
+      async close() {},
+    },
+  ];
+  const run = await session(
+    [{ name: "monitor__snapshot", arguments: {} }],
+    "build",
+    false,
+    mcp,
+  );
+  try {
+    const content = run.toolMessages[0]?.content ?? "";
+    const receipt = JSON.parse(content) as Record<string, unknown>;
+    // The mark first, then what is and is not known, then the server's text.
+    expect(Object.keys(receipt)).toEqual([
+      "status",
+      "source",
+      "transport",
+      "domain",
+      "evidence",
+      "isError",
+      "output",
+    ]);
+    expect(receipt).toEqual({
+      status: "unverified",
+      source: "external",
+      transport: "success",
+      domain: "unknown",
+      evidence: "unverified",
+      isError: false,
+      output: text,
+    });
+    // One level of escaping: a quote of the text is two characters, not
+    // four, as it was with the envelope sent as a string.
+    expect(content).not.toContain('\\\\\\"');
+    expect(content.length).toBeLessThan(text.length * 1.3);
+    expect(run.bodies.at(-1)?.messages.at(-1)?.content).toBe(content);
+    // The event keeps the envelope the client reads.
+    expect(JSON.parse(run.output(0))).toEqual({
+      transport: "success",
+      domain: "unknown",
+      evidence: "unverified",
+      isError: false,
+      text,
+    });
+  } finally {
+    await run.cleanup();
+  }
+});
+
 test("fetch truncates bodies over 512 KiB with a note", async () => {
   stubFetch((url) =>
     url.startsWith("http://127.0.0.1")

@@ -734,6 +734,35 @@ test("an MCP card shows the server's text under a head that keeps the doubt", ()
   expect(receipt?.output).not.toContain("isError");
 });
 
+test("a resumed MCP result, its envelope's fields beside the text, reads as the live one", () => {
+  const text = JSON.stringify({ alternatives: ["a", "b"], n: 2 });
+  const live = cardOf("srv__tool", {}, "unverified", envelope(text));
+  const builder = new ViewBuilder();
+  builder.fromMessage({
+    role: "assistant",
+    content: "",
+    tool_calls: [{ id: "c", function: { name: "srv__tool", arguments: {} } }],
+  });
+  const message: Message = {
+    role: "tool",
+    tool_name: "srv__tool",
+    tool_call_id: "c",
+    content: JSON.stringify({
+      status: "unverified",
+      source: "external",
+      transport: "success",
+      domain: "unknown",
+      evidence: "unverified",
+      isError: false,
+      output: text,
+    }),
+  };
+  const card = builder.fromMessage(message)?.card;
+  expect(card).toEqual(live.card);
+  expect(builder.receiptOf(message)?.output).toBe(live.receipt?.output);
+  expect(runsText(card?.out ?? []).split("\n")[0]).toBe("domain unknown");
+});
+
 test("an MCP error is class err, and text that is not JSON stays as it is", () => {
   const show = (text: string) =>
     runsText(
