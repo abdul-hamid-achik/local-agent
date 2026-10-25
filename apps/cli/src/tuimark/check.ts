@@ -464,6 +464,16 @@ const extraDumps: {
     golden: "sample-empty-40-r24.txt",
     contains: ["/help lists keys", "^P commands"],
   },
+  // A status longer than its row ends in an ellipsis at a word: a fixed
+  // width cut it mid-word, with nothing to say it went on.
+  {
+    doc: "app.tui",
+    sample: "site-goal-done",
+    cols: 64,
+    rows: 22,
+    golden: "site-goal-done-64-r22.txt",
+    contains: ["evidence: `bun test src/fetch.test.ts`…"],
+  },
   {
     doc: "inline.tui",
     sample: "inline-sample",

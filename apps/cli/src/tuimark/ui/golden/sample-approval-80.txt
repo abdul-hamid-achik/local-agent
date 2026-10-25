@@ -15,8 +15,8 @@
 │ │  │+export async function fetchRetry(url, tries = 3) {                 ┃  │ ┃
 │ │  │+  for (let attempt = 1; ; attempt++) {                             ┃  │ ┃
 │ │  │+    try { return await fetch(url); }                               ┃  │ ┃
-│ │  │+    catch (e) { if (attempt === tries) throw e; await sleep(200 * a┃  │ ┃
-│ │  │↪ ttempt); }                                                        ┃  │ ┃
+│ │  │+    catch (e) { if (attempt === tries) throw e; await sleep(200 *  ┃  │ ┃
+│ │  │↪ attempt); }                                                       ┃  │ ┃
 │ │  │+  }                                                                ┃  │ ┃
 │ │  │+}                                                                  │  │ ┃
 │ │  └────────────────────────────────────────────────────────────────────┘  │ ┃

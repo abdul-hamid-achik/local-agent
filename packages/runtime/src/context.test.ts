@@ -64,7 +64,10 @@ test("the planned size is the largest step that fits", () => {
     totalMemory: MAC_16GB,
   });
   expect(small.context).toBe(32_768);
-  expect(small.reason).toMatch(/^planned: its KV cache takes 1\.0 GiB of/);
+  // The budget is what is left after the weights and the headroom both.
+  expect(small.reason).toBe(
+    "planned: its KV cache takes 1.0 GiB of the 5.2 GiB left after the weights and headroom",
+  );
 
   // A dense 9B model: 16k would need 2 GiB of the 1.9 GiB left.
   expect(

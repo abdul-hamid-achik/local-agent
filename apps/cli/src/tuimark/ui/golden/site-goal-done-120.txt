@@ -1,0 +1,31 @@
+=== grid 120x30 ===
+ Local Agent             build  Ollama / loopback  qwen3.5:4b-q4_K_M              temporary  ctx 2.1k/32k  ▊░░░░░░░░░░░ 
+┌──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│ │ bun test src/fetch.test.ts                                                                                       │ │
+│ │ exit 0                                                                                                           │ │
+│ │ src/fetch.test.ts:                                                                                               │ │
+│ │ ✓ retries three times                                                                                            │ │
+│ │ ✓ rethrows the last error                                                                                        │ │
+│ │                                                                                                                  │ │
+│ │  2 pass                                                                                                          │ │
+│ │  0 fail                                                                                                          │ │
+│ ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯ │
+│                                                                                                                      │
+│ ╭─ Goal status ────────────────────────────────────────────────────────────────────────────────────────────────────╮ │
+│ │ ✓ succeeded                                                                                                      │ │
+│ │ done · the fetch tests pass                                                                                      │ ┃
+│ │ Recorded: done. The goal ends with this turn: tell the user what was done.                                       │ ┃
+│ ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯ ┃
+│                                                                                                                      ┃
+│ Assistant                                                                                                            ┃
+│ Done: the helper retries three times, and both fetch tests pass.                                                     ┃
+│                                                                                                                      ┃
+│ Notice                                                                                                               ┃
+│  Goal reported done — evidence: bun test src/fetch.test.ts exited 0 · turn 2 of 8                                    ┃
+│  Last status (done): the fetch tests pass                                                                            ┃
+│                                                                                                                      ┃
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+╔══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╗
+║ Message the model                                                                                                    ║
+╚══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════╝
+ Goal reported done — evidence: `bun test src/fetch.test.ts` exited 0   ^P commands  esc cancel  ^Y copy  ↑/↓ history   

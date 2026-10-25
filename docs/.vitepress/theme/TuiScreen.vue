@@ -1,11 +1,27 @@
 <script setup lang="ts">
-// The hero terminal: frames of the released Tuimark client exactly as tuimark
-// dumps them (hero.json, written by `bun run site:hero` in a release commit),
-// in its dark theme. Text keeps its cells whatever monospace font the reader
-// has; box and block glyphs are drawn as paths, so borders join like they do
-// in a terminal. The frames play once, then rest on the last.
-import { onMounted, ref } from 'vue'
-import hero from './hero.json'
+// A terminal screen of the home page: frames of the released Tuimark client
+// exactly as tuimark dumps them (screens.json, written by `bun run
+// site:screens` in a release commit), in its dark theme. Text keeps its cells
+// whatever monospace font the reader has; box and block glyphs are drawn as
+// paths, so borders join like they do in a terminal. A scene of several
+// frames plays once (when the page opens, or when it scrolls into view),
+// then rests on its last; without script, or with reduced motion, the last
+// frame is all there is.
+import { onBeforeUnmount, onMounted, ref } from 'vue'
+import data from './screens.json'
+
+const props = withDefaults(
+  defineProps<{
+    /** A scene of screens.json. */
+    scene: keyof typeof data.scenes
+    /** When it plays: as the page opens, or once half of it is in view. */
+    play?: 'load' | 'view'
+    /** Seconds before the first cut, and between cuts. */
+    start?: number
+    step?: number
+  }>(),
+  { play: 'view', start: 0.7, step: 1.6 },
+)
 
 type Run = [text: string, fg: number, bg: number, flags: number]
 
@@ -14,7 +30,7 @@ const CW = 10
 const CH = 20
 const BASELINE = 14.6
 /** The screen's own background: rows paint only where theirs differs. */
-const SCREEN = hero.colors.indexOf('#0d1117')
+const SCREEN = data.colors.indexOf('#0d1117')
 const BOLD = 1
 const DIM = 2
 const ITALIC = 4
@@ -118,9 +134,9 @@ function draw(lines: Run[][]): Frame {
     let cell = 0
     for (const [text, fg, bg, flags] of runs) {
       const cells = Array.from(text)
-      const fill = hero.colors[fg] ?? '#e6edf3'
+      const fill = data.colors[fg] ?? '#e6edf3'
       if (bg !== SCREEN)
-        frame.bg.push({ x: cell * CW, y, w: cells.length * CW, h: CH, fill: hero.colors[bg] ?? '', alpha: 1 })
+        frame.bg.push({ x: cell * CW, y, w: cells.length * CW, h: CH, fill: data.colors[bg] ?? '', alpha: 1 })
       // A run's text, cut where a glyph is drawn instead: each piece keeps
       // its first cell and its width, and loses only its outer spaces.
       let piece: string[] = []
@@ -169,11 +185,14 @@ function draw(lines: Run[][]): Frame {
   return frame
 }
 
-const screens = hero.screens.map((screen) => ({
+const screens = data.scenes[props.scene].screens.map((screen, index, all) => ({
   cols: screen.cols,
   rows: screen.rows,
+  // The widest screen, and the narrower one the page falls back to.
+  size: all.length === 1 ? 'only' : index === 0 ? 'wide' : 'narrow',
   frames: screen.frames.map((frame) => draw(frame.lines as unknown as Run[][])),
 }))
+const frames = screens[0]?.frames.length ?? 0
 
 const textStyle = (flags: number) => ({
   fontWeight: flags & BOLD ? 700 : undefined,
@@ -182,34 +201,56 @@ const textStyle = (flags: number) => ({
   opacity: flags & DIM ? 0.6 : undefined,
 })
 
-// The frames play when the page opens, unless the reader asked for less
-// motion; without script, or with reduced motion, the last frame shows.
+// One frame has nothing to play. Several play once, unless the reader asked
+// for less motion; a scene that plays in view waits for half of it to show.
 const root = ref<HTMLElement | null>(null)
+let observer: IntersectionObserver | undefined
 onMounted(() => {
   const el = root.value
-  if (!el || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return
+  if (!el || frames < 2 || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return
+  if (props.play === 'load') {
+    el.classList.add('is-armed')
+    requestAnimationFrame(() => el.classList.add('is-playing'))
+    return
+  }
+  if (typeof IntersectionObserver === 'undefined') return
   el.classList.add('is-armed')
-  requestAnimationFrame(() => el.classList.add('is-playing'))
+  observer = new IntersectionObserver(
+    (entries) => {
+      if (!entries.some((entry) => entry.isIntersecting)) return
+      el.classList.add('is-playing')
+      observer?.disconnect()
+    },
+    { threshold: 0.5 },
+  )
+  observer.observe(el)
 })
+onBeforeUnmount(() => observer?.disconnect())
 </script>
 
 <template>
-  <div ref="root" class="la-hero-screens">
+  <div
+    ref="root"
+    class="la-tui-screens"
+    :class="`la-tui-${scene}`"
+    :style="{ '--start': `${start}s`, '--step': `${step}s` }"
+  >
     <div
       v-for="screen in screens"
       :key="screen.cols"
-      class="la-hero-screen"
-      :class="`la-hero-screen-${screen.cols}`"
+      class="la-tui-screen"
+      :class="`la-tui-screen-${screen.size}`"
     >
       <svg
         v-for="(frame, index) in screen.frames"
         :key="index"
-        class="la-hero-frame"
+        class="la-tui-frame"
+        :style="{ '--frame': index }"
         :viewBox="`0 0 ${screen.cols * CW} ${screen.rows * CH}`"
         aria-hidden="true"
         focusable="false"
       >
-        <rect class="la-hero-bg" :width="screen.cols * CW" :height="screen.rows * CH" />
+        <rect class="la-tui-bg" :width="screen.cols * CW" :height="screen.rows * CH" />
         <rect
           v-for="(r, i) in frame.bg"
           :key="`b${i}`"
@@ -234,7 +275,7 @@ onMounted(() => {
           :key="`s${i}`"
           :d="s.d"
           :stroke="s.stroke"
-          :class="`la-hero-${s.weight}`"
+          :class="`la-tui-${s.weight}`"
         />
         <text
           v-for="(t, i) in frame.texts"
@@ -246,7 +287,7 @@ onMounted(() => {
           lengthAdjust="spacing"
           :style="textStyle(t.flags)"
         >{{ t.text }}</text>
-        <g v-for="(s, i) in frame.spins" :key="`p${i}`" class="la-hero-spin" :fill="s.fill">
+        <g v-for="(s, i) in frame.spins" :key="`p${i}`" class="la-tui-spin" :fill="s.fill">
           <text
             v-for="(glyph, phase) in SPIN"
             :key="glyph"

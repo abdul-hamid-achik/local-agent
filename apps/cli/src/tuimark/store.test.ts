@@ -311,6 +311,26 @@ test("wrapping keeps every character, repeated spaces included", () => {
   expect(unwrap(wide)).toBe("日本語".repeat(20));
 });
 
+test("wrapping breaks after a space and keeps every character", () => {
+  const line =
+    "Context asked: 32768 tokens (planned: its KV cache takes 1.0 GiB of the 5.4 GiB left after the weights and headroom)";
+  const rows = wrapLine(line, 40);
+  expect(unwrap(rows)).toBe(line);
+  expect(rows.every((r) => Bun.stringWidth(r) <= 40)).toBe(true);
+  // Every row but the last ends at a space, so no word is split.
+  expect(rows.slice(0, -1).every((r) => r.endsWith(" "))).toBe(true);
+  expect(rows.join("|")).not.toMatch(/hea\|/);
+  // A word longer than half a row still breaks at the cell it fills.
+  const path = `see ${"x".repeat(60)}`;
+  const hard = wrapLine(path, 30);
+  expect(hard[0]).toBe(path.slice(0, 30));
+  expect(unwrap(hard)).toBe(path);
+  // A row narrower than an arrow and a word still ends.
+  expect(unwrap(wrapLine("ab cd ef gh", 3))).toBe("ab cd ef gh");
+  // The details viewer and the panels wrap the same way.
+  expect(detailsRows(line, 40).map((r) => r.t)).toEqual(rows);
+});
+
 test("a long one-line argument is fully visible after wrapping", () => {
   const args = JSON.stringify({ query: "x".repeat(500), tail: "THE END" });
   const state = approvalState(

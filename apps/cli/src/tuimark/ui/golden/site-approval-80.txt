@@ -1,0 +1,31 @@
+=== grid 80x30 ===
+ Local Agent     build  LOCAL  qwen3.5:4b-q4_K_M     ctx 2.1k/32k  ▊░░░░░░░░░░░ 
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ You                                                                          │
+│ Raise the provider timeout to 15 seconds and run its tests.                  │
+│                                                                              │
+│ Assistant                                                                    │
+│ I'll read the provider, raise the timeout, then run the focused tests.       │
+│ ╭─ Edit packages/runtime/src/provider.ts? ─────────────────────────────────╮ │
+│ │                                                                          │ │
+│ │  Apply this change to the workspace.                                     │ │
+│ │  ┌────────────────────────────────────────────────────────────────────┐  │ │
+│ │  │--- a/packages/runtime/src/provider.ts                              │  │ │
+│ │  │+++ b/packages/runtime/src/provider.ts                              │  │ │
+│ │  │@@ -1,2 +1,2 @@                                                     │  │ │
+│ │  │ import { fetchJSON } from './http';                                │  │ │
+│ │  │-export const timeoutMs = 5_000;                                    │  │ │
+│ │  │+export const timeoutMs = 15_000;                                   │  │ │
+│ │  └────────────────────────────────────────────────────────────────────┘  │ │
+│ │  a allow file changes this session                                       │ │
+│ │                                                                          │ │
+│ │                                                     [ Deny ]  [ Allow ]  │ │
+│ │                                                                          │ │
+│ ╰──────────────────────────────────────────────────────────────────────────╯ │
+│                                                                              │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+╭──────────────────────────────────────────────────────────────────────────────╮
+│ Type to queue a message                                                      │
+╰──────────────────────────────────────────────────────────────────────────────╯
+ Waiting for approval · y allow · a session · ! always · n deny · Esc deny      

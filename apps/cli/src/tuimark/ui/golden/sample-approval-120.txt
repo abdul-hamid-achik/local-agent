@@ -15,8 +15,8 @@
 │ ╰───────────────────│  │+export async function fetchRetry(url, tries = 3) {                 ┃  │───────────────────╯ ┃
 │                     │  │+  for (let attempt = 1; ; attempt++) {                             ┃  │                     ┃
 │ Assistant           │  │+    try { return await fetch(url); }                               ┃  │                     ┃
-│ Done. The helper now│  │+    catch (e) { if (attempt === tries) throw e; await sleep(200 * a┃  │                     ┃
-│                     │  │↪ ttempt); }                                                        ┃  │                     ┃
+│ Done. The helper now│  │+    catch (e) { if (attempt === tries) throw e; await sleep(200 *  ┃  │                     ┃
+│                     │  │↪ attempt); }                                                       ┃  │                     ┃
 │ Assistant ⠿  waiting│  │+  }                                                                ┃  │                     ┃
 │                     │  │+}                                                                  │  │                     ┃
 │ ╭─ Edit ────────────│  └────────────────────────────────────────────────────────────────────┘  │───────────────────╮ ┃

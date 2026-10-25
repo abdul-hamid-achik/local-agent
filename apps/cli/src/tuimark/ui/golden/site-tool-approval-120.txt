@@ -1,0 +1,31 @@
+=== grid 120x30 ===
+ Local Agent             build  Ollama / loopback  qwen3.5:4b-q4_K_M              temporary  ctx 2.1k/32k  ▊░░░░░░░░░░░ 
+┌──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│ Validate ui/app.tui with the tuimark tools.                                                                          │
+│                                                                                                                      ┃
+│ ╭─ MCP · mcphub · re╭─ Call validate from server tuimark? ─────────────────────────────────────╮───────────────────╮ ┃
+│ │ ! unverified · 0.2│                                                                          │                   │ ┃
+│ │ {"query":"validate│  MCP tool validate from server tuimark, run by the gateway mcphub. Call  │                   │ ┃
+│ │ unverified · domai│  it with the arguments below.                                            │                   │ ┃
+│ │ {                 │  ┌────────────────────────────────────────────────────────────────────┐  │                   │ ┃
+│ │   "status": "confi│  │tuimark__validate via mcphub                                        │  │                   │ ┃
+│ │   "confidence": "h│  │{                                                                   │  │                   │ ┃
+│ │   "recommendation"│  │  "server": "tuimark",                                              │  │                   │ ┃
+│ │     "server": "tui│  │  "tool": "validate",                                               │  │                   │ ┃
+│ │     "tool": "valid│  │  "arguments": {                                                    │  │                   │ ┃
+│ │     "namespaced": │  │    "file": "ui/app.tui",                                           │  │                   │ ┃
+│ │ … 6 more lines · /│  │    "strict": true                                                  │  │                   │ ┃
+│ ╰───────────────────│  │  }                                                                 │  │───────────────────╯ ┃
+│                     │  │}                                                                   │  │                     ┃
+│ Assistant ⠿  waiting│  │                                                                    │  │                     ┃
+│                     │  │MCP effects are not verified by transport success.                  │  │                     ┃
+│ ╭─ MCP · mcphub · ca│  └────────────────────────────────────────────────────────────────────┘  │───────────────────╮ ┃
+│ │ ⠋  waiting for app│  a allow `tuimark__validate` this session                                │                   │ ┃
+│ │ {"server":"tuimark│                                                                          │                   │ ┃
+│ ╰───────────────────│                                                     [ Deny ]  [ Allow ]  │───────────────────╯ ┃
+│                     │                                                                          │                     ┃
+└─────────────────────╰──────────────────────────────────────────────────────────────────────────╯─────────────────────┘
+╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ Type to queue a message                                                                                              │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+ Waiting for approval · y allow · a session · ! always · n deny · Esc deny   a session  ! always  pgup/pgdn scroll      

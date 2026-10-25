@@ -389,35 +389,47 @@ body {
 }
 
 /*
- * The hero terminal (HeroTerminal.vue): frames of the client as tuimark
- * dumps them, in its dark theme, so the page shows what the client draws.
- * A viewBox unit is a pixel of a 10 by 20 cell; the text is sized so 0.6em
- * is about a cell, and each piece is held to its cells whatever the font.
+ * A terminal screen (TuiScreen.vue): frames of the client as tuimark dumps
+ * them, in its dark theme, so the page shows what the client draws. A
+ * viewBox unit is a pixel of a 10 by 20 cell; the text is sized so 0.6em is
+ * about a cell, and each piece is held to its cells whatever the font.
  */
-.la-hero-screens {
+.la-tui-screens {
   container-type: inline-size;
 }
 
-.la-hero-screen {
+.la-tui-screen {
   display: grid;
 }
 
-/* 80 columns while a cell stays readable; the client's 56-column layout below. */
-.la-hero-screen-56 {
+/* The wide screen while a cell stays readable (6.5 px), the client's
+   narrower layout below that: 80 and 56 columns for the hero, 64 and 48
+   for the panels. */
+.la-tui-screen-narrow {
   display: none;
 }
 
 @container (max-width: 520px) {
-  .la-hero-screen-80 {
+  .la-tui-hero .la-tui-screen-wide {
     display: none;
   }
 
-  .la-hero-screen-56 {
+  .la-tui-hero .la-tui-screen-narrow {
     display: grid;
   }
 }
 
-.la-hero-frame {
+@container (max-width: 416px) {
+  .la-tui-screens:not(.la-tui-hero) .la-tui-screen-wide {
+    display: none;
+  }
+
+  .la-tui-screens:not(.la-tui-hero) .la-tui-screen-narrow {
+    display: grid;
+  }
+}
+
+.la-tui-frame {
   display: block;
   grid-area: 1 / 1;
   width: 100%;
@@ -428,112 +440,88 @@ body {
   forced-color-adjust: none;
 }
 
-.la-hero-frame text {
+.la-tui-frame text {
   white-space: pre;
 }
 
-.la-hero-bg {
+.la-tui-bg {
   fill: #0d1117;
 }
 
-.la-hero-light,
-.la-hero-heavy {
+.la-tui-light,
+.la-tui-heavy {
   fill: none;
   stroke-linecap: square;
 }
 
-.la-hero-light {
+.la-tui-light {
   stroke-width: 1.25;
 }
 
-.la-hero-heavy {
+.la-tui-heavy {
   stroke-width: 3;
 }
 
-/* At rest (no script, reduced motion, or once played): the approval, the
-   last frame, with each spinner on its first glyph. */
-.la-hero-frame:not(:last-child) {
+/* The window a panel's screen sits in: the terminal's own background. */
+.la-tui-window {
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid #30363d;
+  border-radius: 14px;
+  background: #0d1117;
+}
+
+/* At rest (no script, reduced motion, or once played): the last frame,
+   with each spinner on its first glyph. */
+.la-tui-frame:not(:last-child) {
   visibility: hidden;
 }
 
-.la-hero-spin text:not(:first-child) {
+.la-tui-spin text:not(:first-child) {
   opacity: 0;
 }
 
-/* Played once, after the hero has risen: the model thinking, its finished
-   cards, then the approval, which stays. Frames cut like a terminal redraws,
-   each over the one before. The last frame shows at 3.9 s and nothing moves
-   after 4.7 s: the spinners' last lit glyph (phase 9 of their fourth turn)
-   goes out then, and the approval has none (WCAG 2.2.2). */
-.la-hero-screens.is-armed .la-hero-frame {
+/* Armed, before it plays: the first frame. */
+.la-tui-screens.is-armed .la-tui-frame {
   visibility: hidden;
 }
 
-.la-hero-screens.is-armed .la-hero-frame:first-child {
+.la-tui-screens.is-armed .la-tui-frame:first-child {
   visibility: visible;
 }
 
-.la-hero-screens.is-playing .la-hero-frame {
-  animation: 3.2s linear 0.7s both;
+/* Played once: the first frame through --start and one --step, each next
+   one for a --step, the last for good. Frames cut like a terminal redraws,
+   each over the one before. The hero's last frame shows at 3.9 s and nothing
+   moves after 4.7 s, when the spinners' last lit glyph (phase 9 of their
+   fourth turn) goes out; no scene moves for longer than 5 s (WCAG 2.2.2). */
+.la-tui-screens.is-playing .la-tui-frame {
+  animation: la-tui-on var(--step) linear calc(var(--start) + var(--frame) * var(--step));
 }
 
-.la-hero-screens.is-playing .la-hero-frame:nth-child(1) {
-  animation-name: la-hero-first;
+.la-tui-screens.is-playing .la-tui-frame:first-child {
+  visibility: hidden;
+  animation-duration: calc(var(--start) + var(--step));
+  animation-delay: 0s;
 }
 
-.la-hero-screens.is-playing .la-hero-frame:nth-child(2) {
-  animation-name: la-hero-middle;
-}
-
-.la-hero-screens.is-playing .la-hero-frame:nth-child(3) {
-  animation-name: la-hero-last;
+.la-tui-screens.is-playing .la-tui-frame:last-child {
+  animation-fill-mode: forwards;
 }
 
 /* The client's spinner: ten glyphs, 100 ms each, four turns. */
-.la-hero-screens.is-playing .la-hero-spin text {
-  animation: la-hero-tick 1s linear calc(0.7s + var(--phase) * 100ms) 4;
+.la-tui-screens.is-playing .la-tui-spin text {
+  animation: la-tui-tick 1s linear calc(var(--start) + var(--phase) * 100ms) 4;
 }
 
-@keyframes la-hero-first {
-  0%,
-  50% {
-    visibility: visible;
-  }
-
-  50.01%,
-  100% {
-    visibility: hidden;
-  }
-}
-
-@keyframes la-hero-middle {
-  0%,
-  49.99% {
-    visibility: hidden;
-  }
-
-  50%,
-  99.99% {
-    visibility: visible;
-  }
-
-  100% {
-    visibility: hidden;
-  }
-}
-
-@keyframes la-hero-last {
-  0%,
-  99.99% {
-    visibility: hidden;
-  }
-
-  100% {
+@keyframes la-tui-on {
+  from,
+  to {
     visibility: visible;
   }
 }
 
-@keyframes la-hero-tick {
+@keyframes la-tui-tick {
   0%,
   9.99% {
     opacity: 1;
@@ -779,103 +767,11 @@ body {
   box-shadow: 0 24px 70px rgba(17, 21, 18, 0.2);
 }
 
-.la-inventory-head {
-  display: flex;
-  min-height: 68px;
-  align-items: center;
-  justify-content: space-between;
-  gap: 20px;
-  padding: 0 22px;
+/* The model section's /provider screen, on the terminal's own background. */
+.la-inventory-screen {
+  padding: 14px;
   border-bottom: 1px solid var(--la-terminal-line);
-}
-
-.la-inventory-head > div {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-}
-
-.la-inventory-head span {
-  color: var(--la-terminal-copper);
-  font-family: var(--vp-font-family-mono);
-  font-size: 10px;
-  font-weight: 720;
-  letter-spacing: 0.1em;
-}
-
-.la-inventory-head strong {
-  font-size: 15px;
-  font-weight: 670;
-}
-
-.la-inventory-head code {
-  color: var(--la-terminal-muted);
-  background: transparent;
-  font-size: 10px;
-}
-
-.la-inventory-rows {
-  padding-inline: 22px;
-}
-
-.la-model-row {
-  display: grid;
-  grid-template-columns: 62px minmax(0, 1fr) auto;
-  gap: 14px;
-  align-items: center;
-  min-height: 69px;
-  border-bottom: 1px solid var(--la-terminal-line);
-}
-
-.la-model-location {
-  color: var(--la-terminal-copper);
-  font-family: var(--vp-font-family-mono);
-  font-size: 10px;
-  font-weight: 720;
-  letter-spacing: 0.08em;
-}
-
-.la-model-row > div {
-  display: flex;
-  min-width: 0;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.la-model-row strong {
-  overflow: hidden;
-  font-family: var(--vp-font-family-mono);
-  font-size: 11px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.la-model-row small {
-  color: var(--la-terminal-muted);
-  font-size: 10px;
-}
-
-.la-model-state {
-  padding: 4px 6px;
-  border: 1px solid var(--la-terminal-line);
-  border-radius: 5px;
-  color: var(--la-terminal-muted);
-  font-family: var(--vp-font-family-mono);
-  font-size: 10px;
-  font-weight: 720;
-  letter-spacing: 0.07em;
-  text-transform: uppercase;
-}
-
-.la-model-state-ready {
-  border-color: rgba(214, 227, 165, 0.38);
-  color: var(--la-terminal-phosphor);
-}
-
-.la-model-state-consent,
-.la-model-state-warned {
-  border-color: rgba(224, 138, 105, 0.45);
-  color: var(--la-terminal-copper);
+  background: #0d1117;
 }
 
 .la-consent-panel {
@@ -1103,54 +999,6 @@ body {
   color: var(--la-terminal-copper);
 }
 
-.la-request-block {
-  margin-top: 27px;
-  padding: 18px;
-  border: 1px solid var(--la-line-strong);
-  border-radius: 14px;
-  background: var(--la-panel-muted);
-}
-
-.la-request-block > div {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.la-request-block span,
-.la-request-block strong {
-  font-family: var(--vp-font-family-mono);
-  font-size: 10px;
-}
-
-.la-request-block span {
-  color: var(--la-faint);
-}
-
-.la-request-block code {
-  display: block;
-  margin-top: 18px;
-  overflow-wrap: anywhere;
-  color: var(--la-ink);
-  background: transparent;
-  font-size: 12px;
-}
-
-.la-request-block .la-request-state {
-  display: block;
-  width: fit-content;
-  margin-top: 17px;
-  padding: 5px 7px;
-  border: 1px solid color-mix(in srgb, var(--la-copper) 44%, transparent);
-  border-radius: 5px;
-  color: var(--la-copper);
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-}
-
 .la-policy-list,
 .la-goal-facts {
   margin: 24px 0 0;
@@ -1236,126 +1084,9 @@ body {
   font-size: 12px;
 }
 
-.la-question-box {
-  min-width: 0;
-  padding: 18px 20px;
-  border: 1px solid color-mix(in srgb, var(--la-copper) 55%, transparent);
-  border-radius: 14px;
-  color: var(--la-terminal-ink);
-  background: var(--la-graphite);
-  font-family: var(--vp-font-family-mono);
-  font-size: 12px;
-}
-
-.la-question-title {
-  color: var(--la-terminal-copper);
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-}
-
-.la-question-box p {
-  margin: 12px 0 0;
-  overflow-wrap: anywhere;
-}
-
-.la-question-box ol {
-  margin: 12px 0 0;
-  padding: 0;
-  list-style: none;
-}
-
-.la-question-box li {
-  padding: 3px 8px;
-  border-radius: 5px;
-  color: var(--la-terminal-muted);
-}
-
-.la-question-box li span {
-  margin-right: 6px;
-  color: var(--la-terminal-ink);
-}
-
-.la-question-box li small {
-  color: var(--la-terminal-muted);
-  font-size: 11px;
-}
-
-.la-question-box .la-question-sel {
-  color: var(--la-terminal-ink);
-  background: color-mix(in srgb, var(--la-terminal-copper) 22%, transparent);
-}
-
-.la-question-box .la-question-sel::before {
-  content: "› ";
-  color: var(--la-terminal-copper);
-}
-
-.la-question-hint {
-  margin-top: 12px;
-  color: var(--la-terminal-muted);
-  font-size: 10px;
-  overflow-wrap: anywhere;
-}
-
-.la-goal-run-head {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px 12px;
-  color: var(--la-terminal-muted);
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-}
-
-.la-goal-run-turn {
-  color: var(--la-terminal-copper);
-}
-
-.la-goal-run ol {
-  display: grid;
-  gap: 4px;
-  margin: 12px 0 0;
-  padding: 0;
-  list-style: none;
-}
-
-.la-goal-run li {
-  padding: 3px 8px;
-  border-radius: 5px;
-  color: var(--la-terminal-muted);
-  overflow-wrap: anywhere;
-}
-
-.la-goal-run li b {
-  margin-right: 6px;
-  color: var(--la-terminal-ink);
-  font-weight: 650;
-}
-
-.la-goal-run .la-goal-notice b {
-  color: var(--la-terminal-copper);
-}
-
-.la-goal-run .la-goal-end {
-  color: var(--la-terminal-ink);
-  background: color-mix(in srgb, var(--la-terminal-copper) 22%, transparent);
-}
-
-/*
- * The goal and the tool call play once, when they scroll into view (Home.vue
- * arms them): about 2.3 s and 1.9 s, well under five (WCAG 2.2.2). Unarmed,
- * they are static.
- */
-.la-goal-run.is-armed .la-goal-step {
-  opacity: 0;
-}
-
-.la-goal-run.is-playing .la-goal-step {
-  animation: la-enter 420ms var(--la-ease) both;
-  animation-delay: calc(var(--step) * 380ms);
+/* Panel 01's approval screen, under its copy. */
+.la-approval-screen {
+  margin-top: 27px;
 }
 
 .la-safety-band {
@@ -1688,7 +1419,6 @@ body {
     border-radius: 16px;
   }
 
-
   .la-invariant-strip {
     grid-template-columns: 1fr 1fr;
   }
@@ -1723,23 +1453,6 @@ body {
   .la-inventory {
     border-radius: 18px;
   }
-
-  .la-inventory-head,
-  .la-inventory-rows {
-    padding-inline: 16px;
-  }
-
-  .la-model-row {
-    grid-template-columns: 52px minmax(0, 1fr);
-  }
-
-  .la-model-state {
-    grid-column: 2;
-    width: fit-content;
-    margin-top: -12px;
-    margin-bottom: 12px;
-  }
-
   .la-consent-panel {
     margin: 16px;
   }
@@ -1829,16 +1542,20 @@ body {
   }
 
   .la-enter,
-  .la-goal-run .la-goal-step,
   .la-budget-bar i,
-  .la-hero-frame,
-  .la-hero-spin text,
+  .la-tui-frame,
+  .la-tui-spin text,
   .la-status-dot {
     animation: none;
   }
 
-  .la-goal-run.is-armed .la-goal-step {
-    opacity: 1;
+  /* A screen armed before the preference changed rests, as with no script. */
+  .la-tui-screens .la-tui-frame.la-tui-frame:not(:last-child) {
+    visibility: hidden;
+  }
+
+  .la-tui-screens .la-tui-frame.la-tui-frame:last-child {
+    visibility: visible;
   }
 
   .la-budget.is-armed .la-budget-bar i {

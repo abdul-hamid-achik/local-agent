@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { withBase } from 'vitepress'
 import { onBeforeUnmount, onMounted, ref } from 'vue'
-import HeroTerminal from './HeroTerminal.vue'
+import TuiScreen from './TuiScreen.vue'
 
 const repositoryURL = 'https://github.com/abdul-hamid-achik/local-agent'
 
@@ -35,21 +35,6 @@ const modes = [
   },
 ]
 
-const modelRows = [
-  {
-    name: 'qwen3.5:4b-q4_K_M',
-    location: 'LOCAL',
-    state: 'ready',
-    note: 'default — the smallest that passed the agent battery',
-  },
-  {
-    name: 'qwen3.5:4b',
-    location: 'LOCAL',
-    state: 'warned',
-    note: "if Ollama serves it on its MLX runner: it runs, with a warning — that runner ignores the size",
-  },
-]
-
 // The planner's budget on a 16 GB Mac for the default model, in GiB:
 // 11/16 of the memory, less the weights (3,324,173,934 bytes) and 2.5 GiB
 // of headroom; the 32768-token KV cache (32 KiB a token) fits in the rest.
@@ -60,32 +45,26 @@ const budgetParts = [
   { id: 'free', label: 'left', gib: 4.4 },
 ]
 
-// The goal, tool and budget illustrations each play once, when they scroll
-// into view. Without IntersectionObserver, or with reduced motion, they are
-// never armed and show their static look.
-const goalRun = ref<HTMLElement | null>(null)
-const toolRun = ref<HTMLElement | null>(null)
+// The budget bar plays once, when it scrolls into view (the screens play
+// themselves, TuiScreen.vue). Without IntersectionObserver, or with reduced
+// motion, it is never armed and shows its static look.
 const budgetBar = ref<HTMLElement | null>(null)
 let playObserver: IntersectionObserver | undefined
 
 onMounted(() => {
-  const els = [goalRun.value, toolRun.value, budgetBar.value].filter(
-    (el): el is HTMLElement => el !== null,
-  )
-  if (!els.length || typeof IntersectionObserver === 'undefined') return
+  const el = budgetBar.value
+  if (!el || typeof IntersectionObserver === 'undefined') return
   if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return
-  for (const el of els) el.classList.add('is-armed')
+  el.classList.add('is-armed')
   playObserver = new IntersectionObserver(
     (entries) => {
-      for (const entry of entries) {
-        if (!entry.isIntersecting) continue
-        entry.target.classList.add('is-playing')
-        playObserver?.unobserve(entry.target)
-      }
+      if (!entries.some((entry) => entry.isIntersecting)) return
+      el.classList.add('is-playing')
+      playObserver?.disconnect()
     },
     { threshold: 0.4 },
   )
-  for (const el of els) playObserver.observe(el)
+  playObserver.observe(el)
 })
 
 onBeforeUnmount(() => playObserver?.disconnect())
@@ -165,7 +144,7 @@ const ecosystemGroups = [
           aria-label="Illustrative local-agent session in the Tuimark client (a demo, not a real run): the model thinks, reads packages/runtime/src/provider.ts, raises its timeout in an edit whose card shows the diff, then a test command waits in an approval dialog, with the composer ready to queue a message"
           aria-describedby="terminal-caption"
         >
-          <HeroTerminal />
+          <TuiScreen scene="hero" play="load" />
         </div>
         <figcaption id="terminal-caption">
           A demo turn, drawn from the Tuimark client's own render of it: each tool card says how it
@@ -239,32 +218,20 @@ const ecosystemGroups = [
           <li>Any installed model with --model; context planned for your memory and capped at the model's native window.</li>
           <li>A model on Ollama's MLX runner gets a warning: there the size reserves nothing.</li>
           <li>A 15-second admission check before the screen opens.</li>
+          <li>/provider asks Ollama again at any time: the model, the planned context, and how it is loaded.</li>
         </ul>
         <a class="la-text-link" :href="withBase('/ollama-models')">
           Explore Ollama models <span aria-hidden="true">→</span>
         </a>
       </div>
 
-      <div class="la-inventory" aria-label="Illustrative Ollama model inventory">
-        <div class="la-inventory-head">
-          <div>
-            <span>OLLAMA</span>
-            <strong>Available models</strong>
-          </div>
-          <code>/api/tags</code>
-        </div>
-
-        <div class="la-inventory-rows">
-          <div v-for="model in modelRows" :key="model.name" class="la-model-row">
-            <span class="la-model-location">{{ model.location }}</span>
-            <div>
-              <strong>{{ model.name }}</strong>
-              <small>{{ model.note }}</small>
-            </div>
-            <span class="la-model-state" :class="`la-model-state-${model.state}`">
-              {{ model.state }}
-            </span>
-          </div>
+      <div class="la-inventory">
+        <div
+          class="la-inventory-screen"
+          role="img"
+          aria-label="The Tuimark client's /provider panel at the start of a session (a demo, not a real run): Ollama on loopback, model qwen3.5:4b-q4_K_M, 32768 tokens of context asked, planned because its KV cache takes 1.0 GiB of the 5.4 GiB left after the weights and headroom, and the model not loaded yet"
+        >
+          <TuiScreen scene="provider" />
         </div>
 
         <div class="la-consent-panel">
@@ -330,13 +297,12 @@ const ecosystemGroups = [
             execution.
           </p>
 
-          <div class="la-request-block">
-            <div>
-              <span>tool</span>
-              <strong>run_command</strong>
-            </div>
-            <code>$ bun test packages/runtime/…</code>
-            <span class="la-request-state">waiting for decision</span>
+          <div
+            class="la-tui-window la-approval-screen"
+            role="img"
+            aria-label="An edit waiting in the Tuimark client's approval dialog (a demo, not a real run): Edit packages/runtime/src/provider.ts, its diff raising timeoutMs from 5_000 to 15_000, with Deny and Allow, a session grant for file changes, and the status line y allow, a session, ! always, n deny"
+          >
+            <TuiScreen scene="approval" />
           </div>
 
           <dl class="la-policy-list">
@@ -407,17 +373,12 @@ const ecosystemGroups = [
             </p>
           </div>
 
-          <div class="la-question-box" role="img" aria-label="Illustrative question (a demo, not a real run) with three choices, the second one chosen">
-            <div aria-hidden="true">
-              <div class="la-question-title">Question · choose one</div>
-              <p>Which store should the cache use?</p>
-              <ol>
-                <li><span>1</span> Postgres</li>
-                <li class="la-question-sel"><span>2</span> SQLite <small>· one file</small></li>
-                <li><span>3</span> Memory only</li>
-              </ol>
-              <div class="la-question-hint">↑/↓ choose · enter answer · or type its number · esc skip</div>
-            </div>
+          <div
+            class="la-tui-window"
+            role="img"
+            aria-label="A question in the Tuimark client (a demo, not a real run): Which store should the cache use? Postgres, the existing database; SQLite, one file next to the binary, chosen; or Memory only, answered with the arrow keys and enter, a number, or esc to skip"
+          >
+            <TuiScreen scene="question" />
           </div>
         </article>
 
@@ -437,37 +398,11 @@ const ecosystemGroups = [
           </div>
 
           <div
-            ref="goalRun"
-            class="la-question-box la-goal-run"
+            class="la-tui-window"
             role="img"
-            aria-label="Illustrative goal (a demo, not a real run): two turns with an edit and a passing test command, ending with the model's done report and its evidence"
+            aria-label="A goal in the Tuimark client (a demo, not a real run), in three moments: turn 1 of 8 edits src/fetch.ts and reports continue; turn 2 runs bun test src/fetch.test.ts; the model reports done, and the closing notice reads Goal reported done, evidence: bun test src/fetch.test.ts exited 0, turn 2 of 8"
           >
-            <div aria-hidden="true">
-              <div class="la-goal-run-head">
-                <span>Local Agent</span>
-                <span>qwen3.5:4b</span>
-                <span class="la-goal-run-turn">goal 2/8</span>
-              </div>
-              <ol>
-                <li class="la-goal-step la-goal-notice" style="--step: 0">
-                  <b>Notice</b> [goal 1/8] Goal: make the fetch tests pass
-                </li>
-                <li class="la-goal-step" style="--step: 1"><b>Edit</b> ✓ src/fetch.ts</li>
-                <li class="la-goal-step la-goal-notice" style="--step: 2">
-                  <b>Notice</b> [goal 2/8] Continue toward the goal. Last status: the retry is in.
-                </li>
-                <li class="la-goal-step" style="--step: 3">
-                  <b>Command</b> ✓ bun test src/fetch.test.ts
-                </li>
-                <li class="la-goal-step" style="--step: 4">
-                  <b>Goal status</b> done · the fetch tests pass
-                </li>
-                <li class="la-goal-step la-goal-notice la-goal-end" style="--step: 5">
-                  <b>Notice</b> Goal reported done — evidence: bun test src/fetch.test.ts exited 0
-                </li>
-              </ol>
-              <div class="la-question-hint">/goal shows it · /goal stop or esc ends it</div>
-            </div>
+            <TuiScreen scene="goal" :start="0.4" />
           </div>
         </article>
 
@@ -481,43 +416,18 @@ const ecosystemGroups = [
               at all.
             </p>
             <p class="la-question-rule">
-              The card names the tool behind the gateway, never call_tool, so a session grant (a)
-              covers that one tool alone. A result the server does not mark as an error still reads
-              unverified.
+              The approval names the tool behind the gateway, never call_tool, so a session grant
+              (a) covers that one tool alone. A result the server does not mark as an error still
+              reads unverified.
             </p>
           </div>
 
           <div
-            ref="toolRun"
-            class="la-question-box la-goal-run"
+            class="la-tui-window"
             role="img"
-            aria-label="Illustrative MCP call through a gateway (a demo, not a real run): the model resolves a validate tool, its card names the downstream tool, and the result reads unverified"
+            aria-label="An MCP call through the gateway mcphub in the Tuimark client (a demo, not a real run): the approval dialog asks Call validate from server tuimark?, run by the gateway mcphub, with its arguments; then the call's card reads unverified over the server's answer, ok with no diagnostics"
           >
-            <div aria-hidden="true">
-              <div class="la-goal-run-head">
-                <span>Local Agent</span>
-                <span>qwen3.5:4b</span>
-                <span class="la-goal-run-turn">build</span>
-              </div>
-              <ol>
-                <li class="la-goal-step" style="--step: 0">
-                  <b>You</b> validate ui/app.tui
-                </li>
-                <li class="la-goal-step" style="--step: 1">
-                  <b>MCP</b> ✓ resolve_tool → tuimark__validate · confident
-                </li>
-                <li class="la-goal-step la-goal-notice" style="--step: 2">
-                  <b>Approve</b> Call validate from server tuimark? Run by the gateway mcphub
-                </li>
-                <li class="la-goal-step" style="--step: 3">
-                  <b>MCP</b> tuimark validate · ok · 0 diagnostics
-                </li>
-                <li class="la-goal-step la-goal-notice la-goal-end" style="--step: 4">
-                  <b>Result</b> unverified — the server answered; the check is yours
-                </li>
-              </ol>
-              <div class="la-question-hint">y allow · a session · ! always · n deny · esc deny</div>
-            </div>
+            <TuiScreen scene="tools" :start="0.4" :step="2.4" />
           </div>
         </article>
       </div>

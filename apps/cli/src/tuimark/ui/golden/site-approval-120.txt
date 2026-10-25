@@ -1,0 +1,31 @@
+=== grid 120x30 ===
+ Local Agent             build  Ollama / loopback  qwen3.5:4b-q4_K_M              temporary  ctx 2.1k/32k  ▊░░░░░░░░░░░ 
+┌──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│ You                                                                                                                  │
+│ Raise the provider timeout to 15 seconds and run its tests.                                                          │
+│                                                                                                                      │
+│ Assistant                                                                                                            │
+│ I'll read the provider, raise the timeout, then run the focused tests.                                               │
+│                     ╭─ Edit packages/runtime/src/provider.ts? ─────────────────────────────────╮                     │
+│ ╭─ Read ────────────│                                                                          │───────────────────╮ │
+│ │ ✓ succeeded · 0.2s│  Apply this change to the workspace.                                     │                   │ │
+│ │ packages/runtime/s│  ┌────────────────────────────────────────────────────────────────────┐  │                   │ │
+│ │ 1: import { fetchJ│  │--- a/packages/runtime/src/provider.ts                              │  │                   │ │
+│ │ 2: export const ti│  │+++ b/packages/runtime/src/provider.ts                              │  │                   │ │
+│ ╰───────────────────│  │@@ -1,2 +1,2 @@                                                     │  │───────────────────╯ │
+│                     │  │ import { fetchJSON } from './http';                                │  │                     │
+│ Assistant ⠿  waiting│  │-export const timeoutMs = 5_000;                                    │  │                     │
+│                     │  │+export const timeoutMs = 15_000;                                   │  │                     │
+│ ╭─ Edit ────────────│  └────────────────────────────────────────────────────────────────────┘  │───────────────────╮ │
+│ │ ⠋  waiting for app│  a allow file changes this session                                       │                   │ │
+│ │ packages/runtime/s│                                                                          │                   │ │
+│ ╰───────────────────│                                                     [ Deny ]  [ Allow ]  │───────────────────╯ │
+│                     │                                                                          │                     │
+│                     ╰──────────────────────────────────────────────────────────────────────────╯                     │
+│                                                                                                                      │
+│                                                                                                                      │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ Type to queue a message                                                                                              │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+ Waiting for approval · y allow · a session · ! always · n deny · Esc deny   a session  ! always  pgup/pgdn scroll      

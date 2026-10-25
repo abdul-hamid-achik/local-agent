@@ -13,7 +13,7 @@
 │  │+  for (let attempt = 1; ; attempt++) {             ┃  │
 │  │+    try { return await fetch(url); }               ┃  │
 │  │+    catch (e) { if (attempt === tries) throw e; aw…┃  │
-│  │↪ ttempt); }                                        ┃  │
+│  │↪ attempt); }                                       ┃  │
 │  │+  }                                                ┃  │
 │  │+}                                                  │  │
 │  └────────────────────────────────────────────────────┘  │

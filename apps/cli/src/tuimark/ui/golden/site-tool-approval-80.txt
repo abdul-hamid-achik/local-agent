@@ -1,0 +1,31 @@
+=== grid 80x30 ===
+ Local Agent     build  LOCAL  qwen3.5:4b-q4_K_M     ctx 2.1k/32k  ▊░░░░░░░░░░░ 
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ Validate ui/app.tui with the tuimark tools.                                  │
+│                                                                              ┃
+│ ╭─ Call validate from server tuimark? ─────────────────────────────────────╮ ┃
+│ │                                                                          │ ┃
+│ │  MCP tool validate from server tuimark, run by the gateway mcphub. Call  │ ┃
+│ │  it with the arguments below.                                            │ ┃
+│ │  ┌────────────────────────────────────────────────────────────────────┐  │ ┃
+│ │  │tuimark__validate via mcphub                                        │  │ ┃
+│ │  │{                                                                   │  │ ┃
+│ │  │  "server": "tuimark",                                              │  │ ┃
+│ │  │  "tool": "validate",                                               │  │ ┃
+│ │  │  "arguments": {                                                    │  │ ┃
+│ │  │    "file": "ui/app.tui",                                           │  │ ┃
+│ │  │    "strict": true                                                  │  │ ┃
+│ │  │  }                                                                 │  │ ┃
+│ │  │}                                                                   │  │ ┃
+│ │  │                                                                    │  │ ┃
+│ │  │MCP effects are not verified by transport success.                  │  │ ┃
+│ │  └────────────────────────────────────────────────────────────────────┘  │ ┃
+│ │  a allow `tuimark__validate` this session                                │ ┃
+│ │                                                                          │ ┃
+│ │                                                     [ Deny ]  [ Allow ]  │ ┃
+│ │                                                                          │ ┃
+└─╰──────────────────────────────────────────────────────────────────────────╯─┘
+╭──────────────────────────────────────────────────────────────────────────────╮
+│ Type to queue a message                                                      │
+╰──────────────────────────────────────────────────────────────────────────────╯
+ Waiting for approval · y allow · a session · ! always · n deny · Esc deny      

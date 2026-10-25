@@ -81,7 +81,7 @@ function fitContext(facts: {
     if (step * kv <= budget)
       return {
         context: step,
-        reason: `planned: its KV cache takes ${gib(step * kv)} of the ${gib(Math.max(0, budget))} left after the weights`,
+        reason: `planned: its KV cache takes ${gib(step * kv)} of the ${gib(Math.max(0, budget))} left after the weights and headroom`,
       };
   }
   // Memory is tight: the long-standing 16384 (or 12288) still stands when

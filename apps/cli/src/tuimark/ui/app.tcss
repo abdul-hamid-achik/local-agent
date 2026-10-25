@@ -84,7 +84,9 @@
 #log:focus { border: double; border-color: $focus; }
 .la-welcome { height: auto; layout: column; margin: 0 0 1 0; }
 .la-welcome-title { bold: true; width: auto; }
-.la-welcome-line { width: auto; color: $muted; }
+/* Its own width up to the row's, so a line longer than a narrow terminal
+ * (the default model's name and provider at 40 columns) wraps, not cut. */
+.la-welcome-line { width: auto; max-width: 100%; color: $muted; }
 #rows, #live { height: auto; layout: column; }
 
 .la-msg { height: auto; layout: column; margin: 0 0 1 0; }
@@ -154,7 +156,9 @@ span.del { color: $danger; }
 .la-earlier:focus { color: $accent; }
 
 #status { gap: 1; padding: 0 1; }
-.la-statustext { width: auto; padding: 0 2 0 0; }
+/* Never wider than the row, so a status longer than it ends in … (wrap=
+ * "truncate") instead of being cut by the row mid-word. */
+.la-statustext { width: auto; max-width: 100%; padding: 0 2 0 0; }
 .la-hints { width: 1fr; justify: end; }
 /* Narrow terminals: the context meter goes too (the mode and the locality
  * stay), and the status text is capped so at least the first hint (^P

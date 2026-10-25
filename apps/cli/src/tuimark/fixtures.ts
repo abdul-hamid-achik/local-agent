@@ -2,7 +2,12 @@
 // They are built with the same code the client runs (blocks.ts, store.ts), so a
 // change to a store shape shows up in the goldens instead of in a terminal.
 
-import type { ApprovalRequest, Message, Question } from "@local-agent/runtime";
+import {
+  type ApprovalRequest,
+  type Message,
+  planContextSize,
+  type Question,
+} from "@local-agent/runtime";
 import {
   type Block,
   liveToolView,
@@ -26,8 +31,10 @@ import {
   idleStatus,
   initialStore,
   mcpLines,
+  PLACEHOLDER,
   PLACEHOLDER_BUSY,
   panelState,
+  providerLines,
   QUESTION_CARD_STATUS,
   QUESTION_PLACEHOLDER_CHOICE,
   QUESTION_PLACEHOLDER_TEXT,
@@ -423,8 +430,12 @@ const CHOICE_QUESTION: Question = {
 };
 
 /** An open ask_user question: its card waits, the composer answers. */
-function questionStore(question: Question, sel = -1): Store {
-  const { store, builder } = base();
+function questionStore(
+  question: Question,
+  sel = -1,
+  from: () => { store: Store; builder: ViewBuilder } = base,
+): Store {
+  const { store, builder } = from();
   builder.fromMessage({
     role: "assistant",
     content: "",
@@ -954,6 +965,334 @@ export function heroApprovalSample(): Store {
   return store;
 }
 
+// -------------------------------------------------------------- the website
+
+// The home page's panels show these as the client draws them (site-screens.ts),
+// on the hero's model and session: the edit before it ran, a question, a goal
+// in three moments, a tool run through an MCP gateway, and /provider. The
+// approval keys and their grants are the client's own, so a change to either
+// shows there. A sample that lays text out to the terminal (a dialog's
+// preview, a panel) takes the columns it is drawn at, as the controller
+// passes them; check.ts draws them all at 80.
+
+/** The hero's edit, as the dialog shows it before it runs. */
+const SITE_EDIT: ApprovalRequest = {
+  kind: "edit",
+  path: HERO_FILE,
+  before: "",
+  after: "",
+  diff: [
+    `--- a/${HERO_FILE}`,
+    `+++ b/${HERO_FILE}`,
+    "@@ -1,2 +1,2 @@",
+    " import { fetchJSON } from './http';",
+    "-export const timeoutMs = 5_000;",
+    "+export const timeoutMs = 15_000;",
+  ].join("\n"),
+  identity: "site",
+};
+
+/** Panel 01: the hero's edit waits for a decision, its diff in the dialog. */
+export function siteApprovalSample(cols = 80): Store {
+  const { store, builder } = heroBase(HERO_MESSAGES.slice(0, 4));
+  builder.fromMessage(HERO_MESSAGES[4] as Message);
+  store.live = liveToolView(builder.takeCall(), "edit", "approval");
+  store.approval = approvalState(SITE_EDIT, cols);
+  store.head = headState("approval", 6);
+  store.status = armedStatus(store.approval);
+  return store;
+}
+
+/** Panel 03: the cache question, its second choice chosen. */
+export function siteQuestionSample(): Store {
+  const store = questionStore(CHOICE_QUESTION, 1, () =>
+    heroBase(HERO_MESSAGES.slice(0, 1)),
+  );
+  return store;
+}
+
+const SITE_TEST = ["bun", "test", "src/fetch.test.ts"];
+const SITE_GOAL = "make the fetch tests pass";
+const SITE_GOAL_TURN_1: Message[] = [
+  { role: "user", content: `[goal 1/8] Goal: ${SITE_GOAL}` },
+  { role: "assistant", content: "", tool_calls: [EDIT_CALL] },
+  {
+    role: "tool",
+    tool_name: "edit",
+    tool_call_id: "call-1",
+    content: JSON.stringify({
+      status: "succeeded",
+      output: "Updated src/fetch.ts. Verification has not been run.",
+    }),
+  },
+  {
+    role: "assistant",
+    content: "",
+    tool_calls: [
+      {
+        id: "call-goal-1",
+        function: {
+          name: "goal_status",
+          arguments: {
+            state: "continue",
+            summary: "the retry is in; the tests are next",
+          },
+        },
+      },
+    ],
+  },
+  {
+    role: "tool",
+    tool_name: "goal_status",
+    tool_call_id: "call-goal-1",
+    content: JSON.stringify({
+      status: "succeeded",
+      output:
+        "Recorded: continue. The host sends the next turn when this one ends.",
+    }),
+  },
+];
+const SITE_TEST_CALL = {
+  id: "call-test",
+  function: { name: "run_command", arguments: { argv: SITE_TEST } },
+};
+const SITE_GOAL_TURN_2: Message[] = [
+  {
+    role: "user",
+    content: `[goal 2/8] Continue toward the goal: ${SITE_GOAL}. Last status: the retry is in; the tests are next.`,
+  },
+  { role: "assistant", content: "", tool_calls: [SITE_TEST_CALL] },
+  {
+    role: "tool",
+    tool_name: "run_command",
+    tool_call_id: "call-test",
+    content: JSON.stringify({
+      status: "succeeded",
+      output: JSON.stringify({
+        output:
+          "src/fetch.test.ts:\n✓ retries three times\n✓ rethrows the last error\n\n 2 pass\n 0 fail\n",
+        exitCode: 0,
+        timedOut: false,
+        truncated: false,
+      }),
+    }),
+  },
+  {
+    role: "assistant",
+    content: "",
+    tool_calls: [
+      {
+        id: "call-goal-2",
+        function: {
+          name: "goal_status",
+          arguments: {
+            state: "done",
+            summary: "the fetch tests pass",
+            evidence: [{ kind: "command", ref: SITE_TEST.join(" ") }],
+          },
+        },
+      },
+    ],
+  },
+  {
+    role: "tool",
+    tool_name: "goal_status",
+    tool_call_id: "call-goal-2",
+    content: JSON.stringify({
+      status: "succeeded",
+      output:
+        "Recorded: done. The goal ends with this turn: tell the user what was done.",
+    }),
+  },
+  {
+    role: "assistant",
+    content: "Done: the helper retries three times, and both fetch tests pass.",
+  },
+];
+
+/** A goal's store at `turn`, its header naming it while it runs. */
+function siteGoal(
+  messages: Message[],
+  turn: number,
+): {
+  store: Store;
+  builder: ViewBuilder;
+} {
+  const made = heroBase(messages);
+  made.store.header.goal = `goal ${turn}/8`;
+  made.store.header.goal_on = true;
+  return made;
+}
+
+/** Panel 04, first: turn 1 made the edit and reported where it stands. */
+export function siteGoalFirstSample(): Store {
+  const { store } = siteGoal(SITE_GOAL_TURN_1, 1);
+  store.live = streamingView("The retry is in; the tests run next turn.");
+  store.head = headState("streaming", 38);
+  return store;
+}
+
+/** Panel 04, then: turn 2 runs the tests. */
+export function siteGoalTestSample(): Store {
+  const { store, builder } = siteGoal(
+    [...SITE_GOAL_TURN_1, ...SITE_GOAL_TURN_2.slice(0, 1)],
+    2,
+  );
+  builder.fromMessage(SITE_GOAL_TURN_2[1] as Message);
+  // A running card stands in for the head, as headView hides it.
+  store.live = liveToolView(builder.takeCall(), "run_command", "running");
+  return store;
+}
+
+/** Panel 04, last: the model reported done, and the host says on what evidence. */
+export function siteGoalDoneSample(): Store {
+  const { store, builder } = siteGoal(
+    [...SITE_GOAL_TURN_1, ...SITE_GOAL_TURN_2],
+    2,
+  );
+  // As the controller ends a goal (endGoal): a notice after its turn, the
+  // reason in the status line, and the header's goal off.
+  const reason = `reported done — evidence: \`${SITE_TEST.join(" ")}\` exited 0`;
+  store.messages = [
+    ...store.messages,
+    builder.notice(
+      `Goal ${reason} · turn 2 of 8\nLast status (done): the fetch tests pass`,
+    ),
+  ];
+  store.header.goal_on = false;
+  store.status = `Goal ${reason}`;
+  store.placeholder = PLACEHOLDER;
+  return store;
+}
+
+const SITE_RESOLVE_CALL = {
+  id: "call-resolve",
+  function: {
+    name: "mcphub__resolve_tool",
+    arguments: { query: "validate a tuimark document" },
+  },
+};
+const SITE_VALIDATE_ARGS = {
+  server: "tuimark",
+  tool: "validate",
+  arguments: { file: "ui/app.tui", strict: true },
+};
+const SITE_VALIDATE_CALL = {
+  id: "call-validate",
+  function: { name: "mcphub__call_tool", arguments: SITE_VALIDATE_ARGS },
+};
+/** An MCP result as the runtime hands it over: the server's word, unverified. */
+const unverified = (text: unknown) =>
+  JSON.stringify({
+    status: "unverified",
+    output: JSON.stringify({
+      transport: "success",
+      domain: "unknown",
+      evidence: "unverified",
+      isError: false,
+      text: JSON.stringify(text),
+    }),
+  });
+const SITE_TOOL_MESSAGES: Message[] = [
+  { role: "user", content: "Validate ui/app.tui with the tuimark tools." },
+  { role: "assistant", content: "", tool_calls: [SITE_RESOLVE_CALL] },
+  {
+    role: "tool",
+    tool_name: "mcphub__resolve_tool",
+    tool_call_id: "call-resolve",
+    content: unverified({
+      status: "confident",
+      confidence: "high",
+      recommendation: {
+        server: "tuimark",
+        tool: "validate",
+        namespaced: "tuimark__validate",
+        required_fields: ["file"],
+      },
+      ambiguous: false,
+    }),
+  },
+];
+
+/** Panel 05, first: the gateway routed the goal; the call it routed to waits. */
+export function siteToolApprovalSample(cols = 80): Store {
+  const { store, builder } = heroBase(SITE_TOOL_MESSAGES);
+  builder.fromMessage({
+    role: "assistant",
+    content: "",
+    tool_calls: [SITE_VALIDATE_CALL],
+  });
+  store.live = liveToolView(
+    builder.takeCall(),
+    "mcphub__call_tool",
+    "approval",
+  );
+  store.approval = approvalState(
+    {
+      kind: "mcp",
+      name: "mcphub__call_tool",
+      argumentsJson: JSON.stringify(SITE_VALIDATE_ARGS),
+      target: "mcphub__tuimark__validate",
+      inner: "tuimark__validate",
+      gateway: "mcphub",
+    },
+    cols,
+  );
+  store.head = headState("approval", 9);
+  store.status = armedStatus(store.approval);
+  return store;
+}
+
+/** Panel 05, then: the call ran; its card reads unverified, as every MCP result does. */
+export function siteToolResultSample(): Store {
+  const { store } = heroBase([
+    ...SITE_TOOL_MESSAGES,
+    { role: "assistant", content: "", tool_calls: [SITE_VALIDATE_CALL] },
+    {
+      role: "tool",
+      tool_name: "mcphub__call_tool",
+      tool_call_id: "call-validate",
+      content: unverified({ ok: true, diagnostics: [] }),
+    },
+    {
+      role: "assistant",
+      content: "The server reports no diagnostics for ui/app.tui.",
+    },
+  ]);
+  store.placeholder = PLACEHOLDER;
+  return store;
+}
+
+/**
+ * The model section: `/provider` at the start of a session on a 16 GB Mac,
+ * the size planned as the planner plans it (the weights of the default
+ * model and its 32 KiB a token of KV cache), the model not loaded yet.
+ */
+export function siteProviderSample(cols = 80): Store {
+  const plan = planContextSize({
+    weightsBytes: 3_324_173_934,
+    kvBytesPerToken: 32 * 1024,
+    totalMemory: 16 * 1024 ** 3,
+  });
+  const { store } = heroBase([]);
+  store.panel = panelState(
+    "Provider",
+    "",
+    providerLines({
+      provider: {
+        ...HERO_PROVIDER,
+        context_size: plan.context,
+        context_plan: plan.reason,
+      },
+      probe: { latencyMs: 3, loaded: null },
+    }).join("\n"),
+    cols,
+  );
+  store.placeholder = PLACEHOLDER;
+  store.status = "Provider";
+  return store;
+}
+
 export const SAMPLES = {
   sample: idleSample,
   "sample-empty": emptySample,
@@ -990,6 +1329,14 @@ export const SAMPLES = {
   "hero-thinking": heroThinkingSample,
   "hero-cards": heroCardsSample,
   "hero-approval": heroApprovalSample,
+  "site-approval": siteApprovalSample,
+  "site-question": siteQuestionSample,
+  "site-goal-first": siteGoalFirstSample,
+  "site-goal-test": siteGoalTestSample,
+  "site-goal-done": siteGoalDoneSample,
+  "site-tool-approval": siteToolApprovalSample,
+  "site-tool-result": siteToolResultSample,
+  "site-provider": siteProviderSample,
 } as const;
 
 // ----------------------------------------------------------------- inline stores

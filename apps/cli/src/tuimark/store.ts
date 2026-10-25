@@ -773,28 +773,40 @@ export function previewWidthInline(cols: number): number {
 const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 
 /**
- * Hard-wraps one line by display width. It keeps every character and every
- * space (CSS `wrap: wrap` would collapse repeated spaces, which corrupts a
- * diff). The continuation rows are marked with a leading arrow.
+ * Wraps one line by display width. It keeps every character and every space
+ * (CSS `wrap: wrap` would collapse repeated spaces, which corrupts a diff),
+ * so the rows joined back, arrows dropped, are the line. The continuation
+ * rows are marked with a leading arrow. A row breaks after its last space
+ * when that still fills half of it, so prose keeps its words whole, and
+ * otherwise at the cell it fills (a long path or token splits anyway).
  */
 export function wrapLine(text: string, width: number): string[] {
   if (Bun.stringWidth(text) <= width) return [text];
   const rows: string[] = [];
-  let row = "";
+  // The row being filled, as graphemes and their widths; `start` is where its
+  // text begins, after the arrow of a continuation row.
+  let row: string[] = [];
+  let widths: number[] = [];
+  let start = 0;
   let used = 0;
-  let limit = width;
   for (const { segment } of graphemes.segment(text)) {
     const w = Bun.stringWidth(segment);
-    if (used + w > limit && row !== "") {
-      rows.push(row);
-      row = "↪ ";
-      used = 2;
-      limit = width;
+    // A carried word can still overflow a very narrow row: break again.
+    while (used + w > width && row.length > start) {
+      const space = row.lastIndexOf(" ");
+      const head = widths.slice(0, space + 1).reduce((a, b) => a + b, 0);
+      const cut = space >= start && head * 2 >= width ? space + 1 : row.length;
+      rows.push(row.slice(0, cut).join(""));
+      row = ["↪ ", ...row.slice(cut)];
+      widths = [2, ...widths.slice(cut)];
+      start = 1;
+      used = widths.reduce((a, b) => a + b, 0);
     }
-    row += segment;
+    row.push(segment);
+    widths.push(w);
     used += w;
   }
-  rows.push(row);
+  rows.push(row.join(""));
   return rows;
 }
 
@@ -1216,7 +1228,7 @@ export function approvalState(
 export const DETAILS_MAX_ROWS = APPROVAL_MAX_ROWS;
 
 /**
- * The viewer's rows: the output hard-wrapped with the approval preview's
+ * The viewer's rows: the output wrapped with the approval preview's
  * machinery (every character kept, `↪` continuations), capped like it.
  * No add/delete coloring: tool output is not a diff.
  */

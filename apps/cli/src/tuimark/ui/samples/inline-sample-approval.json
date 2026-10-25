@@ -134,14 +134,14 @@
       },
       {
         "n": 8,
-        "t": "+    catch (e) { if (attempt === tries) throw e; await sleep(200 * attempt",
+        "t": "+    catch (e) { if (attempt === tries) throw e; await sleep(200 * ",
         "add": true,
         "del": false,
         "note": false
       },
       {
         "n": 9,
-        "t": "↪ ); }",
+        "t": "↪ attempt); }",
         "add": true,
         "del": false,
         "note": false
