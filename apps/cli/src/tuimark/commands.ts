@@ -218,7 +218,8 @@ export function runSlash(text: string, state: CommandState): CommandOutcome {
   if (permissions) {
     const grants = state.grants ?? [];
     const rules = state.rules ?? [];
-    const requested = permissions[1]?.toLowerCase();
+    // Words are matched whole: `clear  rules` (two spaces) is `clear rules`.
+    const requested = permissions[1]?.toLowerCase().split(/\s+/).join(" ");
     if (!requested) {
       // Both origins in one line: what this session granted (`a`) and what
       // the workspace's permissions.json holds.

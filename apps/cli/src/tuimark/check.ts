@@ -11,6 +11,7 @@
 // keys the hints promise. The binary is TUIMARK_BINARY, else the SDK's own
 // resolution (cache, then a checked download of the pinned release).
 
+import { rmSync } from "node:fs";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -33,6 +34,23 @@ const update = Bun.argv.includes("--update");
 const rows = 30;
 const widths = [80, 120];
 const failures: string[] = [];
+/** What the run compared and validated, for its closing line. */
+let goldens = 0;
+let validated = 0;
+
+/**
+ * Scratch directories of this run. They go on every way out: the end, a
+ * `finish()` (which exits at once) and a throw, none of which reach a `finally`.
+ */
+const scratchDirs = new Set<string>();
+process.on("exit", () => {
+  for (const dir of scratchDirs) rmSync(dir, { recursive: true, force: true });
+});
+async function scratchDir(prefix: string): Promise<string> {
+  const dir = await mkdtemp(join(tmpdir(), prefix));
+  scratchDirs.add(dir);
+  return dir;
+}
 
 const bin = await resolvePinned();
 
@@ -86,6 +104,7 @@ function parsed(text: string): unknown {
 }
 
 async function matches(path: string, expected: string, what: string) {
+  if (what === "golden") goldens++;
   const file = Bun.file(path);
   if (update) {
     await mkdir(dirname(path), { recursive: true });
@@ -140,6 +159,7 @@ for (const [name, make] of Object.entries(SAMPLES)) {
     "sample",
   );
   const valid = tuimark(["validate", "app.tui", "--data", data, "--strict"]);
+  validated++;
   if (valid.code === 0 && valid.out.trim() !== "ok")
     failures.push(`validate ${name}: ${valid.out}${valid.err}`.trim());
   for (const cols of widths) {
@@ -220,6 +240,7 @@ for (const [name, make] of Object.entries(INLINE_SAMPLES)) {
     "sample",
   );
   const valid = tuimark(["validate", "inline.tui", "--data", data, "--strict"]);
+  validated++;
   if (valid.code === 0 && valid.out.trim() !== "ok")
     failures.push(`validate ${name}: ${valid.out}${valid.err}`.trim());
   for (const cols of widths) {
@@ -322,7 +343,7 @@ for (const [name, make] of Object.entries(INLINE_SAMPLES)) {
       { palette: palette.palette, found: palette.found },
     ],
   ] as const;
-  const scratchCards = await mkdtemp(join(tmpdir(), "la-tuimark-cards-"));
+  const scratchCards = await scratchDir("la-tuimark-cards-");
   const cases: [string, string, string][] = modals.map(([sample, modal]) => [
     sample,
     modal,
@@ -630,6 +651,7 @@ for (const name of namedThemes(join(ui, "themes"))) {
     ["inline.tui", "inline-sample-palette", true],
   ] as const) {
     const themed = await themedDocument(ui, doc, name);
+    scratchDirs.add(dirname(themed));
     const label = `dump ${sample} --theme ${name}`;
     try {
       const json = parsed(
@@ -672,6 +694,14 @@ for (const name of namedThemes(join(ui, "themes"))) {
 // 4: every action fires, from the sample where its key is live. The event
 // list is compared exactly: an extra event (a dialog_confirm next to the
 // dialog_cancel that esc must fire) is a failure.
+/** One step of a `tuimark play --script`: a typo in a name fails the type check, not the replay. */
+type Step =
+  | { key: string }
+  | { paste: string }
+  | { set: { path: string; value: unknown } }
+  | { commit: { template: string; with: string } }
+  | { wheel: "up" | "down"; at: [number, number] }
+  | { click: [number, number] };
 interface Expect {
   sample: string;
   /** The document to replay. Default app.tui. */
@@ -681,7 +711,7 @@ interface Expect {
   /** Space-separated play steps, or `steps` when a step holds a space or a line break. */
   input: string;
   /** Explicit steps (`tuimark play --script`), used instead of `input`. */
-  steps?: object[];
+  steps?: Step[];
   /** The keyboard protocol of the replay (`kitty` or `legacy`). */
   keyboard?: string;
   /** The terminal width of the replay. Default 80. */
@@ -1945,7 +1975,7 @@ const plays: Expect[] = [
     input: "",
     steps: [
       { set: { path: "mouse_on", value: true } },
-      ...Array.from({ length: 40 }, () => ({ wheel: "up", at: [10, 5] })),
+      ...Array.from({ length: 40 }, (): Step => ({ wheel: "up", at: [10, 5] })),
     ],
     actions: [],
     screen: ["Add a retry to the fetch helper"],
@@ -1957,14 +1987,14 @@ const plays: Expect[] = [
     input: "",
     steps: [
       { set: { path: "mouse_on", value: false } },
-      ...Array.from({ length: 40 }, () => ({ wheel: "up", at: [10, 5] })),
+      ...Array.from({ length: 40 }, (): Step => ({ wheel: "up", at: [10, 5] })),
     ],
     actions: [],
     screen: ["Done. The helper now retries three times."],
     notScreen: ["Add a retry to the fetch helper"],
   },
 ];
-const scratch = await mkdtemp(join(tmpdir(), "la-tuimark-check-"));
+const scratch = await scratchDir("la-tuimark-check-");
 for (const check of plays) {
   let script: string[] = ["--input", check.input];
   if (check.steps) {
@@ -1982,7 +2012,9 @@ for (const check of plays) {
     `samples/${check.sample}.json`,
     "--cols",
     String(check.cols ?? 80),
-    ...(check.rows ? ["--rows", String(check.rows)] : []),
+    // Every play has a height: the binary's own default is not the harness's.
+    "--rows",
+    String(check.rows ?? rows),
     ...(check.keyboard ? ["--keyboard", check.keyboard] : []),
     ...(check.inline ? ["--inline"] : []),
     ...script,
@@ -1990,52 +2022,67 @@ for (const check of plays) {
     "json",
   ]);
   const label = `play ${check.sample} @${check.cols ?? 80} "${(check.steps ? JSON.stringify(check.steps) : check.input).slice(0, 40)}"`;
+  // A run that failed is already a failure, with its stderr; its output is
+  // not a result to check.
+  if (run.code !== 0) continue;
+  // Only the parse is guarded: a throw below is the harness's own bug.
+  let result: {
+    events: { action: string; value: unknown }[];
+    grid: string[];
+    scrollback?: { grid: string[] };
+  };
   try {
-    const result = JSON.parse(run.out) as {
-      events: { action: string; value: unknown }[];
-      grid: string[];
-      scrollback?: { grid: string[] };
-    };
-    const actions = result.events.map((e) => e.action);
-    if (JSON.stringify(actions) !== JSON.stringify(check.actions))
-      failures.push(
-        `${label}: events [${actions}], expected [${check.actions}]`,
-      );
-    else if ("value" in check && result.events.at(-1)?.value !== check.value)
-      failures.push(
-        `${label}: value ${JSON.stringify(result.events.at(-1)?.value)}, expected ${JSON.stringify(check.value)}`,
-      );
-    const screen = result.grid.join("\n");
-    for (const text of check.screen ?? [])
-      if (!screen.includes(text))
-        failures.push(`${label}: the screen does not show ${text}`);
-    for (const text of check.notScreen ?? [])
-      if (screen.includes(text))
-        failures.push(`${label}: the screen shows ${text} too early`);
-    const scrollbackGrid = result.scrollback?.grid ?? [];
-    const scrollback = scrollbackGrid.join("\n");
-    for (const text of check.scrollback ?? [])
-      if (!scrollback.includes(text))
-        failures.push(`${label}: the scrollback does not hold ${text}`);
-    for (const text of check.notScrollback ?? [])
-      if (scrollback.includes(text))
-        failures.push(`${label}: the scrollback holds ${text}`);
-    if (
-      check.scrollbackRows !== undefined &&
-      scrollbackGrid.length !== check.scrollbackRows
-    )
-      failures.push(
-        `${label}: scrollback has ${scrollbackGrid.length} rows, expected ${check.scrollbackRows}`,
-      );
-    if (check.scrollbackGolden)
-      await matches(
-        join(ui, "golden", check.scrollbackGolden),
-        `${scrollbackGrid.map((row) => row.trimEnd()).join("\n")}\n`,
-        "golden",
-      );
+    result = JSON.parse(run.out);
   } catch {
-    failures.push(`${label}: ${run.err || run.out}`.trim());
+    failures.push(
+      `${label}: tuimark printed no JSON: ${run.out.trim().slice(0, 200) || "(empty)"}`,
+    );
+    continue;
   }
+  if (!Array.isArray(result?.events) || !Array.isArray(result?.grid)) {
+    failures.push(
+      `${label}: the play JSON has no events and grid: ${run.out.trim().slice(0, 200)}`,
+    );
+    continue;
+  }
+  const actions = result.events.map((e) => e.action);
+  if (JSON.stringify(actions) !== JSON.stringify(check.actions))
+    failures.push(`${label}: events [${actions}], expected [${check.actions}]`);
+  else if ("value" in check && result.events.at(-1)?.value !== check.value)
+    failures.push(
+      `${label}: value ${JSON.stringify(result.events.at(-1)?.value)}, expected ${JSON.stringify(check.value)}`,
+    );
+  const screen = result.grid.join("\n");
+  for (const text of check.screen ?? [])
+    if (!screen.includes(text))
+      failures.push(`${label}: the screen does not show ${text}`);
+  for (const text of check.notScreen ?? [])
+    if (screen.includes(text))
+      failures.push(`${label}: the screen shows ${text} too early`);
+  const scrollbackGrid = result.scrollback?.grid ?? [];
+  const scrollback = scrollbackGrid.join("\n");
+  for (const text of check.scrollback ?? [])
+    if (!scrollback.includes(text))
+      failures.push(`${label}: the scrollback does not hold ${text}`);
+  for (const text of check.notScrollback ?? [])
+    if (scrollback.includes(text))
+      failures.push(`${label}: the scrollback holds ${text}`);
+  if (
+    check.scrollbackRows !== undefined &&
+    scrollbackGrid.length !== check.scrollbackRows
+  )
+    failures.push(
+      `${label}: scrollback has ${scrollbackGrid.length} rows, expected ${check.scrollbackRows}`,
+    );
+  // A play's grid rows are raw spaces out to the width, where `dump --format
+  // text` (the other goldens) draws them as `·`: trimmed, the file has no
+  // trailing whitespace for an editor or a hook to strip behind --update.
+  if (check.scrollbackGolden)
+    await matches(
+      join(ui, "golden", check.scrollbackGolden),
+      `${scrollbackGrid.map((row) => row.trimEnd()).join("\n")}\n`,
+      "golden",
+    );
 }
 
 // The @theme write a `/theme` command sends flips the session in one frame:
@@ -2072,7 +2119,10 @@ for (const check of plays) {
 // A palette row click selects that row (the accent bar moves), mouse on only.
 // Row y=11 is "Mode: plan" (preselected), y=12 "Mode: build" at 80x30.
 for (const on of [true, false]) {
-  const steps = [{ set: { path: "mouse_on", value: on } }, { click: [20, 12] }];
+  const steps: Step[] = [
+    { set: { path: "mouse_on", value: on } },
+    { click: [20, 12] },
+  ];
   const file = join(scratch, "palette.ndjson");
   await writeFile(
     file,
@@ -2147,6 +2197,8 @@ await rm(scratch, { recursive: true, force: true });
       "app.tui",
       "--data",
       "samples/sample-approval-long.json",
+      "--rows",
+      String(rows),
       "--input",
       pages(n),
       "--format",
@@ -2196,8 +2248,6 @@ if (details.focus !== "details_body")
   failures.push(`details focus is ${details.focus}, expected details_body`);
 
 if (failures.length > 0) finish();
-const sampleCount =
-  Object.keys(SAMPLES).length + Object.keys(INLINE_SAMPLES).length;
 console.log(
-  `ok: ${sampleCount} samples validated, ${sampleCount * widths.length + 2 + extraDumps.length + 1} goldens, ${plays.length} play checks${update ? " (updated)" : ""}`,
+  `ok: ${validated} samples validated, ${goldens} goldens, ${plays.length} play checks${update ? " (updated)" : ""}`,
 );

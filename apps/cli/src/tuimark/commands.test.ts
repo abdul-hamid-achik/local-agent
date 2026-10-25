@@ -4,6 +4,7 @@ import {
   filterPalette,
   HELP_STATUS,
   helpRows,
+  PALETTE,
   paletteCommand,
   runSlash,
   SLASH_COMMANDS,
@@ -156,6 +157,13 @@ test("/permissions lists session grants and file rules, and clears them", () => 
     status: "File rules cleared",
     clearRules: true,
   });
+  // Words match whole: extra spaces between them change nothing.
+  expect(runSlash("/permissions clear   rules", ruled)).toEqual(
+    runSlash("/permissions clear rules", ruled),
+  );
+  expect(runSlash("/permissions  trust \t confirm", ruled).trustRules).toBe(
+    "confirm",
+  );
   expect(runSlash("/permissions clear rules", state)).toEqual({
     status: "No file rules",
     clearRules: true,
@@ -182,6 +190,51 @@ test("/permissions lists session grants and file rules, and clears them", () => 
   expect(paletteCommand("permissions")).toBe("/permissions");
   expect(paletteCommand("permissions-clear")).toBe("/permissions clear");
   expect(HELP_STATUS).toContain("/permissions [clear|trust]");
+});
+
+// Every palette row that stands for a slash command runs it through the parser
+// and gets the outcome its label promises, so renaming a subcommand in runSlash
+// cannot leave a row that answers "Unknown command".
+test("each palette row's hint runs the command its label names", () => {
+  const effect: Record<string, object> = {
+    "mode-plan": { intent: "plan" },
+    "mode-build": { intent: "build" },
+    "mode-chat": { intent: "chat" },
+    "theme-dark": { theme: "dark" },
+    "theme-light": { theme: "light" },
+    "theme-auto": { theme: "auto" },
+    "mouse-on": { mouse: true },
+    "mouse-off": { mouse: false },
+    copy: { copy: "reply" },
+    "copy-code": { copy: "code" },
+    permissions: { status: "No permissions: no session grants, no file rules" },
+    "permissions-clear": { clearGrants: true },
+    "permissions-trust": { trustRules: "review" },
+    details: { details: true },
+    status: { statusPanel: true },
+    provider: { providerPanel: true },
+    model: { status: "Current model: unknown. Use /model NAME to switch" },
+    find: { status: "Search the saved sessions. Use /find TEXT" },
+    sessions: { sessions: true },
+    "sessions-new": { newSession: true },
+    export: { exportTranscript: true, exportFormat: "markdown" },
+    "export-json": { exportTranscript: true, exportFormat: "json" },
+    mcp: { mcpPanel: true },
+    goal: { goal: { kind: "show" } },
+    "goal-stop": { goal: { kind: "stop" } },
+    help: { help: true },
+  };
+  const commands = PALETTE.filter((row) => row.hint.startsWith("/"));
+  // A new command row must say here what it does.
+  expect(commands.map((row) => row.id).sort()).toEqual(
+    Object.keys(effect).sort(),
+  );
+  for (const row of commands) {
+    const outcome = runSlash(row.hint, state);
+    expect(outcome.unknown, row.id).toBeUndefined();
+    expect(outcome.status, row.id).not.toContain("Unknown");
+    expect(outcome, row.id).toMatchObject(effect[row.id] as object);
+  }
 });
 
 test("/details asks the controller for the viewer over the latest receipt", () => {

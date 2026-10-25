@@ -1,7 +1,8 @@
 // A stand-in for the SDK's Host that tests and the fd 3 byte count use: it keeps
-// a JSON store, applies batches the way the runtime does (`set`, and `append`
-// to a string or an array, numeric path segments indexing arrays), and counts
-// the bytes the SDK would write to fd 3 for each batch.
+// a JSON store, applies batches the way the runtime does (all the writes or
+// none: a write the store cannot take refuses the batch with `ok: false`;
+// `set`, and `append` to a string or an array, numeric path segments indexing
+// arrays), and counts the bytes the SDK would write to fd 3 for each batch.
 
 import type { Commit, Host, HostEvent } from "@thelacanians/tuimark";
 import type { UiHost } from "#cli/tuimark/controller";
@@ -12,10 +13,15 @@ export interface WriteLike {
   op?: "set" | "append";
 }
 
-/** Applies one write to a JSON store; throws when an append finds the wrong type. */
+/**
+ * Applies one write to a JSON store; throws when an append finds the wrong
+ * type. A batch is all or nothing only through `FakeHost.batch`, which undoes
+ * the writes that landed before a refused one.
+ */
 export function applyWrite(store: Record<string, unknown>, w: WriteLike): void {
-  // The runtime holds a copy parsed from JSON, never the caller's objects.
-  const value = structuredClone(w.value);
+  // The runtime holds a copy parsed from the wire's JSON, never the caller's
+  // objects, and the wire sends an undefined value as null (see batchBytes).
+  const value: unknown = JSON.parse(JSON.stringify(w.value ?? null));
   const keys = w.path.split(".");
   let node: unknown = store;
   for (const key of keys.slice(0, -1)) {
@@ -74,7 +80,10 @@ export interface RecordedCommit {
 export class FakeHost implements UiHost {
   store: Record<string, unknown> = {};
   readonly handlers = new Map<string, (ev: HostEvent) => unknown>();
+  /** Every batch sent, refused or not: what the SDK wrote to fd 3. */
   readonly batches: WriteLike[][] = [];
+  /** The indices (into `batches`) of the batches the store took. */
+  readonly applied = new Set<number>();
   readonly commits: RecordedCommit[] = [];
   /** Bytes the batches (and commits) would take on fd 3. */
   bytes = 0;
@@ -89,6 +98,7 @@ export class FakeHost implements UiHost {
   ackMs = 1;
 
   on(action: string, handler: (ev: HostEvent) => unknown): Host {
+    // As the SDK's `on`: a later call for the same action replaces the handler.
     this.handlers.set(action, handler);
     return this as unknown as Host;
   }
@@ -105,11 +115,29 @@ export class FakeHost implements UiHost {
     this.bytes += batchBytes(writes, index + 1);
     await new Promise((r) => setTimeout(r, this.ackMs));
     this.inflight--;
-    const error = this.refuse?.(writes, index);
+    const error = this.refuse?.(writes, index) ?? this.tryApply(writes);
     if (error !== undefined)
       return { type: "ack", id: index + 1, ok: false, error };
-    for (const w of writes) applyWrite(this.store, w);
+    this.applied.add(index);
     return { type: "ack", id: index + 1, ok: true };
+  }
+
+  /** All the writes or none: the error that refused the batch, with the store as it was. */
+  private tryApply(writes: readonly WriteLike[]): string | undefined {
+    // Only an append can find the wrong type; a `set` always lands.
+    const before = writes.some((w) => w.op === "append")
+      ? structuredClone(this.store)
+      : undefined;
+    try {
+      for (const w of writes) applyWrite(this.store, w);
+    } catch (error) {
+      if (before) {
+        for (const key of Object.keys(this.store)) delete this.store[key];
+        Object.assign(this.store, before);
+      }
+      return error instanceof Error ? error.message : String(error);
+    }
+    return undefined;
   }
 
   async commit(commit: Commit): Promise<{
@@ -167,8 +195,10 @@ export class FakeHost implements UiHost {
     return handler({ seq: ++this.seq, action, source: "", keys: {}, value });
   }
 
+  /** The statuses the store took, in order (a refused batch's is not among them). */
   statusLog(): unknown[] {
     return this.batches
+      .filter((_, index) => this.applied.has(index))
       .flat()
       .filter((w) => w.path === "status")
       .map((w) => w.value);
