@@ -911,6 +911,28 @@ describe("metadata reads and replayable bodies", () => {
     }
   });
 
+  test("an openai_local chat error reads 4 KiB of the body even when it comes in one chunk", async () => {
+    const { body } = openBody(
+      JSON.stringify({
+        pad: "x".repeat(10_000),
+        error: { message: "past the bound" },
+      }),
+    );
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(new Response(body, { status: 400 }));
+    try {
+      const error = await events(localProvider("http://127.0.0.1/v1")).catch(
+        (caught: Error) => caught,
+      );
+      // The cut body is not JSON: its head is shown, never the message past it.
+      expect((error as Error).message).toContain('(400): {"pad":"xxx');
+      expect((error as Error).message).not.toContain("past the bound");
+    } finally {
+      fetchMock.mockRestore();
+    }
+  });
+
   test("an openai_local chat error shows a plain-text body on one line, cut short", async () => {
     const server = serve(
       () =>

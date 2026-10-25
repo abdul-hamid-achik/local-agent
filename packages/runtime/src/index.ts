@@ -471,8 +471,10 @@ async function failureDetail(response: Response): Promise<string> {
     while (bytes < maxFailureBytes) {
       const chunk = await reader.read();
       if (chunk.done) break;
-      bytes += chunk.value.byteLength;
-      text += decoder.decode(chunk.value, { stream: true });
+      // One chunk may hold far more than the bound: decode only its share.
+      const share = chunk.value.subarray(0, maxFailureBytes - bytes);
+      bytes += share.byteLength;
+      text += decoder.decode(share, { stream: true });
     }
   } catch {
     // The body failed too: the status alone then.

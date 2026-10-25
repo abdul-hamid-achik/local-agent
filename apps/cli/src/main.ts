@@ -624,7 +624,7 @@ A resumed session first closes the calls it was interrupted before running.`);
                 );
               else if (event.type === "windowed")
                 process.stderr.write(
-                  `context window full: the oldest ${event.left} message${event.left === 1 ? " is" : "s are"} not sent (${event.sent} ${event.sent === 1 ? "is" : "are"})\n`,
+                  `context window full: the oldest ${event.left} message${event.left === 1 ? " is" : "s are"} not sent; the newest ${event.sent === 1 ? "one is" : `${event.sent} are`} sent\n`,
                 );
             }
             if (!values.json) process.stdout.write("\n");
