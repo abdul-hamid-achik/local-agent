@@ -96,7 +96,8 @@ a child and draws the whole screen from `apps/cli/src/tuimark/ui/app.tui`.
 - Composer: `enter` sends, `shift+enter` or `alt+enter` start a new line, and a
   pasted block stays one message. The box grows to eight rows, then scrolls.
   Sending while a reply is generating queues one message (a further send is
-  added to it), and it runs when the turn ends. `esc` cancels the turn and
+  added to it), and it runs when the turn ends. `up` in an empty composer
+  takes it back to edit while the turn goes on. `esc` cancels the turn and
   gives the queued message back to the composer, after anything typed since;
   so does a refusal at an unknown tool outcome. `ctrl+c` first clears a
   non-empty draft, then cancels a running turn as `esc` does (between a
