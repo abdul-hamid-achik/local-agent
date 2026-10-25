@@ -647,7 +647,7 @@
       {
         "id": "/details",
         "cmd": "/details [N]",
-        "desc": "show the last tool output, or N's"
+        "desc": "show tool output N, or the last"
       },
       {
         "id": "/status",

@@ -198,7 +198,7 @@ test("/details asks the controller for the viewer over the latest receipt", () =
   // Cards count from 1; anything else is not a number one names.
   for (const wanted of ["0", "03", "3x", "-1", "1234567890"])
     expect(runSlash(`/details ${wanted}`, state)).toEqual({
-      status: `Not a tool output number: ${wanted}. Use /details for the latest, or /details N for the card that names N`,
+      status: `/details N takes a number from 1: ${wanted} is not one`,
       unknown: true,
     });
   expect(runSlash("/details 1 2", state).unknown).toBe(true);

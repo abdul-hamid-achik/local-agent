@@ -1603,8 +1603,14 @@ export interface ToolReceipt {
   output: string;
 }
 
-/** `/details N` reaches the newest this many receipts; older ones are let go. */
-export const MAX_RECEIPTS = 32;
+/**
+ * `/details N` reaches the newest receipts up to this many characters in
+ * all (each is capped at DETAILS_MAX_CHARS) and at most MAX_RECEIPTS of
+ * them; past either, the oldest go. A card's pointer cannot be taken back
+ * once drawn, so the budget is wide enough that it rarely has to be.
+ */
+export const RECEIPTS_MAX_CHARS = 2_000_000;
+export const MAX_RECEIPTS = 500;
 
 /** The output the viewer keeps; past it the tail below says what was cut. */
 export const DETAILS_MAX_CHARS = 64_000;

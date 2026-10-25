@@ -9,7 +9,7 @@
             │  /copy [code] copy the last reply, or its last cod…  │            
             │  /permissions [clear|trust] show, clear or trust g…  │            
             │  /sandbox on|off run commands confined (macOS), wi…  │            
-            │  /details [N] show the last tool output, or N's      │            
+            │  /details [N] show tool output N, or the last        │            
             │  /status show the effective config (model, workspa…  │            
             │  /provider ask the model's endpoint: answer time, …  │            
             │  /sessions [new] switch to a saved session, or sta…  │            

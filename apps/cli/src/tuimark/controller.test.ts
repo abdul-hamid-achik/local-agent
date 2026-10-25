@@ -27,10 +27,12 @@ import {
 import { expect, test } from "vitest";
 import {
   type Block,
+  DETAILS_MAX_CHARS,
   MAX_MESSAGE_BLOCKS,
   MAX_RECEIPTS,
   type MessageView,
   parseBlocks,
+  RECEIPTS_MAX_CHARS,
   runsText,
 } from "#cli/tuimark/blocks";
 import type { CopyResult } from "#cli/tuimark/clipboard";
@@ -2221,6 +2223,34 @@ test("fullscreen never commits", async () => {
   expect(ui.commits).toEqual([]);
 });
 
+test("inline: /details N opens the output a printed card names", async () => {
+  let turn = 0;
+  const { ui, client } = setup(
+    (ctx) =>
+      ++turn === 1
+        ? toolScript(LONG_OUTPUT, "read")(ctx)
+        : toolScript(LONG_OUTPUT.replace("line 15", "line XV"), "search")(ctx),
+    inline,
+  );
+  await ui.fire("send", "one");
+  await client.idle();
+  await ui.fire("send", "two");
+  await client.idle();
+  // Both cards are in the scrollback for good, each naming its own output.
+  const cards = ui.commits
+    .filter((c) => c.ok && c.commit.template === "la-turn")
+    .map((c) => c.buf as MessageView)
+    .filter((view) => view.is_tool)
+    .map((view) => runsText(view.card.out));
+  expect(cards).toHaveLength(2);
+  expect(cards[0]).toContain("/details 1 for full output");
+  expect(cards[1]).toContain("/details 2 for full output");
+  await ui.fire("send", "/details 1");
+  expect(store(ui).details.title).toBe("read · succeeded");
+  expect(detailsText(ui)).toContain("output line 15");
+  expect(detailsText(ui)).not.toContain("output line XV");
+});
+
 test("inline: the prompt is committed on send and the reply as its blocks close, with no messages writes", async () => {
   const full = "para one\n\npara two\n\npara three starts\n\npara four";
   const { ui, client } = setup(async function* () {
@@ -3278,10 +3308,7 @@ test("/details N that names no kept output says why and keeps the line", async (
     // One output so far: 2 is the next number, not yet given.
     ["/details 2", "No tool output 2 yet. /details opens the latest"],
     ["/details 9", "No tool output 9 yet. /details opens the latest"],
-    [
-      "/details x",
-      "Not a tool output number: x. Use /details for the latest, or /details N for the card that names N",
-    ],
+    ["/details x", "/details N takes a number from 1: x is not one"],
   ] as const) {
     store(ui).draft = line;
     await ui.fire("send", line);
@@ -3292,39 +3319,81 @@ test("/details N that names no kept output says why and keeps the line", async (
   }
 });
 
-test("only this conversation's newest outputs stay open to /details N", async () => {
-  // A resumed session with one output more than is kept.
-  const messages = Array.from({ length: MAX_RECEIPTS + 1 }, (_, i) => ({
+/** A resumed session of `count` read outputs, each `output N` padded to `size`. */
+function readSession(count: number, size = 0): SessionContext {
+  const messages = Array.from({ length: count }, (_, i) => ({
     role: "tool",
     tool_name: "read",
     tool_call_id: "call_0",
-    content: JSON.stringify({ status: "succeeded", output: `output ${i + 1}` }),
+    content: JSON.stringify({
+      status: "succeeded",
+      output: `output ${i + 1}`.padEnd(size, "."),
+    }),
   }));
-  const session = {
-    store: {},
-    state: { messages },
-  } as unknown as SessionContext;
-  const { ui, client } = setup(toolScript(LONG_OUTPUT), { session });
-  const gone = `Tool output 1 is no longer kept (only this conversation's last ${MAX_RECEIPTS} are). /details opens the latest`;
-  await ui.fire("send", "/details 1");
-  expect(store(ui).status).toBe(gone);
-  await ui.fire("send", "/details 2");
-  expect(detailsText(ui)).toBe("output 2");
-  await ui.fire("details_close");
-  // A new conversation goes on counting: a number an older card shows
-  // never opens this conversation's output.
+  return { store: {}, state: { messages } } as unknown as SessionContext;
+}
+
+const GONE = (n: number) =>
+  `Tool output ${n} is no longer kept (the oldest go first). /details opens the latest`;
+
+test("/details N keeps far more than a screenful of outputs, within a budget", async () => {
+  // Small outputs: well past 32 of them, the first still opens.
+  const small = setup(reply("x"), { session: readSession(40) });
+  await small.ui.fire("send", "/details 1");
+  expect(detailsText(small.ui)).toBe("output 1");
+  // As many as the count allows, and one more: the first goes.
+  const many = setup(reply("x"), {
+    session: readSession(MAX_RECEIPTS + 1),
+  });
+  await many.ui.fire("send", "/details 1");
+  expect(store(many.ui).status).toBe(GONE(1));
+  await many.ui.fire("send", "/details 2");
+  expect(detailsText(many.ui)).toBe("output 2");
+  // Outputs as large as the viewer keeps, one past the character budget.
+  const fits = Math.floor(RECEIPTS_MAX_CHARS / DETAILS_MAX_CHARS);
+  const large = setup(reply("x"), {
+    session: readSession(fits + 1, DETAILS_MAX_CHARS),
+  });
+  await large.ui.fire("send", "/details 1");
+  expect(store(large.ui).status).toBe(GONE(1));
+  await large.ui.fire("send", "/details 2");
+  expect(store(large.ui).status).toBe("Tool output 2: read");
+});
+
+test("a new conversation goes on counting, and an older number says whose it was", async () => {
+  const { ui, client } = setup(toolScript(LONG_OUTPUT), {
+    session: readSession(3),
+  });
   await ui.fire("send", "/sessions new");
   await client.idle();
   await ui.fire("send", "read it");
   await client.idle();
+  // A card of the conversation left behind (inline, it stays in the
+  // scrollback) never names this one's output.
   const card = store(ui).messages.find((m) => m.is_tool)?.card;
-  expect(runsText(card?.out ?? [])).toContain(
-    `/details ${MAX_RECEIPTS + 2} for full output`,
-  );
-  // Even an output that would still be among the newest kept: it was the
-  // other conversation's.
+  expect(runsText(card?.out ?? [])).toContain("/details 4 for full output");
   await ui.fire("send", "/details 3");
-  expect(store(ui).status).toBe(gone.replace("output 1", "output 3"));
+  expect(store(ui).status).toBe(
+    "Tool output 3 belongs to an earlier conversation. /details opens the latest",
+  );
+  await ui.fire("send", "/details 4");
+  expect(store(ui).status).toBe("Tool output 4: read");
+});
+
+test("a new conversation starts the budget afresh", async () => {
+  // The conversation left behind filled nearly all of it.
+  const fits = Math.floor(RECEIPTS_MAX_CHARS / DETAILS_MAX_CHARS);
+  const { ui, client } = setup(toolScript("y".repeat(20_000)), {
+    session: readSession(fits, DETAILS_MAX_CHARS),
+  });
+  await ui.fire("send", "/sessions new");
+  await client.idle();
+  for (const prompt of ["one", "two"]) {
+    await ui.fire("send", prompt);
+    await client.idle();
+  }
+  await ui.fire("send", `/details ${fits + 1}`);
+  expect(store(ui).status).toBe(`Tool output ${fits + 1}: read`);
 });
 
 test("failed and denied receipts are kept for /details too", async () => {

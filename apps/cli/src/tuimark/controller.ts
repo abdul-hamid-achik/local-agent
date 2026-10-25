@@ -75,6 +75,7 @@ import {
   type MessageView,
   NO_CARD,
   onHold,
+  RECEIPTS_MAX_CHARS,
   type ToolReceipt,
   tableWidth,
   ViewBuilder,
@@ -541,10 +542,14 @@ export class TuimarkClient {
   private trustOffer?: PermissionRule[];
   /**
    * The newest completed tool receipts, whole, for `/details` (the last)
-   * and `/details N` (card N); past MAX_RECEIPTS the oldest goes. Memory
-   * only: never a model message, never persisted.
+   * and `/details N` (card N), within RECEIPTS_MAX_CHARS and MAX_RECEIPTS:
+   * past either, the oldest goes. Memory only: never a model message,
+   * never persisted.
    */
   private readonly receipts: ToolReceipt[] = [];
+  private receiptChars = 0;
+  /** The first number this conversation gave: below it, an earlier one's. */
+  private firstReceipt = 1;
   /** The receipt the viewer shows, re-wrapped on a resize. */
   private shownReceipt?: ToolReceipt;
   /** Whether the details viewer is open (the store's `details.open`). */
@@ -944,7 +949,13 @@ export class TuimarkClient {
 
   private keepReceipt(receipt: ToolReceipt): void {
     this.receipts.push(receipt);
-    if (this.receipts.length > MAX_RECEIPTS) this.receipts.shift();
+    this.receiptChars += receipt.output.length;
+    while (
+      this.receipts.length > 1 &&
+      (this.receipts.length > MAX_RECEIPTS ||
+        this.receiptChars > RECEIPTS_MAX_CHARS)
+    )
+      this.receiptChars -= this.receipts.shift()?.output.length ?? 0;
   }
 
   /** The writes that close the viewer, or none when it is already closed. */
@@ -987,7 +998,9 @@ export class TuimarkClient {
               ? NO_DETAILS_STATUS
               : n >= this.builder.nextReceiptNumber
                 ? `No tool output ${n} yet. /details opens the latest`
-                : `Tool output ${n} is no longer kept (only this conversation's last ${MAX_RECEIPTS} are). /details opens the latest`,
+                : n < this.firstReceipt
+                  ? `Tool output ${n} belongs to an earlier conversation. /details opens the latest`
+                  : `Tool output ${n} is no longer kept (the oldest go first). /details opens the latest`,
         },
       ]);
       return false;
@@ -1539,12 +1552,11 @@ export class TuimarkClient {
     this.history.push(...(context?.state.messages ?? []));
     // Numbering goes on: a card of the session left behind (inline, it is
     // in the scrollback) never names a receipt of this one.
-    this.builder = new ViewBuilder(
-      this.tableCols,
-      this.builder.nextReceiptNumber,
-    );
+    this.firstReceipt = this.builder.nextReceiptNumber;
+    this.builder = new ViewBuilder(this.tableCols, this.firstReceipt);
     const views: MessageView[] = [];
     this.receipts.length = 0;
+    this.receiptChars = 0;
     this.sent.length = 0;
     this.recall = undefined;
     this.recalledFrom = "";

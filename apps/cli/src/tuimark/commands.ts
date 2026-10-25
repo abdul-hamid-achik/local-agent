@@ -260,7 +260,7 @@ export function runSlash(text: string, state: CommandState): CommandOutcome {
     // The number a card's pointer gives: a whole number from 1.
     if (!/^[1-9]\d{0,8}$/.test(wanted))
       return {
-        status: `Not a tool output number: ${wanted}. Use /details for the latest, or /details N for the card that names N`,
+        status: `/details N takes a number from 1: ${wanted} is not one`,
         unknown: true,
       };
     return { status: `Tool output ${wanted}`, details: Number(wanted) };
@@ -423,7 +423,7 @@ export const SLASH_COMMANDS: readonly SlashCommand[] = [
   {
     name: "/details",
     usage: "/details [N]",
-    description: "show the last tool output, or N's",
+    description: "show tool output N, or the last",
     insert: "/details",
   },
   {
