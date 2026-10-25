@@ -8,6 +8,7 @@
 │ │  /mouse on|off toggle mouse reporting (fullscreen)                       │ ┃
 │ │  /copy [code] copy the last reply, or its last code block (ctrl+y)       │ ┃
 │ │  /compact shorten old tool results now, to free context                  │ ┃
+│ │  /clear start over with an empty conversation (same as /new)             │ ┃
 │ │  /permissions [clear|trust] show, clear or trust grants and rules        │ ┃
 │ │  /sandbox on|off run commands confined (macOS), without a card           │ ┃
 │ │  /details [N] show tool output N, or the last                            │ ┃
@@ -15,6 +16,7 @@
 │ │  /status show the effective config (model, workspace, session)           │ ┃
 │ │  /provider ask the model's endpoint: answer time, what is loaded         │ ┃
 │ │  /sessions [new] switch to a saved session, or start a new one           │ ┃
+│ │  /new start a new session; the old one stays saved (--session-db)        │ ┃
 │ │  /recover [N outcome] review calls whose outcome is unknown              │ ┃
 │ │  /find TEXT search saved session messages (needs --session-db)           │ ┃
 │ │  /export [json] write the conversation to a markdown or JSON file        │ ┃
@@ -22,10 +24,8 @@
 │ │  /goal [OBJECTIVE|stop] run turns toward an objective until done or a …  │ ┃
 │ │  Keys                                                                    │ ┃
 │ │  enter       send · shift/alt+enter new line                             │ ┃
-│ │  shift-drag  select text (mouse reporting is on)                         │ ┃
-│ │  ^P          commands                                                    │ ┃
-└─│  esc         cancel the turn, and a running goal                         │─┘
-╭─│  ctrl+c      clear the draft, cancel, then quit                          │─╮
-│ │  ↑/↓         history                                                     │ │
-╰─│  ↑           edit a queued message (empty draft)                         │─╯
+└─│  shift-drag  select text (mouse reporting is on)                         │─┘
+╭─│  ^P          commands                                                    │─╮
+│ │  esc         cancel the turn, and a running goal                         │ │
+╰─│  ctrl+c      clear the draft, cancel, then quit                          │─╯
  b╰──────────────────────────────────────────────────────────────────────────╯  

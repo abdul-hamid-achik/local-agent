@@ -93,7 +93,7 @@ export interface CommandOutcome {
   mcpPanel?: boolean;
   /** Set by `/sessions`: open the session picker (or say why there is none). */
   sessions?: boolean;
-  /** Set by `/sessions new`: start a new conversation (a new saved session with --session-db). */
+  /** Set by `/sessions new`, `/new` and `/clear`: start a new conversation (a new saved session with --session-db). */
   newSession?: boolean;
   /** Set by `/export`: write the transcript, markdown views or raw JSON. */
   exportTranscript?: boolean;
@@ -122,7 +122,7 @@ export interface CommandOutcome {
 }
 
 export const HELP_STATUS =
-  "/mode plan|build|chat · /model [NAME] · /theme dark|light|auto · /mouse on|off · /copy [code] · /compact · /permissions [clear|trust] · /sandbox on|off · /details [N] · /diff · /status · /sessions · /recover · /find TEXT · /export [json] · /mcp · /goal OBJECTIVE · /help · esc cancel · ctrl+c exit";
+  "/mode plan|build|chat · /model [NAME] · /theme dark|light|auto · /mouse on|off · /copy [code] · /compact · /permissions [clear|trust] · /sandbox on|off · /details [N] · /diff · /status · /sessions · /new · /clear · /recover · /find TEXT · /export [json] · /mcp · /goal OBJECTIVE · /help · esc cancel · ctrl+c exit";
 
 /** Inline has no mouse (the engine ignores it there): the controller refuses with this. */
 export const MOUSE_INLINE_STATUS = "Mouse is not available in inline mode";
@@ -273,6 +273,10 @@ export function runSlash(text: string, state: CommandState): CommandOutcome {
       };
     return { status: `Tool output ${wanted}`, details: Number(wanted) };
   }
+  // /new and /clear are one command (the Go client's aliases): the same
+  // start over as `/sessions new`.
+  if (name === "/new" || name === "/clear")
+    return { status: "Starting a new session…", newSession: true };
   if (name === "/compact")
     return { status: "Compacting the conversation…", compact: true };
   if (name === "/diff") return { status: "Changes", diffPanel: true };
@@ -429,6 +433,12 @@ export const SLASH_COMMANDS: readonly SlashCommand[] = [
     insert: "/compact",
   },
   {
+    name: "/clear",
+    usage: "/clear",
+    description: "start over with an empty conversation (same as /new)",
+    insert: "/clear",
+  },
+  {
     name: "/permissions",
     usage: "/permissions [clear|trust]",
     description: "show, clear or trust grants and rules",
@@ -469,6 +479,12 @@ export const SLASH_COMMANDS: readonly SlashCommand[] = [
     usage: "/sessions [new]",
     description: "switch to a saved session, or start a new one",
     insert: "/sessions",
+  },
+  {
+    name: "/new",
+    usage: "/new",
+    description: "start a new session; the old one stays saved (--session-db)",
+    insert: "/new",
   },
   {
     name: "/recover",

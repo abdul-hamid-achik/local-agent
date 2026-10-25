@@ -421,6 +421,11 @@
         "desc": "shorten old tool results now, to free context"
       },
       {
+        "id": "/clear",
+        "cmd": "/clear",
+        "desc": "start over with an empty conversation (same as /new)"
+      },
+      {
         "id": "/permissions",
         "cmd": "/permissions [clear|trust]",
         "desc": "show, clear or trust grants and rules"
@@ -454,6 +459,11 @@
         "id": "/sessions",
         "cmd": "/sessions [new]",
         "desc": "switch to a saved session, or start a new one"
+      },
+      {
+        "id": "/new",
+        "cmd": "/new",
+        "desc": "start a new session; the old one stays saved (--session-db)"
       },
       {
         "id": "/recover",

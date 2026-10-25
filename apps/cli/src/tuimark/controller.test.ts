@@ -2911,6 +2911,7 @@ test("typing / opens the command popup; it filters, moves and completes", async 
     "/mouse",
     "/copy",
     "/compact",
+    "/clear",
     "/permissions",
     "/sandbox",
     "/details",
@@ -2918,6 +2919,7 @@ test("typing / opens the command popup; it filters, moves and completes", async 
     "/status",
     "/provider",
     "/sessions",
+    "/new",
     "/recover",
     "/find",
     "/export",
@@ -3127,6 +3129,7 @@ test("the help overlay's store carries the slash commands", () => {
     "/mouse on|off",
     "/copy [code]",
     "/compact",
+    "/clear",
     "/permissions [clear|trust]",
     "/sandbox on|off",
     "/details [N]",
@@ -3134,6 +3137,7 @@ test("the help overlay's store carries the slash commands", () => {
     "/status",
     "/provider",
     "/sessions [new]",
+    "/new",
     "/recover [N outcome]",
     "/find TEXT",
     "/export [json]",
@@ -4728,6 +4732,56 @@ test("/sessions new starts over in a new saved session, and the next turn checkp
   expect(turns[0]?.session?.state.publicId).toBe("new999");
   // Nothing of the old conversation reaches the model.
   expect(turns[0]?.messages).toEqual(["user:fresh start"]);
+});
+
+test("/new and /clear start over like /sessions new: the old session stays saved, and a busy turn refuses", async () => {
+  for (const command of ["/new", "/clear"]) {
+    const first = fakeSession("aaa111", [
+      { role: "user", content: "old prompt" },
+      { role: "assistant", content: "old reply" },
+    ]);
+    let created = 0;
+    const sessions = {
+      ...capabilityFor({ aaa111: first }),
+      create: async () => {
+        created++;
+        return fakeSession("new999", []);
+      },
+    };
+    const { ui, client, seen } = setup(reply("hello again"), {
+      session: first,
+      sessions,
+    });
+    await ui.fire("send", command);
+    await client.idle();
+    expect(created, command).toBe(1);
+    expect(store(ui).status, command).toBe("New session new999");
+    expect(store(ui).header.session).toBe("session new999");
+    expect(store(ui).messages).toEqual([]);
+    expect(store(ui).draft).toBe("");
+    // The old session is untouched (still listed), and not sent.
+    expect(first.state.messages).toHaveLength(2);
+    await ui.fire("send", "fresh start");
+    await client.idle();
+    expect(seen[0]?.messages).toEqual(["user:fresh start"]);
+  }
+
+  // While a turn runs it is refused, the conversation kept.
+  let release: () => void = () => {};
+  const gate = new Promise<void>((r) => {
+    release = r;
+  });
+  const { ui, client, seen } = setup(async function* () {
+    await gate;
+    yield { type: "message", message: { role: "assistant", content: "ok" } };
+  });
+  await ui.fire("send", "first");
+  await ui.fire("send", "/clear");
+  expect(store(ui).status).toBe(BUSY_STATUS);
+  release();
+  await client.idle();
+  expect(store(ui).messages.length).toBeGreaterThan(0);
+  expect(seen).toHaveLength(1);
 });
 
 test("/sessions new without a store starts a temporary conversation; while busy it waits", async () => {

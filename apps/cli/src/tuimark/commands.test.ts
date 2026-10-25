@@ -265,6 +265,32 @@ test("/details asks the controller for the viewer over the latest receipt", () =
   expect(slashMatches("/d")?.map((c) => c.name)).toEqual(["/details", "/diff"]);
 });
 
+test("/new and /clear are /sessions new: the conversation starts over", () => {
+  for (const command of ["/new", "/clear", "/NEW", "/Clear"])
+    expect(runSlash(command, state), command).toEqual({
+      status: "Starting a new session…",
+      newSession: true,
+    });
+  // No argument: a stray one is a typo to fix, not a silent restart.
+  for (const command of ["/new now", "/clear all"])
+    expect(runSlash(command, state).unknown, command).toBe(true);
+  expect(HELP_STATUS).toContain("/new");
+  expect(HELP_STATUS).toContain("/clear");
+  expect(helpRows().map((r) => r.cmd)).toEqual(
+    expect.arrayContaining(["/new", "/clear"]),
+  );
+  // Neither takes a first-match slot another command had.
+  expect(slashMatches("/n")?.map((c) => c.name)).toEqual(["/new"]);
+  expect(slashMatches("/cl")?.map((c) => c.name)).toEqual(["/clear"]);
+  expect(slashMatches("/c")?.map((c) => c.name)).toEqual([
+    "/copy",
+    "/compact",
+    "/clear",
+  ]);
+  // The palette's row for it is found by "new" too.
+  expect(filterPalette("new").map((r) => r.id)).toContain("sessions-new");
+});
+
 test("/compact asks the controller to shorten the conversation now", () => {
   expect(runSlash("/compact", state)).toEqual({
     status: "Compacting the conversation…",
@@ -302,6 +328,7 @@ test("the slash catalog lists exactly the commands the parser knows", () => {
     "/mouse",
     "/copy",
     "/compact",
+    "/clear",
     "/permissions",
     "/sandbox",
     "/details",
@@ -309,6 +336,7 @@ test("the slash catalog lists exactly the commands the parser knows", () => {
     "/status",
     "/provider",
     "/sessions",
+    "/new",
     "/recover",
     "/find",
     "/export",
@@ -358,6 +386,7 @@ test("the slash catalog lists exactly the commands the parser knows", () => {
     "/mouse on|off",
     "/copy [code]",
     "/compact",
+    "/clear",
     "/permissions [clear|trust]",
     "/sandbox on|off",
     "/details [N]",
@@ -365,6 +394,7 @@ test("the slash catalog lists exactly the commands the parser knows", () => {
     "/status",
     "/provider",
     "/sessions [new]",
+    "/new",
     "/recover [N outcome]",
     "/find TEXT",
     "/export [json]",

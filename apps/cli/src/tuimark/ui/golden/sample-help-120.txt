@@ -8,24 +8,24 @@
 │    // exponential ba│  /mouse on|off toggle mouse reporting (fullscreen)                       │                     ┃
 │    for (let attempt │  /copy [code] copy the last reply, or its last code block (ctrl+y)       │                     ┃
 │      try { return aw│  /compact shorten old tool results now, to free context                  │                     ┃
-│      catch (e) { if │  /permissions [clear|trust] show, clear or trust grants and rules        │                     ┃
-│    }                │  /sandbox on|off run commands confined (macOS), without a card           │                     ┃
-│  }                  │  /details [N] show tool output N, or the last                            │                     ┃
-│                     │  /diff show the files this session edited or wrote, and how              │                     ┃
-│ ╭─ Edit ────────────│  /status show the effective config (model, workspace, session)           │───────────────────╮ ┃
-│ │ ✓ applied         │  /provider ask the model's endpoint: answer time, what is loaded         │                   │ ┃
-│ │ src/fetch.ts      │  /sessions [new] switch to a saved session, or start a new one           │                   │ ┃
-│ │ Updated src/fetch.│  /recover [N outcome] review calls whose outcome is unknown              │                   │ ┃
-│ │   import { sleep }│  /find TEXT search saved session messages (needs --session-db)           │                   │ ┃
-│ │ - export const get│  /export [json] write the conversation to a markdown or JSON file        │                   │ ┃
-│ │ + export const get│  /mcp show connected MCP servers and their tools                         │                   │ ┃
-│ ╰───────────────────│  /goal [OBJECTIVE|stop] run turns toward an objective until done or a …  │───────────────────╯ ┃
-│                     │  Keys                                                                    │                     ┃
-│ Assistant           │  enter       send · shift/alt+enter new line                             │                     ┃
-│ Done. The helper now│  shift-drag  select text (mouse reporting is on)                         │                     ┃
-│                     │  ^P          commands                                                    │                     ┃
-└─────────────────────│  esc         cancel the turn, and a running goal                         │─────────────────────┘
-╭─────────────────────│  ctrl+c      clear the draft, cancel, then quit                          │─────────────────────╮
-│ Message the model   │  ↑/↓         history                                                     │                     │
-╰─────────────────────│  ↑           edit a queued message (empty draft)                         │─────────────────────╯
+│      catch (e) { if │  /clear start over with an empty conversation (same as /new)             │                     ┃
+│    }                │  /permissions [clear|trust] show, clear or trust grants and rules        │                     ┃
+│  }                  │  /sandbox on|off run commands confined (macOS), without a card           │                     ┃
+│                     │  /details [N] show tool output N, or the last                            │                     ┃
+│ ╭─ Edit ────────────│  /diff show the files this session edited or wrote, and how              │───────────────────╮ ┃
+│ │ ✓ applied         │  /status show the effective config (model, workspace, session)           │                   │ ┃
+│ │ src/fetch.ts      │  /provider ask the model's endpoint: answer time, what is loaded         │                   │ ┃
+│ │ Updated src/fetch.│  /sessions [new] switch to a saved session, or start a new one           │                   │ ┃
+│ │   import { sleep }│  /new start a new session; the old one stays saved (--session-db)        │                   │ ┃
+│ │ - export const get│  /recover [N outcome] review calls whose outcome is unknown              │                   │ ┃
+│ │ + export const get│  /find TEXT search saved session messages (needs --session-db)           │                   │ ┃
+│ ╰───────────────────│  /export [json] write the conversation to a markdown or JSON file        │───────────────────╯ ┃
+│                     │  /mcp show connected MCP servers and their tools                         │                     ┃
+│ Assistant           │  /goal [OBJECTIVE|stop] run turns toward an objective until done or a …  │                     ┃
+│ Done. The helper now│  Keys                                                                    │                     ┃
+│                     │  enter       send · shift/alt+enter new line                             │                     ┃
+└─────────────────────│  shift-drag  select text (mouse reporting is on)                         │─────────────────────┘
+╭─────────────────────│  ^P          commands                                                    │─────────────────────╮
+│ Message the model   │  esc         cancel the turn, and a running goal                         │                     │
+╰─────────────────────│  ctrl+c      clear the draft, cancel, then quit                          │─────────────────────╯
  build · last 1m 06s ·╰──────────────────────────────────────────────────────────────────────────╯                      
