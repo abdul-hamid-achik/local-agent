@@ -197,6 +197,11 @@ request. It does not mean the operation the server performed succeeded on its
 own terms. Read tool results; the agent does not interpret a transport-level
 success as a domain success.
 
+The model reads an MCP result as the server's text, marked as coming from
+outside, beside `transport`, `domain` and `evidence` fields that say only
+that the call went through: the domain outcome is `unknown` and the evidence
+`unverified`. The Tuimark card shows the same doubt in its first line.
+
 ## Related
 
 - [Reference](/reference) for `--mcp-config`, `--no-mcp` and `--mcp-status` details.
