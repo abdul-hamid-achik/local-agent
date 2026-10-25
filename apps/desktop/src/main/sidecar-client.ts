@@ -33,6 +33,10 @@ const STDERR_TAIL_CHARS = 2000;
 const STOP_GRACE_MS = 5000;
 // A frame carries at most an 8 MB file, which JSON can double.
 const MAX_LINE_CHARS = 32 * 1024 * 1024;
+// The sidecar ends on 32 MiB of unread input (MAX_LINE_BYTES * 4 there),
+// every run with it, so a larger request is refused here, with room left for
+// what shares its read.
+const MAX_REQUEST_CHARS = MAX_LINE_CHARS - 1024 * 1024;
 const PREVIEW_CHARS = 80;
 
 /** A line for a message: one line, no escape sequences, cut short. */
@@ -191,7 +195,10 @@ export class SidecarClient {
     return new Promise((resolve, reject) => {
       this.pending.set(id, { resolve, reject });
       try {
-        this.child?.stdin?.write(`${JSON.stringify({ id, method, params })}\n`);
+        const line = `${JSON.stringify({ id, method, params })}\n`;
+        if (line.length > MAX_REQUEST_CHARS)
+          throw new Error(`The ${method} request is too large for the sidecar`);
+        this.child?.stdin?.write(line);
       } catch (error) {
         this.pending.delete(id);
         reject(

@@ -150,6 +150,12 @@ async function saveFile(): Promise<void> {
 }
 
 function insertExample(): void {
+  // The editor may hold a config nobody saved: never replaced unasked.
+  if (editor.value.trim()) {
+    error.value = "";
+    notice.value = "The editor already has text. Clear it first to insert the example.";
+    return;
+  }
   editor.value = JSON.stringify(
     [
       { name: "local", transport: { kind: "http", url: "http://127.0.0.1:3000/mcp" } },

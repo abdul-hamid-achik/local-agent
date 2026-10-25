@@ -38,6 +38,7 @@ import {
   providerEnvProblem,
 } from "#desktop/main/provider-env";
 import { holdQuit } from "#desktop/main/quit";
+import { detectRepoRoot } from "#desktop/main/repo-root";
 import { loadSettings, saveSettings } from "#desktop/main/settings";
 import { SidecarClient } from "#desktop/main/sidecar-client";
 
@@ -305,6 +306,44 @@ describe("providerEnvProblem", () => {
   });
 });
 
+describe("detectRepoRoot", () => {
+  function checkout(root: string): string {
+    mkdirSync(join(root, "apps", "desktop", "src", "sidecar"), {
+      recursive: true,
+    });
+    writeFileSync(join(root, "package.json"), "{}");
+    writeFileSync(
+      join(root, "apps", "desktop", "src", "sidecar", "sidecar.ts"),
+      "",
+    );
+    return root;
+  }
+
+  test("finds the checkout above apps/desktop/dist-main, whatever the cwd", () => {
+    const root = checkout(join(dir, "repo"));
+    const nowhere = join(dir, "elsewhere");
+    mkdirSync(nowhere);
+    expect(
+      detectRepoRoot({
+        distMain: join(root, "apps", "desktop", "dist-main"),
+        cwd: nowhere,
+      }),
+    ).toBe(root);
+  });
+
+  test("falls back to the cwd (the root or apps/desktop) and refuses a non-checkout override", () => {
+    const root = checkout(join(dir, "repo"));
+    const where = { distMain: join(dir, "lost", "dist-main") };
+    expect(detectRepoRoot({ ...where, cwd: root })).toBe(root);
+    expect(
+      detectRepoRoot({ ...where, cwd: join(root, "apps", "desktop") }),
+    ).toBe(root);
+    expect(
+      detectRepoRoot({ ...where, cwd: dir, override: join(dir, "nope") }),
+    ).toBeUndefined();
+  });
+});
+
 describe("settings", () => {
   test("every save leaves a Chalupa profile out, whoever saves", () => {
     const path = join(dir, "settings.json");
@@ -331,6 +370,30 @@ describe("settings", () => {
     });
     expect(statSync(path).mode & 0o777).toBe(0o600);
     expect(loadSettings(join(dir, "missing.json"))).toEqual({});
+  });
+});
+
+describe("settings that cannot be read", () => {
+  // The next save would overwrite the file, and with it the saved API keys.
+  test.each([
+    ["not JSON", "{ not json"],
+    ["not an object", "null"],
+    ["an array", "[]"],
+  ])("a file that is %s is set aside, not overwritten", (_name, text) => {
+    const path = join(dir, "settings.json");
+    writeFileSync(path, text);
+    expect(loadSettings(path)).toEqual({});
+    expect(existsSync(path)).toBe(false);
+    const kept = readdirSync(dir).filter((name) =>
+      name.startsWith("settings.json.corrupt-"),
+    );
+    expect(kept).toHaveLength(1);
+    const aside = join(dir, kept[0] ?? "");
+    expect(readFileSync(aside, "utf8")).toBe(text);
+    expect(statSync(aside).mode & 0o777).toBe(0o600);
+    // A save now writes a fresh file and leaves the set-aside copy alone.
+    saveSettings(path, { repoRoot: "/repo" });
+    expect(readFileSync(aside, "utf8")).toBe(text);
   });
 });
 
@@ -587,6 +650,35 @@ describe("SidecarClient lifecycle", () => {
         "Sidecar request failed",
       );
       await expect(client.invoke("fine")).resolves.toBe(7);
+      expect(client.running).toBe(true);
+      expect(exits).toBe(0);
+    } finally {
+      await client.stop();
+    }
+  });
+
+  test("a request too large for the sidecar's input fails alone", async () => {
+    // The sidecar ends on input past 32 MiB, taking every run with it: the
+    // client refuses such a request before it writes any of it.
+    const client = scripted("echo.mjs", [
+      'process.stdin.setEncoding("utf8");',
+      'process.stdin.on("data", (data) => {',
+      '  for (const line of data.split("\\n").filter(Boolean)) {',
+      "    const { id } = JSON.parse(line);",
+      '    process.stdout.write(JSON.stringify({ id, ok: true, result: line.length }) + "\\n");',
+      "  }",
+      "});",
+    ]);
+    let exits = 0;
+    client.onExit = () => {
+      exits += 1;
+    };
+    client.start();
+    try {
+      await expect(
+        client.invoke("agent.start", { text: "x".repeat(32 * 1024 * 1024) }),
+      ).rejects.toThrow("too large");
+      await expect(client.invoke("hello")).resolves.toBeGreaterThan(0);
       expect(client.running).toBe(true);
       expect(exits).toBe(0);
     } finally {

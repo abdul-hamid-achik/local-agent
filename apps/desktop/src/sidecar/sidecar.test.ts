@@ -558,6 +558,79 @@ async function gone(pid: number): Promise<boolean> {
   return !alive(pid);
 }
 
+// The Project view's commands are the allowlist's own keys: a name the
+// object merely inherits (toString, __proto__) is no command.
+test.each(["toString", "constructor", "__proto__", "hasOwnProperty"])(
+  "project.run refuses %s, which is not an allowlisted command",
+  async (name) => {
+    const root = await sleeperRepo();
+    const side = sidecarChild({ DESKTOP_REPO_ROOT: root });
+    try {
+      side.send({
+        id: 1,
+        method: "project.run",
+        params: { name, runId: "p1" },
+      });
+      expect(await side.frame((frame) => frame.id === 1)).toMatchObject({
+        ok: false,
+        error: "Unknown project command",
+      });
+      expect(existsSync(join(root, "grandchild.pid"))).toBe(false);
+    } finally {
+      side.child.kill();
+      await side.child.exited;
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+);
+
+test("a project command runs without the sidecar's API keys and provider profile", async () => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), "la-sidecar-")));
+  await writeFile(
+    join(root, "package.json"),
+    JSON.stringify({ scripts: { test: "bun env.ts" } }),
+  );
+  await writeFile(
+    join(root, "env.ts"),
+    'await Bun.write("env.json", JSON.stringify(process.env));',
+  );
+  const side = sidecarChild({
+    DESKTOP_REPO_ROOT: root,
+    HOME: "/home/someone",
+    XDG_CONFIG_HOME: "/cfg",
+    OPENAI_API_KEY: "sk-planted",
+    ANTHROPIC_API_KEY: "sk-planted",
+    LOCAL_AGENT_PROVIDER: "openai_local",
+    LOCAL_AGENT_PROVIDER_CONFIG: '{"api_key":"planted"}',
+    GITHUB_TOKEN: "planted",
+  });
+  try {
+    side.send({
+      id: 1,
+      method: "project.run",
+      params: { name: "test", runId: "p1" },
+    });
+    await side.frame(
+      (frame) =>
+        frame.stream === "p1" &&
+        (frame.event as { type?: string }).type === "exit",
+    );
+    const seen = JSON.parse(await readFile(join(root, "env.json"), "utf8"));
+    expect(
+      Object.keys(seen).filter((key) => /KEY|TOKEN|LOCAL_AGENT/.test(key)),
+    ).toEqual([]);
+    // What a toolchain needs still passes.
+    // (`bun run` puts its own folders in front.)
+    expect(seen.PATH).toContain(process.env.PATH);
+    expect(seen.HOME).toBe("/home/someone");
+    expect(seen.XDG_CONFIG_HOME).toBe("/cfg");
+  } finally {
+    side.child.kill();
+    await side.child.exited;
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("a project cancel stops what the command started too", async () => {
   const root = await sleeperRepo();
   const side = sidecarChild({ DESKTOP_REPO_ROOT: root });

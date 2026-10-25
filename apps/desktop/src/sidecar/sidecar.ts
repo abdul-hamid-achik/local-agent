@@ -43,6 +43,8 @@ import {
   SidecarMethods,
   type StreamEnvelope,
 } from "#desktop/shared/protocol";
+import { decidable } from "#desktop/sidecar/decision";
+import { projectEnvironment } from "#desktop/sidecar/project-env";
 
 const repoRoot = (() => {
   const override = process.env.DESKTOP_REPO_ROOT;
@@ -250,14 +252,10 @@ async function handleAgentStart(id: number, params: unknown): Promise<void> {
     const approve = (proposal: ApprovalRequest): Promise<boolean> =>
       new Promise((resolveDecision) => {
         const token = randomUUID();
-        run.pending = { token, resolve: resolveDecision };
-        controller.signal.addEventListener(
-          "abort",
-          () => resolveDecision(false),
-          {
-            once: true,
-          },
-        );
+        run.pending = {
+          token,
+          resolve: decidable(controller.signal, resolveDecision),
+        };
         if (proposal.kind === "edit") {
           emitStream(runId, {
             type: "approval_requested",
@@ -594,8 +592,10 @@ function stopProjectRun(run: ProjectRun): void {
 async function handleProjectRun(id: number, params: unknown): Promise<void> {
   if (!isRecord(params)) throw new Error("Invalid project.run params");
   const name = requiredString(params, "name") as ProjectCommandName;
+  // Its own keys only: "toString" and "__proto__" are not commands.
+  if (!Object.hasOwn(ProjectCommands, name))
+    throw new Error("Unknown project command");
   const argv = ProjectCommands[name];
-  if (!argv) throw new Error("Unknown project command");
   const runId =
     typeof params.runId === "string" && params.runId
       ? params.runId
@@ -604,6 +604,8 @@ async function handleProjectRun(id: number, params: unknown): Promise<void> {
   const binary = name.startsWith("git:") ? "git" : (Bun.which("bun") ?? "bun");
   const child = Bun.spawn([binary, ...argv.slice(1)], {
     cwd: repoRoot,
+    // The sidecar's environment holds the provider profile and API keys.
+    env: projectEnvironment(process.env),
     stdout: "pipe",
     stderr: "pipe",
     // Its own group, so a cancel reaches what it started.

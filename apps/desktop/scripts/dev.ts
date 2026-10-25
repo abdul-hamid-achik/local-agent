@@ -31,34 +31,41 @@ async function waitForRenderer(): Promise<void> {
     } catch {
       // Retry until the dev server accepts connections.
     }
+    // Stopped meanwhile: nothing left to wait for.
+    if (stopped) return;
     if (Date.now() > deadline) throw new Error("Vite dev server did not start");
     await Bun.sleep(250);
   }
 }
 
 let electron: ReturnType<typeof Bun.spawn> | undefined;
+let stopped = false;
 const shutdown = () => {
+  stopped = true;
   electron?.kill();
   vite.kill();
 };
+// Before the wait: a signal while Vite starts must not leave it running.
+process.once("SIGINT", shutdown);
+process.once("SIGTERM", shutdown);
 
 try {
   await waitForRenderer();
-  electron = Bun.spawn(
-    [
-      join(root, "node_modules", ".bin", "electron"),
-      join(root, "dist-main", "main.mjs"),
-    ],
-    {
-      cwd: root,
-      env: { ...process.env, ELECTRON_RENDERER_URL: RENDERER_URL },
-      stdout: "inherit",
-      stderr: "inherit",
-    },
-  );
-  process.once("SIGINT", shutdown);
-  process.once("SIGTERM", shutdown);
-  await electron.exited;
+  if (!stopped) {
+    electron = Bun.spawn(
+      [
+        join(root, "node_modules", ".bin", "electron"),
+        join(root, "dist-main", "main.mjs"),
+      ],
+      {
+        cwd: root,
+        env: { ...process.env, ELECTRON_RENDERER_URL: RENDERER_URL },
+        stdout: "inherit",
+        stderr: "inherit",
+      },
+    );
+    await electron.exited;
+  }
 } finally {
   vite.kill();
   electron?.kill();

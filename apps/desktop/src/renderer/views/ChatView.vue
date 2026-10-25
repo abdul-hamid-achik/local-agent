@@ -101,6 +101,7 @@ import { clearConversation, useChat } from "#desktop/renderer/chat-run";
 import { isSendKey } from "#desktop/renderer/composer";
 import { liveMarkdown } from "#desktop/renderer/live-markdown";
 import { renderMarkdown } from "#desktop/renderer/markdown";
+import { atEnd } from "#desktop/renderer/scroll";
 import { parseSlashCommand } from "#desktop/renderer/slash";
 import { store, workspaceRoot } from "#desktop/renderer/store";
 
@@ -134,12 +135,17 @@ function receiptClass(status: string): string {
   return "red";
 }
 
-function scrollDown(): void {
+// Follows the transcript to its end, unless the reader scrolled up: that is
+// measured now, before the event's content is rendered. Sending always follows.
+function scrollDown(force = false): void {
+  const scroller = transcriptEl.value;
+  if (!force && scroller && !atEnd(scroller)) return;
   void nextTick(() => {
     transcriptEl.value?.scrollTo({ top: transcriptEl.value.scrollHeight });
   });
 }
-chat.onEvent = scrollDown;
+const followEvent = () => scrollDown();
+chat.onEvent = followEvent;
 
 function onKey(event: KeyboardEvent): void {
   if (isSendKey(event)) {
@@ -190,14 +196,17 @@ async function runSlash(command: string): Promise<boolean> {
 async function submit(): Promise<void> {
   if (state.running || !draft.value.trim()) return;
   const prompt = draft.value;
+  // A prompt needs a model: refused before it leaves the composer, so it is
+  // not lost. A slash command needs none.
+  if (parseSlashCommand(prompt).kind === "not-slash" && !store.model.trim()) {
+    state.notice = "";
+    state.error = "Set a model in the top bar first (it must already exist in Ollama).";
+    return;
+  }
   draft.value = "";
   state.notice = "";
   state.error = "";
   if (await runSlash(prompt.trim())) return;
-  if (!store.model.trim()) {
-    state.error = "Set a model in the top bar first (it must already exist in Ollama).";
-    return;
-  }
   const started = chat.send(prompt, {
     workspace: workspaceRoot(),
     intent: store.intent,
@@ -206,13 +215,13 @@ async function submit(): Promise<void> {
     resume: store.resumeSession || undefined,
     mcpConfig: store.mcpAttached ? store.mcpConfig || undefined : undefined,
   });
-  scrollDown();
+  scrollDown(true);
   const sessionId = await started;
   if (sessionId) store.resumeSession = sessionId;
 }
 
 onUnmounted(() => {
-  if (chat.onEvent === scrollDown) chat.onEvent = () => undefined;
+  if (chat.onEvent === followEvent) chat.onEvent = () => undefined;
   stopLive();
 });
 </script>

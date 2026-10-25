@@ -1,6 +1,6 @@
 import { afterEach, expect, test, vi } from "vitest";
 import { reactive } from "vue";
-import { api, rpc } from "#desktop/renderer/api";
+import { api, errorMessage, rpc } from "#desktop/renderer/api";
 
 afterEach(() => {
   delete (globalThis as { window?: unknown }).window;
@@ -102,4 +102,40 @@ test("a missing bridge rejects the promise-returning wrappers", async () => {
       expect(call).rejects.toThrow("Desktop bridge is unavailable"),
     ),
   );
+});
+
+// A subscription made before the bridge exists fails; once the bridge is
+// there the next one must wire it, not find the stream "already wired".
+test("a stream subscribed to before the bridge exists is wired by the next try", async () => {
+  vi.resetModules();
+  (globalThis as { window?: unknown }).window = {};
+  const fresh = await import("#desktop/renderer/api");
+  expect(() => fresh.subscribeStream("chat", () => {})).toThrow(
+    "Desktop bridge is unavailable",
+  );
+  let deliver: (envelope: unknown) => void = () => {};
+  (globalThis as { window?: unknown }).window = {
+    desktop: {
+      onStream: (callback: (envelope: unknown) => void) => {
+        deliver = callback;
+        return () => {};
+      },
+    },
+  };
+  const seen: unknown[] = [];
+  fresh.subscribeStream("chat", (event) => seen.push(event));
+  deliver({ stream: "chat", event: "hello" });
+  expect(seen).toEqual(["hello"]);
+});
+
+test("errorMessage keeps the reason of a rejection that is not an Error", () => {
+  expect(errorMessage(new Error("boom"))).toBe("boom");
+  expect(errorMessage("Sidecar is not running")).toBe("Sidecar is not running");
+  expect(errorMessage({ message: "from a plain object" })).toBe(
+    "from a plain object",
+  );
+  // Anything else says nothing of itself: no stringified objects.
+  expect(errorMessage("")).toBe("Request failed");
+  expect(errorMessage({ code: 1 })).toBe("Request failed");
+  expect(errorMessage(undefined)).toBe("Request failed");
 });

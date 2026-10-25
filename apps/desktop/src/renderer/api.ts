@@ -41,7 +41,8 @@ let streamWired = false;
 
 function ensureStreamWired(): void {
   if (streamWired) return;
-  streamWired = true;
+  // Only once the bridge took it: a missing bridge must not leave the
+  // stream "wired" for a later subscriber.
   bridge().onStream((envelope: StreamEnvelope) => {
     const subs = streamSubs.get(envelope.stream);
     if (!subs) return;
@@ -49,6 +50,7 @@ function ensureStreamWired(): void {
       callback(envelope.event as AgentStreamEvent | ProjectStreamEvent);
     }
   });
+  streamWired = true;
 }
 
 export function subscribeStream(
@@ -180,7 +182,15 @@ export const api = {
 };
 
 export function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : "Request failed";
+  if (error instanceof Error) return error.message;
+  // A rejection with a reason of its own keeps it: a string, or an object
+  // carrying a message. Nothing else is shown.
+  if (typeof error === "string" && error) return error;
+  if (typeof error === "object" && error !== null && "message" in error) {
+    const { message } = error;
+    if (typeof message === "string" && message) return message;
+  }
+  return "Request failed";
 }
 
 export function randomRunId(): string {

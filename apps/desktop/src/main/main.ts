@@ -1,6 +1,5 @@
-import { existsSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
 import {
@@ -11,6 +10,7 @@ import {
 import { confine, externalUrl } from "#desktop/main/navigation";
 import { providerEnvProblem } from "#desktop/main/provider-env";
 import { holdQuit } from "#desktop/main/quit";
+import { detectRepoRoot, looksLikeRepoRoot } from "#desktop/main/repo-root";
 import {
   loadSettings,
   type Settings,
@@ -27,25 +27,13 @@ function settingsPath(): string {
   return join(app.getPath("userData"), "settings.json");
 }
 
-function looksLikeRepoRoot(path: string): boolean {
-  return (
-    existsSync(join(path, "package.json")) &&
-    existsSync(join(path, "apps", "desktop", "src", "sidecar", "sidecar.ts"))
-  );
-}
-
 function defaultRepoRoot(): string | undefined {
-  const override = process.env.DESKTOP_REPO_ROOT;
-  if (override && looksLikeRepoRoot(override)) return override;
-  // dist-main/main.cjs -> apps/desktop/dist-main -> repo root is ../../..
-  const sibling = join(dirname(app.getAppPath()), "..", "..", "..");
-  // When running from source checkout via `electron dist-main/main.cjs`.
-  const dev = join(process.cwd(), "..", "..");
-  for (const candidate of [sibling, process.cwd(), dev]) {
-    const normalized = join(candidate);
-    if (looksLikeRepoRoot(normalized)) return normalized;
-  }
-  return undefined;
+  return detectRepoRoot({
+    override: process.env.DESKTOP_REPO_ROOT,
+    // The bundle's own folder, apps/desktop/dist-main.
+    distMain: import.meta.dirname,
+    cwd: process.cwd(),
+  });
 }
 
 let mainWindow: BrowserWindow | undefined;

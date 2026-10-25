@@ -75,14 +75,26 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from "vue";
+import { ref, watch } from "vue";
 import { api, errorMessage } from "#desktop/renderer/api";
+import { latest } from "#desktop/renderer/latest";
 import { store, workspaceRoot } from "#desktop/renderer/store";
 import type { RecoveryView } from "#desktop/shared/protocol";
 
 const handle = ref(store.resumeSession);
 const report = ref<RecoveryView | undefined>();
 const error = ref("");
+// A report answers the session it was asked about: a slower, older answer
+// must not replace a newer one, nor outlive a change of session or database.
+const inspections = latest();
+
+watch(
+  () => [handle.value.trim(), store.sessionDb],
+  () => {
+    inspections.invalidate();
+    report.value = undefined;
+  },
+);
 
 async function pickDb(): Promise<void> {
   const picked = await api.pick({
@@ -95,10 +107,12 @@ async function pickDb(): Promise<void> {
 async function inspect(): Promise<void> {
   error.value = "";
   report.value = undefined;
+  const current = inspections.begin();
   try {
-    report.value = await api.recoveryInfo(store.sessionDb, workspaceRoot(), handle.value.trim());
+    const found = await api.recoveryInfo(store.sessionDb, workspaceRoot(), handle.value.trim());
+    if (current()) report.value = found;
   } catch (error_) {
-    error.value = errorMessage(error_);
+    if (current()) error.value = errorMessage(error_);
   }
 }
 </script>

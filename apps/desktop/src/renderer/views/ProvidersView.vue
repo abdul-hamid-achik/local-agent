@@ -97,7 +97,7 @@
       </div>
       <div class="row" style="margin-top: 10px">
         <button class="small" @click="envRows.push({ key: '', value: '', shown: false })">Add variable</button>
-        <button class="small primary" @click="saveEnv">Save &amp; restart sidecar</button>
+        <button class="small primary" :disabled="!envLoaded" @click="saveEnv">Save &amp; restart sidecar</button>
       </div>
     </div>
   </div>
@@ -106,6 +106,7 @@
 <script setup lang="ts">
 import { onMounted, ref, watch } from "vue";
 import { api, errorMessage } from "#desktop/renderer/api";
+import { envFromRows, type EnvRow } from "#desktop/renderer/env-rows";
 import { latest } from "#desktop/renderer/latest";
 import { store } from "#desktop/renderer/store";
 import type { AdmissionView } from "#desktop/shared/protocol";
@@ -113,7 +114,10 @@ import type { AdmissionView } from "#desktop/shared/protocol";
 // The admission card belongs to the model it ran for.
 const admission = ref<{ model: string; result: AdmissionView } | undefined>();
 const models = ref<{ endpoint: string; models: { name: string; size: number }[] } | undefined>();
-const envRows = ref<{ key: string; value: string; shown: boolean }[]>([]);
+const envRows = ref<EnvRow[]>([]);
+// Whether the saved variables were read: Save replaces them all, so an empty
+// list standing for a failed read must not be saved.
+const envLoaded = ref(false);
 const error = ref("");
 const notice = ref("");
 // Each answer applies only if it is still the newest of its kind, and a model
@@ -179,18 +183,15 @@ function useModel(name: string): void {
 }
 
 async function saveEnv(): Promise<void> {
+  if (!envLoaded.value) return;
   error.value = "";
   notice.value = "";
-  const env: Record<string, string> = {};
-  for (const row of envRows.value) {
-    const key = row.key.trim();
-    if (!key) continue;
-    if (!/^[A-Z_][A-Z0-9_]*$/.test(key)) {
-      error.value = `Invalid variable name: ${key}`;
-      return;
-    }
-    env[key] = row.value;
+  const rows = envFromRows(envRows.value);
+  if ("error" in rows) {
+    error.value = rows.error;
+    return;
   }
+  const env = rows.env;
   try {
     await api.setProviderEnv(env);
     notice.value =
@@ -207,8 +208,9 @@ onMounted(async () => {
   try {
     const env = await api.getProviderEnv();
     envRows.value = Object.entries(env).map(([key, value]) => ({ key, value, shown: false }));
-  } catch {
-    envRows.value = [];
+    envLoaded.value = true;
+  } catch (error_) {
+    error.value = `Cannot read the saved variables (${errorMessage(error_)}). Saving is off so they are not erased; reopen this view to retry.`;
   }
 });
 </script>

@@ -97,24 +97,29 @@
 </template>
 
 <script setup lang="ts">
-import { computed, defineAsyncComponent, onMounted, ref } from "vue";
+import { type Component, computed, defineAsyncComponent, onMounted, ref } from "vue";
 import { api, errorMessage } from "#desktop/renderer/api";
+import ViewLoadError from "#desktop/renderer/components/ViewLoadError.vue";
 import { currentRoute, navigate, routes } from "#desktop/renderer/router";
 import { changeWorkspace, store } from "#desktop/renderer/store";
 
+// A view whose code fails to load shows why, instead of an empty page.
+const lazyView = (load: () => Promise<Component>) =>
+  defineAsyncComponent({ loader: load, errorComponent: ViewLoadError });
+
 const views = {
-  chat: defineAsyncComponent(() => import("#desktop/renderer/views/ChatView.vue")),
-  sessions: defineAsyncComponent(() => import("#desktop/renderer/views/SessionsView.vue")),
-  recovery: defineAsyncComponent(() => import("#desktop/renderer/views/RecoveryView.vue")),
-  workspace: defineAsyncComponent(
+  chat: lazyView(() => import("#desktop/renderer/views/ChatView.vue")),
+  sessions: lazyView(() => import("#desktop/renderer/views/SessionsView.vue")),
+  recovery: lazyView(() => import("#desktop/renderer/views/RecoveryView.vue")),
+  workspace: lazyView(
     () => import("#desktop/renderer/views/WorkspaceView.vue"),
   ),
-  mcp: defineAsyncComponent(() => import("#desktop/renderer/views/McpView.vue")),
-  providers: defineAsyncComponent(
+  mcp: lazyView(() => import("#desktop/renderer/views/McpView.vue")),
+  providers: lazyView(
     () => import("#desktop/renderer/views/ProvidersView.vue"),
   ),
-  project: defineAsyncComponent(() => import("#desktop/renderer/views/ProjectView.vue")),
-  reference: defineAsyncComponent(
+  project: lazyView(() => import("#desktop/renderer/views/ProjectView.vue")),
+  reference: lazyView(
     () => import("#desktop/renderer/views/ReferenceView.vue"),
   ),
 } as const;
