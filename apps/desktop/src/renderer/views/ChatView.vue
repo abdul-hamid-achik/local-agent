@@ -85,7 +85,7 @@
         <button class="primary" :disabled="state.running || !draft.trim()" @click="submit">
           Send
         </button>
-        <button class="ghost" :disabled="state.running" @click="chat.clear()">Clear</button>
+        <button class="ghost" :disabled="state.running" @click="clearConversation(chat, store)">Clear</button>
         <span class="spacer" />
         <span class="dim help-text"><span class="kbd">Enter</span> send · <span class="kbd">Shift+Enter</span> newline</span>
       </div>
@@ -97,7 +97,8 @@
 import { nextTick, onUnmounted, ref } from "vue";
 import ApprovalCard from "#desktop/renderer/components/ApprovalCard.vue";
 import { api, errorMessage } from "#desktop/renderer/api";
-import { useChat } from "#desktop/renderer/chat-run";
+import { clearConversation, useChat } from "#desktop/renderer/chat-run";
+import { isSendKey } from "#desktop/renderer/composer";
 import { renderMarkdown } from "#desktop/renderer/markdown";
 import { parseSlashCommand } from "#desktop/renderer/slash";
 import { store, workspaceRoot } from "#desktop/renderer/store";
@@ -127,7 +128,7 @@ function scrollDown(): void {
 chat.onEvent = scrollDown;
 
 function onKey(event: KeyboardEvent): void {
-  if (event.key === "Enter" && !event.shiftKey) {
+  if (isSendKey(event)) {
     event.preventDefault();
     void submit();
   }

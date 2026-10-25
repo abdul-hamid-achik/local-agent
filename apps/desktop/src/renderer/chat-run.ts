@@ -174,9 +174,9 @@ export class ChatRun {
     this.finish();
   }
 
-  /** Empties the transcript; a running turn keeps it. */
-  clear(): void {
-    if (this.state.running) return;
+  /** Empties the transcript; a running turn keeps it (false). */
+  clear(): boolean {
+    if (this.state.running) return false;
     const state = this.state;
     state.messages = [];
     state.receipts = [];
@@ -188,6 +188,7 @@ export class ChatRun {
     state.notice = "";
     state.error = "";
     state.sessionId = "";
+    return true;
   }
 
   private handle(event: AgentStreamEvent): void {
@@ -256,6 +257,17 @@ let shared: ChatRun | undefined;
  * The app's one Chat run, wired to the sidecar on first use. It outlives the
  * view, and a sidecar that exits or is replaced ends its run.
  */
+/**
+ * Clear: an empty transcript is a new conversation, so the session it
+ * showed is no longer the one the next send resumes.
+ */
+export function clearConversation(
+  chat: Pick<ChatRun, "clear">,
+  store: { resumeSession: string },
+): void {
+  if (chat.clear()) store.resumeSession = "";
+}
+
 export function useChat(): ChatRun {
   if (shared) return shared;
   const chat = new ChatRun({

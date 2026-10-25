@@ -1,5 +1,9 @@
 import { describe, expect, test } from "vitest";
-import { type ChatApi, ChatRun } from "#desktop/renderer/chat-run";
+import {
+  type ChatApi,
+  ChatRun,
+  clearConversation,
+} from "#desktop/renderer/chat-run";
 import type { AgentStreamEvent } from "#desktop/shared/protocol";
 
 /**
@@ -93,6 +97,22 @@ describe("ChatRun", () => {
     // The run's stream is closed: a late frame changes nothing.
     side.emit("run-1", { type: "text", text: "late" });
     expect(chat.state.liveText).toBe("");
+  });
+
+  test("Clear starts a new conversation: the next send does not resume the old session", async () => {
+    const side = sidecar();
+    const chat = new ChatRun(side.api);
+    const store = { resumeSession: "s-0" };
+    await chat.send("hi", { ...params, resume: store.resumeSession });
+    // A running turn keeps its transcript and its session.
+    clearConversation(chat, store);
+    expect(chat.state.messages).toHaveLength(1);
+    expect(store.resumeSession).toBe("s-0");
+    side.emit("run-1", { type: "run_done" });
+    clearConversation(chat, store);
+    expect(chat.state.messages).toEqual([]);
+    expect(chat.state.sessionId).toBe("");
+    expect(store.resumeSession).toBe("");
   });
 
   test("Stop on a run the sidecar no longer knows finishes it here", async () => {
