@@ -1,0 +1,48 @@
+version: 1
+name: bun_tuimark_old_binary_fallback
+intent: |
+    with no --ui and a TUIMARK_BINARY older than the Tuimark client needs,
+    the default client does not fail: it asks the binary its version, never
+    starts it as a host (the fixture fails the run otherwise), and runs the
+    Vue client instead, which answers a prompt and exits cleanly.
+target:
+    cmd: ["bun", "specs/tuimark/fixture.ts", "old-binary"]
+    cwd: "${projectRoot}"
+terminal:
+    cols: 120
+    rows: 36
+    alternateScreen: require
+steps:
+    # "Enter send" is the Vue client's hint; the Tuimark client has none so
+    # spelled.
+    - wait:
+        screen:
+            contains: "Enter send"
+        timeoutMs: 15000
+    - type: "stream a reply"
+    - press: enter
+    - wait:
+        screen:
+            contains: "stream complete"
+        timeoutMs: 15000
+    - wait:
+        screen:
+            contains: "Enter send"
+        timeoutMs: 10000
+    - press: ctrl+c
+    - wait:
+        process:
+            exitCode: 0
+        timeoutMs: 10000
+outcomes:
+    - id: tuimark_old_binary_falls_back
+      description: the Vue client, not an abort, answers the prompt
+      verify:
+        screen:
+            contains: "stream complete"
+    - id: tuimark_old_binary_exits
+      description: the Vue client exits cleanly
+      verify:
+        process:
+            exitCode: 0
+contractHash: sha256:619ad232d9d2cdede85c3afe736a6a44959ff32298ec983fef174448ec739722

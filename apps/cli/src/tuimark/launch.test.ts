@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "vitest";
@@ -27,6 +27,8 @@ test("a missing app.tui is reported with the folder that was searched", async ()
 import type { AgentEvent, Provider, Workspace } from "@local-agent/runtime";
 import type { Host, HostExit, Ready } from "@thelacanians/tuimark";
 import {
+  binaryVersion,
+  fallbackNotice,
   findBinary,
   INLINE_TERMINAL_RESET,
   MIN_TUIMARK,
@@ -356,14 +358,141 @@ test("the turn is awaited before the launcher returns when the host dies mid-tur
 });
 
 test("findBinary returns the path, or the reason there is none, and never throws", async () => {
-  expect(await findBinary(async () => "/opt/tuimark")).toEqual({
+  const unasked = async (): Promise<string | undefined> => {
+    throw new Error("the pinned release is not asked its version");
+  };
+  expect(
+    await findBinary(async () => "/opt/tuimark", undefined, unasked),
+  ).toEqual({
     bin: "/opt/tuimark",
   });
   expect(
-    await findBinary(async () => {
-      throw new Error("release v0.4.6 was not found");
-    }),
+    await findBinary(
+      async () => {
+        throw new Error("release v0.4.6 was not found");
+      },
+      undefined,
+      unasked,
+    ),
   ).toEqual({ error: "release v0.4.6 was not found" });
+});
+
+test("findBinary refuses a TUIMARK_BINARY older than the client, so the default client falls back", async () => {
+  const named = (version: string | undefined) =>
+    findBinary(
+      async () => "/opt/old/tuimark",
+      "/opt/old/tuimark",
+      async (bin) => (bin === "/opt/old/tuimark" ? version : "9.9.9"),
+    );
+  expect(await named(MIN_TUIMARK)).toEqual({ bin: "/opt/old/tuimark" });
+  expect(await named("1.0.0")).toEqual({ bin: "/opt/old/tuimark" });
+  expect(await named("0.4.6")).toEqual({
+    error: "TUIMARK_BINARY is /opt/old/tuimark, which is tuimark 0.4.6",
+  });
+  expect(await named(undefined)).toEqual({
+    error: "TUIMARK_BINARY is /opt/old/tuimark, which names no tuimark version",
+  });
+  const unasked = async (): Promise<string | undefined> => {
+    throw new Error("only the binary TUIMARK_BINARY names is asked");
+  };
+  // The SDK resolved something other than the override: it is not asked.
+  expect(
+    await findBinary(async () => "/cache/tuimark", "/opt/old/tuimark", unasked),
+  ).toEqual({ bin: "/cache/tuimark" });
+  // TUIMARK_BINARY names no file: the SDK's reason, unasked.
+  expect(
+    await findBinary(
+      async () => {
+        throw new Error("TUIMARK_BINARY is set to /nope, which is not a file");
+      },
+      "/nope",
+      unasked,
+    ),
+  ).toEqual({ error: "TUIMARK_BINARY is set to /nope, which is not a file" });
+});
+
+test("the fall back's notice says why, what would do, and how to silence it", () => {
+  expect(
+    fallbackNotice(
+      "TUIMARK_BINARY is /opt/old/tuimark, which is tuimark 0.4.6",
+    ),
+  ).toBe(
+    `No usable tuimark binary (TUIMARK_BINARY is /opt/old/tuimark, which is tuimark 0.4.6); using the Vue client. Set TUIMARK_BINARY to a tuimark >= ${MIN_TUIMARK}, or pass --ui vue to silence this.\n`,
+  );
+  // A path is the user's text: it cannot draw on the terminal.
+  expect(fallbackNotice("TUIMARK_BINARY is /tmp/\x1b[2Jx")).not.toContain(
+    "\x1b",
+  );
+});
+
+test("binaryVersion reads what --version names, and nothing from a binary that names none", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "la-tuimark-version-"));
+  const script = async (name: string, body: string) => {
+    const file = join(dir, name);
+    await writeFile(file, `#!/bin/sh\n${body}\n`, { mode: 0o755 });
+    return file;
+  };
+  // A binary left running after the probe: `kill -0` still reaches it.
+  const running = async (name: string) => {
+    const pid = Number(await readFile(join(dir, `${name}.pid`), "utf8"));
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  try {
+    expect(
+      await binaryVersion(
+        await script("old", 'echo "tuimark 0.4.6 (commit abc, built today)"'),
+      ),
+    ).toBe("0.4.6");
+    expect(
+      await binaryVersion(await script("dev", 'echo "tuimark v0.6.0-dev"')),
+    ).toBe("v0.6.0-dev");
+    expect(
+      await binaryVersion(await script("other", 'echo "glyph 0.5.1"')),
+    ).toBeUndefined();
+    expect(
+      await binaryVersion(await script("silent", "exit 0")),
+    ).toBeUndefined();
+    expect(await binaryVersion(join(dir, "missing"))).toBeUndefined();
+    // Only the head is read: a version then an endless flood names the
+    // version at once, not at the deadline.
+    {
+      const started = Date.now();
+      expect(
+        await binaryVersion(
+          await script(
+            "loud",
+            `echo $$ > ${join(dir, "loud.pid")}; echo "tuimark 0.5.1"; exec yes flood`,
+          ),
+          3_000,
+        ),
+      ).toBe("0.5.1");
+      expect(Date.now() - started).toBeLessThan(1_500);
+      expect(await running("loud")).toBe(false);
+    }
+    // The deadline holds when the binary itself exits on SIGTERM, when it
+    // ignores SIGTERM, and when a child it left behind holds its output.
+    for (const [name, body] of [
+      ["stuck", "exec sleep 5"],
+      ["deaf", `echo $$ > ${join(dir, "deaf.pid")}; trap '' TERM; sleep 5`],
+      ["orphan", "sleep 5 & echo partial; wait"],
+    ] as const) {
+      const started = Date.now();
+      expect(
+        await binaryVersion(await script(name, body), 200),
+        name,
+      ).toBeUndefined();
+      expect(Date.now() - started, name).toBeLessThan(3_000);
+    }
+    expect(await running("deaf")).toBe(false);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });
 
 // ------------------------------------------------------- the sessions capability

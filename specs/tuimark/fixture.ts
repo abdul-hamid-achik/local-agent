@@ -1,9 +1,13 @@
 // Deterministic loopback Ollama for the Tuimark client specs (--ui tuimark).
 //
 //   bun specs/tuimark/fixture.ts chat|edit-approve|edit-deny|session|goal[-inline]
+//   bun specs/tuimark/fixture.ts old-binary
 //
 // A mode ending in -inline runs the same flow with --mode inline (the opt-in
-// Tuimark inline client).
+// Tuimark inline client). `old-binary` passes no --ui, and TUIMARK_BINARY
+// names a stand-in that says it is tuimark 0.4.6: the default client must
+// fall back to the Vue client. The stand-in logs its arguments, and the run
+// fails unless it was asked its version once and never started as a host.
 //
 // The reply depends only on the last message, so one run can hold several turns:
 //
@@ -45,11 +49,13 @@ const rawMode = Bun.argv[2] ?? "chat";
 const inline = rawMode.endsWith("-inline");
 const mode = inline ? rawMode.slice(0, -"-inline".length) : rawMode;
 const model = "fixture-model";
-const modes = ["chat", "edit-approve", "edit-deny", "session", "edit-session", "sessions", "goal"];
+const modes = ["chat", "edit-approve", "edit-deny", "session", "edit-session", "sessions", "goal", "old-binary"];
 if (!modes.includes(mode)) throw new Error(`unknown mode: ${rawMode}`);
 
 const workspaceRoot = await mkdtemp(join(tmpdir(), "local-agent-tuimark-"));
 const configHome = await mkdtemp(join(tmpdir(), "local-agent-config-"));
+// What the old-binary stand-in was called with (see the old-binary mode).
+const oldCalls = join(configHome, "tuimark-0.4.6.calls");
 await writeFile(join(workspaceRoot, "notes.txt"), "before\n");
 await writeFile(
   join(workspaceRoot, "long.txt"),
@@ -401,6 +407,13 @@ async function stop(exitCode: number): Promise<never> {
           ? "after\n"
           : "before\n";
     if (contents !== expected) exitCode = 1;
+    if (mode === "old-binary") {
+      const calls = await readFile(oldCalls, "utf8").catch(() => "");
+      if (calls !== "--version\n") {
+        console.error(`the old tuimark was called ${JSON.stringify(calls)}, not asked its version once`);
+        exitCode = 1;
+      }
+    }
   } finally {
     await rm(workspaceRoot, { recursive: true, force: true });
     await rm(configHome, { recursive: true, force: true });
@@ -431,6 +444,13 @@ async function headless(prompt: string, database: string): Promise<string> {
 }
 
 const extraArgs: string[] = [];
+if (mode === "old-binary") {
+  const old = join(configHome, "tuimark-0.4.6");
+  await writeFile(old, `#!/bin/sh\necho "$*" >> '${oldCalls}'\necho "tuimark 0.4.6 (commit fixture)"\n`, {
+    mode: 0o755,
+  });
+  env.TUIMARK_BINARY = old;
+}
 if (mode === "session") {
   await going();
   sessionDirectory = await mkdtemp(join(tmpdir(), "local-agent-tuimark-db-"));
@@ -459,8 +479,7 @@ const child = Bun.spawn(
     ...baseArgs,
     "--mode",
     inline ? "inline" : "fullscreen",
-    "--ui",
-    "tuimark",
+    ...(mode === "old-binary" ? [] : ["--ui", "tuimark"]),
     ...extraArgs,
   ],
   { stdin: "inherit", stdout: "inherit", stderr: "inherit", env },

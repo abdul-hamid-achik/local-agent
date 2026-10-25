@@ -15,7 +15,6 @@ import {
   type Provider,
   reconcileExecution,
   recoveryItems,
-  type Session,
   type SessionContext,
   type SessionStore,
   sessionProblem,
@@ -28,6 +27,7 @@ import {
   resolveBinary,
   spawnHost,
 } from "@thelacanians/tuimark";
+import { terminalText } from "#cli/text";
 import { copyToClipboard } from "#cli/tuimark/clipboard";
 import type { Intent } from "#cli/tuimark/commands";
 import {
@@ -133,18 +133,81 @@ export function readyProblem(
 
 /**
  * The tuimark binary, or why there is none. The default client uses this to fall
- * back to the Vue client with a line on stderr instead of failing a run that
- * never asked for Tuimark (offline with an empty cache, a release not out yet).
+ * back to the Vue client with fallbackNotice instead of failing a run that never
+ * asked for Tuimark (offline with an empty cache, a release not out yet, a
+ * TUIMARK_BINARY older than MIN_TUIMARK). The pinned release is checked by its
+ * hash; a binary TUIMARK_BINARY names is asked its version here, since
+ * readyProblem only sees it once the client has started. One that is new
+ * enough by its version but still loads the document with errors is left to
+ * readyProblem, which stops the run.
  */
 export async function findBinary(
   resolve: () => Promise<string> = resolvePinned,
+  override: string | undefined = process.env.TUIMARK_BINARY || undefined,
+  version: (bin: string) => Promise<string | undefined> = binaryVersion,
 ): Promise<{ bin: string } | { error: string }> {
+  let bin: string;
   try {
-    return { bin: await resolve() };
+    bin = await resolve();
   } catch (error) {
     return {
       error: error instanceof Error ? error.message : "no tuimark binary",
     };
+  }
+  if (bin !== override) return { bin };
+  const have = await version(bin);
+  if (have !== undefined && versionAtLeast(have, MIN_TUIMARK)) return { bin };
+  return {
+    error: `TUIMARK_BINARY is ${bin}, ${have === undefined ? "which names no tuimark version" : `which is tuimark ${have}`}`,
+  };
+}
+
+/** The stderr line of the default client's fall back to the Vue client. */
+export function fallbackNotice(error: string): string {
+  return `No usable tuimark binary (${terminalText(error)}); using the Vue client. Set TUIMARK_BINARY to a tuimark >= ${MIN_TUIMARK}, or pass --ui vue to silence this.\n`;
+}
+
+/**
+ * The version `bin --version` names ("tuimark 0.5.1 (commit …)" is
+ * "0.5.1"), or undefined when it names none or fails. Only the head of its
+ * output is read, until `timeoutMs` at most; then the binary is killed if it
+ * still runs, so the deadline holds against one that ignores SIGTERM or
+ * leaves a child holding its output.
+ */
+export async function binaryVersion(
+  bin: string,
+  timeoutMs = 5_000,
+): Promise<string | undefined> {
+  let child: Bun.Subprocess<"ignore", "pipe", "ignore">;
+  try {
+    child = Bun.spawn([bin, "--version"], {
+      stdin: "ignore",
+      stdout: "pipe",
+      stderr: "ignore",
+    });
+  } catch {
+    return undefined;
+  }
+  const reader = child.stdout.getReader();
+  // Cancelling ends a pending read, however long its writer stays.
+  const timer = setTimeout(
+    () => void reader.cancel().catch(() => {}),
+    timeoutMs,
+  );
+  try {
+    const decoder = new TextDecoder();
+    let out = "";
+    while (out.length < 4096) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      out += decoder.decode(value, { stream: true });
+    }
+    return /^tuimark (v?\d+\.\d+\.\d+\S*)/.exec(out)?.[1];
+  } catch {
+    return undefined;
+  } finally {
+    clearTimeout(timer);
+    if (child.exitCode === null) child.kill("SIGKILL");
   }
 }
 

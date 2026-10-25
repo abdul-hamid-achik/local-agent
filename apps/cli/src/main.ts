@@ -441,23 +441,25 @@ A resumed session first closes the calls it was interrupted before running.`);
                 values.mode as "fullscreen" | "inline",
                 values.ui !== undefined,
               );
+          let bin: string | undefined;
+          if (client === "tuimark" && values.ui === undefined) {
+            // The default client must not fail a run that never asked for it.
+            const { fallbackNotice, findBinary } = await import(
+              "#cli/tuimark/launch"
+            );
+            const found = await findBinary();
+            if ("bin" in found) bin = found.bin;
+            else {
+              process.stderr.write(fallbackNotice(found.error));
+              client = "vue";
+            }
+          }
+          // After the fall back, so a theme is refused, not dropped, when the
+          // Vue client takes over.
           if (values.theme !== undefined && client !== "tuimark")
             throw new Error(
               "--theme needs the Tuimark client; use --ui tuimark",
             );
-          let bin: string | undefined;
-          if (client === "tuimark" && values.ui === undefined) {
-            // The default client must not fail a run that never asked for it.
-            const { findBinary } = await import("#cli/tuimark/launch");
-            const found = await findBinary();
-            if ("bin" in found) bin = found.bin;
-            else {
-              process.stderr.write(
-                `No tuimark binary (${terminalText(found.error)}); using the Vue client. Set TUIMARK_BINARY to a tuimark, or pass --ui vue to silence this.\n`,
-              );
-              client = "vue";
-            }
-          }
           if (values["sandbox-commands"]) {
             if (!headless && client !== "tuimark")
               throw new Error(
