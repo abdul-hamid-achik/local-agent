@@ -44,9 +44,18 @@ tokens that fits in about 11/16 of the machine's memory once the weights and
 `qwen3.5:4b`, whose cache lives in one layer of four, gets 32768 on a 16 GB
 machine. A model that does not report the figures keeps 16384, as does a run
 that cannot reach Ollama. In the Tuimark client, `/status` shows how the size
-was chosen, and `/model` plans again for the new model. The planner stops at 32768 because
-refilling a larger window takes long on small models; pass `--context` for
-more.
+was chosen, and `/model` plans again for the new model. The planner stops at
+32768 because refilling a larger window takes long on small models; pass
+`--context` for more.
+
+In the Tuimark client, `/context SIZE` (`64k`, say) changes the size
+mid-session. It is checked against the model and costed like `--context`,
+and Ollama reloads the model at that size on the next turn, which then reads
+the conversation again from its start. `/context auto` plans it again, and
+`/context` alone shows the size and how it was chosen. On a 16 GB machine,
+`qwen3.5:4b-q4_K_M` at 65536 tokens takes 5.5 GB, all of it in GPU memory,
+and a 9,500-token conversation took about 10 s to read again after the
+reload.
 
 `--context` applies to the local Ollama provider only; Chalupa negotiates its
 own. See [Providers](/providers).

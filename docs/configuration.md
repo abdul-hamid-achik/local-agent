@@ -51,7 +51,8 @@ defaults to.
 (`LOCAL_AGENT_CONTEXT` is equivalent). The value cannot exceed the model's
 native context. Without either, the size is planned from the model and this
 machine's memory, at most 32768; see [Ollama models](/ollama-models#context).
-Chalupa negotiates its own context; the flag does not apply.
+Chalupa negotiates its own context; the flag does not apply. In the Tuimark
+client, `/context SIZE|auto` changes the size mid-session.
 
 Interactive runs reject a missing model or an oversized `--context` up front
 with a 15 s admission check, before the session starts.

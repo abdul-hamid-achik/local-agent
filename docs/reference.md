@@ -130,6 +130,7 @@ instead. See [Safety](/safety#headless-approval).
 | `/recover` | Tuimark client, needs `--session-db`: list the session's calls whose outcome is unknown, numbered |
 | `/recover N applied\|not-applied\|undone [note]` | Tuimark client: record what you found in the workspace for the Nth call. Nothing runs again. Earlier calls are answered first. While one remains, a prompt waits and the status names `/recover` |
 | `/model [NAME]` | Show the current model, or switch to another installed Ollama model mid-session |
+| `/context [SIZE\|auto]` | Tuimark client, local Ollama: show the context size and how it was chosen; set one (`64k`), checked and costed as `--context` is; or plan it again (`auto`). Ollama reloads the model at the new size on the next turn and reads the conversation again. Refused while a turn or the startup model check runs, and under Chalupa or an OpenAI-compatible server |
 | `/goal OBJECTIVE [--turns N]` | Tuimark client, build mode: run turns toward an objective until the model reports done or blocked, or a limit stops it (8 turns by default, 1 to 50) |
 | `/goal` | Show the running goal: its objective, turn, time and tokens left, and last status |
 | `/goal stop` | End the running goal; `esc` ends it too, and so does `ctrl+c` between its turns |
