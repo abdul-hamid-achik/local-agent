@@ -38,8 +38,10 @@ and rejects `--context` outright — Chalupa negotiates the context itself.
 Without `--session-db` the conversation lives only in the process and ends
 with the launch. Arguments after `--` reach the client, so
 `chalupa launch local-agent -- --session-db ~/.local-agent/sessions.db`
-keeps it in a database on your machine that `--resume` continues later (see
-[Sessions](/sessions)).
+keeps it in a database on your machine that `--resume` continues later. If
+a call with side effects was still running when the process ended,
+`--resume` refuses and names the `--recover` command that settles it first
+(see [Sessions](/sessions)).
 
 Once Chalupa is active, prompts and tool receipts go to the remote endpoint.
 That is exactly what the explicit `LOCAL_AGENT_LOCAL_ONLY=false`

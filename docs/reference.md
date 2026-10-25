@@ -138,8 +138,8 @@ instead of running; in the Tuimark client `/copy` and `/goal` still run.
 
 In the Tuimark client the hint row names only the keys that do something
 at that moment: `esc cancel` while a turn runs, and between a `/goal`'s
-turns or before a queued message; `^O earlier` only when earlier messages
-are hidden.
+turns or before a queued message; `^O earlier` (fullscreen only) only when
+earlier messages are hidden.
 
 | Key | Action |
 |---|---|
