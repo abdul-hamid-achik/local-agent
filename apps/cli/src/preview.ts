@@ -23,6 +23,19 @@ function commandWhere(cwd: string, root?: string): string {
     : inside;
 }
 
+/** The call as the user reads it: `SERVER__TOOL`, or `SERVER__TOOL via GATEWAY`. */
+export function mcpCallName(
+  proposal: Extract<ApprovalRequest, { kind: "mcp" }>,
+): string {
+  return proposal.inner && proposal.gateway
+    ? `${proposal.inner} via ${proposal.gateway}`
+    : proposal.name;
+}
+
+/** The closing line of every MCP approval: the dialogs differ in layout, not in this claim. */
+export const MCP_UNVERIFIED =
+  "MCP effects are not verified by transport success.";
+
 /**
  * What an approval dialog shows. A command is one shell-quoted line, then where
  * it runs; `root` is the workspace root, which keeps absolute paths off the screen.
@@ -35,7 +48,7 @@ export function approvalPreview(
     return terminalText(proposal.diff);
   if (proposal.kind === "mcp")
     return terminalText(
-      `${proposal.inner && proposal.gateway ? `${proposal.inner} via ${proposal.gateway}` : proposal.name}\n${proposal.argumentsJson}\nMCP effects are not verified by transport success.`,
+      `${mcpCallName(proposal)}\n${proposal.argumentsJson}\n${MCP_UNVERIFIED}`,
     );
   return terminalText(
     `$ ${commandLine(proposal.argv)}\nin ${commandWhere(proposal.cwd, root)} · timeout ${proposal.timeoutMs / 1000}s · runs with your permissions${secretNote(proposal)}`,

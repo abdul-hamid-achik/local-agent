@@ -313,6 +313,8 @@ export interface ClientOptions {
   columns?: () => number;
   /** How long a new approval dialog ignores `y`. Default APPROVAL_ARM_MS. */
   armMs?: number;
+  /** How long quitting waits for the inline exit prints to be acked. Default QUIT_PRINT_MS. */
+  quitPrintMs?: number;
   /** The machine's memory, for planning a new model's context. Default os.totalmem. */
   totalMemory?: () => number;
   /** `/provider`'s read-only look at the endpoint. Default the runtime's probeProvider; tests replace. */
@@ -347,6 +349,14 @@ export interface ClientOptions {
  * the dialog is armed.
  */
 export const APPROVAL_ARM_MS = 300;
+/**
+ * What `/export` adds to its status. The file lands in the workspace root,
+ * where `git add -A` would take it, and nothing here edits the user's
+ * .gitignore: it can hold raw tool output, so the status says so instead.
+ */
+export const EXPORT_NOTE = " · may hold tool output: keep it out of commits";
+/** Inline quit waits this long for the partial reply and refused prints to be acked, then quits anyway. */
+export const QUIT_PRINT_MS = 2000;
 /** A message as one status line: zod errors and stack-like text span many lines. */
 /** A status line's longest text; `oneLine` clips beyond it. */
 const STATUS_MAX = 300;
@@ -484,6 +494,8 @@ export class TuimarkClient {
   /** Ordered refused inline prints, retried before any newer print. */
   private spill: Spill[] = [];
   private spillDropped = 0;
+  /** Inline: a resumed session's history is being printed into the scrollback. */
+  private historyPrint?: Promise<void>;
   private spillFlush?: Promise<void>;
   /** A session load is in flight: no turn may start until it settles. */
   private switching = false;
@@ -681,7 +693,7 @@ export class TuimarkClient {
 
   /** Why commands cannot run in the sandbox here, or undefined when they can. */
   private sandboxProblem(): string | undefined {
-    const root = this.options.workspace?.root;
+    const root = this.options.workspace.root;
     if (!root) return "no workspace";
     return (this.options.sandboxUnavailable ?? sandboxUnavailable)(root);
   }
@@ -695,7 +707,7 @@ export class TuimarkClient {
       sessionId: session?.state.publicId,
       mcpServers: mcp.length,
       mcpConnecting: this.mcpPending,
-      workspace: this.options.workspace?.root ?? "",
+      workspace: this.options.workspace.root,
       inline: this.inline,
       // The inline snapshot below always starts empty; a resumed session is not.
       empty: this.transcript.length === 0,
@@ -832,7 +844,7 @@ export class TuimarkClient {
         ]);
         return undefined;
       }
-      const root = this.options.workspace?.root;
+      const root = this.options.workspace.root;
       const request = permissionRequest(this.proposal);
       const proposed = proposeRule(request);
       const label = `${proposed.tool} ${proposed.pattern}`;
@@ -903,9 +915,15 @@ export class TuimarkClient {
       // A resumed session's history is the scrollback: print it once, in order.
       const views = this.transcript.all();
       if (views.length > 0) {
-        void (async () => {
-          for (const view of views) await this.commitView(view);
-        })();
+        // Kept, not dropped: `idle()` waits for it and a first send's print
+        // queues behind it (see commitView), so the history is never overtaken.
+        this.historyPrint = (async () => {
+          for (const view of views) await this.commitOwed(view);
+        })().catch((error: unknown) =>
+          this.recordError(
+            `history print failed: ${error instanceof Error ? error.message : String(error)}`,
+          ),
+        );
       }
     }
   }
@@ -1153,7 +1171,7 @@ export class TuimarkClient {
     const db = this.session?.store.path;
     const text = statusLines({
       provider: this.provider,
-      workspace: this.options.workspace?.root ?? "",
+      workspace: this.options.workspace.root,
       intent: this.intent,
       sessionId: this.session?.state.publicId,
       sessionDb: typeof db === "string" && db ? db : undefined,
@@ -1636,7 +1654,7 @@ export class TuimarkClient {
       await this.write([{ path: "status", value: "Nothing to export yet" }]);
       return;
     }
-    const root = this.options.workspace?.root ?? "";
+    const root = this.options.workspace.root;
     const write =
       this.options.writeExport ??
       ((path: string, text: string) =>
@@ -1655,7 +1673,10 @@ export class TuimarkClient {
         try {
           await write(join(root, name), text);
           await this.write([
-            { path: "status", value: `Exported transcript to ${name}` },
+            {
+              path: "status",
+              value: `Exported transcript to ${name}${EXPORT_NOTE}`,
+            },
           ]);
           return;
         } catch (error) {
@@ -1684,8 +1705,11 @@ export class TuimarkClient {
       await this.write([{ path: "status", value: BUSY_STATUS }]);
       return false;
     }
+    // The name is what the user typed (`\S+`, so it may carry escape
+    // sequences): shown cleaned and clipped, like the other user text here.
+    const shown = clip(cleanText(name), 60);
     await this.write([
-      { path: "status", value: `Switching model to ${name}…` },
+      { path: "status", value: `Switching model to ${shown}…` },
     ]);
     const admit =
       this.options.admitModel ??
@@ -1767,12 +1791,11 @@ export class TuimarkClient {
       ...(warning ? { context_warning: warning } : {}),
     };
     const said = [warning, unchecked].filter(Boolean).join(" · ");
+    const changed = `Model changed to ${clip(cleanText(model), 60)}`;
     await this.write([
       {
         path: "status",
-        value: said
-          ? oneLine(`Model changed to ${model} · ${said}`)
-          : `Model changed to ${model}`,
+        value: said ? oneLine(`${changed} · ${said}`) : changed,
       },
       { path: "header.model", value: clip(cleanText(model), 40) },
       ...this.ctxWrites(this.ctx.current),
@@ -1841,6 +1864,7 @@ export class TuimarkClient {
 
   /** Resolves when no turn is running. Await it before closing the session store. */
   async idle(): Promise<void> {
+    await this.historyPrint;
     await this.turnDone;
     await this.tail;
   }
@@ -1867,21 +1891,27 @@ export class TuimarkClient {
   }
 
   /**
-   * One serialized write. Never rejects: a refused write is recorded in
-   * `writeErrors` and resolves false.
+   * One step on the serialized chain: `send` runs after everything queued
+   * before it. Never rejects: a refused or thrown step is recorded in
+   * `writeErrors` (once on the status line) and resolves false, and so does
+   * a step with no host to take it (`attach` has not run).
    */
-  private write(writes: Write[]): Promise<boolean> {
-    for (const write of writes)
-      if (write.path === "draft" && typeof write.value === "string")
-        this.draftNow = write.value;
+  private enqueue(
+    send: (ui: UiHost) => Promise<{ ok: boolean; error?: string }>,
+    refused: string,
+    onRefused?: () => void,
+  ): Promise<boolean> {
     const ui = this.ui;
-    if (!ui) return Promise.resolve(true);
+    if (!ui) {
+      this.recordError("no host attached: nothing was written");
+      return Promise.resolve(false);
+    }
     let ok = true;
     const next = this.tail.then(async () => {
       let failure: string | undefined;
       try {
-        const ack = await ui.batch(writes);
-        if (!ack.ok) failure = ack.error ?? "write refused";
+        const ack = await send(ui);
+        if (!ack.ok) failure = ack.error ?? refused;
       } catch (error) {
         failure = error instanceof Error ? error.message : String(error);
       }
@@ -1890,40 +1920,35 @@ export class TuimarkClient {
         return;
       }
       ok = false;
-      // A refused head is not what the store shows: the next sync sends it
-      // again, whichever path wrote it (a tick, a phase, a publish).
-      if (writes.some((write) => write.path === "head")) {
-        this.headShown = "";
-        this.headSeconds = -1;
-      }
+      onRefused?.();
       await this.noteFailure(failure);
     });
     this.tail = next;
     return next.then(() => ok);
   }
 
+  /** One serialized write: false when the host refused it (see `enqueue`). */
+  private write(writes: Write[]): Promise<boolean> {
+    for (const write of writes)
+      if (write.path === "draft" && typeof write.value === "string")
+        this.draftNow = write.value;
+    return this.enqueue(
+      (ui) => ui.batch(writes),
+      "write refused",
+      () => {
+        // A refused head is not what the store shows: the next sync sends it
+        // again, whichever path wrote it (a tick, a phase, a publish).
+        if (writes.some((write) => write.path === "head")) {
+          this.headShown = "";
+          this.headSeconds = -1;
+        }
+      },
+    );
+  }
+
   /** One commit on the same chain as the writes, so print order is write order. */
   private enqueueCommit(commit: Commit): Promise<boolean> {
-    const ui = this.ui;
-    if (!ui) return Promise.resolve(true);
-    let ok = true;
-    const next = this.tail.then(async () => {
-      let failure: string | undefined;
-      try {
-        const ack = await ui.commit(commit);
-        if (!ack.ok) failure = ack.error ?? "commit refused";
-      } catch (error) {
-        failure = error instanceof Error ? error.message : String(error);
-      }
-      if (failure === undefined) {
-        this.reportedWriteError = false;
-        return;
-      }
-      ok = false;
-      await this.noteFailure(failure);
-    });
-    this.tail = next;
-    return next.then(() => ok);
+    return this.enqueue((ui) => ui.commit(commit), "commit refused");
   }
 
   /**
@@ -1944,11 +1969,24 @@ export class TuimarkClient {
     this.spill.push(entry);
     if (this.spill.length > MAX_SPILL) {
       this.spill.shift();
-      this.spillDropped++;
-      this.recordError(
-        `spill queue overflow: dropped oldest refused print (${this.spillDropped} dropped)`,
-      );
+      this.spillLost("spill queue overflow: dropped oldest refused print");
     }
+  }
+
+  /**
+   * A print will never reach the scrollback. It goes in the error list, and
+   * the status line says it too: the hole is in what the user reads, so a
+   * list nobody opens is not enough. Each loss restates the running total.
+   */
+  private spillLost(why: string): void {
+    this.spillDropped++;
+    this.recordError(`${why} (${this.spillDropped} dropped)`);
+    void this.write([
+      {
+        path: "status",
+        value: `Scrollback lost ${this.spillDropped} printed message${this.spillDropped === 1 ? "" : "s"}`,
+      },
+    ]);
   }
 
   /**
@@ -1962,15 +2000,26 @@ export class TuimarkClient {
     const run = (async () => {
       while (this.spill.length > 0) {
         const entry = this.spill[0] as Spill;
-        const ok = await this.serializeCommit(() =>
-          entry.kind === "view"
-            ? this.printView(entry.view)
-            : entry.kind === "links"
-              ? this.printLinks(entry.view)
-              : entry.head
-                ? this.printView(this.assistantView(entry.blocks))
-                : this.printBlocks(entry.blocks),
-        );
+        let ok: boolean;
+        try {
+          ok = await this.serializeCommit(() =>
+            entry.kind === "view"
+              ? this.printView(entry.view)
+              : entry.kind === "links"
+                ? this.printLinks(entry.view)
+                : entry.head
+                  ? this.printView(this.assistantView(entry.blocks))
+                  : this.printBlocks(entry.blocks),
+          );
+        } catch (error) {
+          // An entry that throws instead of being refused would fail the same
+          // way on every retry and hold back everything behind it: drop it.
+          this.spill.shift();
+          this.spillLost(
+            `dropped a print that threw: ${error instanceof Error ? error.message : String(error)}`,
+          );
+          continue;
+        }
         if (!ok) return;
         this.spill.shift();
       }
@@ -2008,8 +2057,14 @@ export class TuimarkClient {
     return ok;
   }
 
-  /** Prints one finished view (a user turn, a tool receipt, history). */
+  /** Prints one finished view (a user turn, a tool receipt, history), after a resumed history. */
   private async commitView(view: MessageView): Promise<boolean> {
+    await this.historyPrint;
+    return this.commitOwed(view);
+  }
+
+  /** Prints a view, or keeps it in the spill queue when the host refuses. */
+  private async commitOwed(view: MessageView): Promise<boolean> {
     await this.flushSpill();
     if (this.spill.length > 0) {
       this.pushSpill({ kind: "view", view });
@@ -2445,9 +2500,23 @@ export class TuimarkClient {
       this.queued = undefined;
       // Inline, the partial reply is printed before the session ends: once
       // "quit" is returned the host is gone and nothing can be committed.
+      // Bounded: a host that stopped answering must not leave ctrl+c unable
+      // to end the session, so the prints get `quitPrintMs` and no more.
       if (this.inline) {
-        await this.commitStreamTail();
-        await this.flushSpill();
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        await Promise.race([
+          (async () => {
+            await this.commitStreamTail();
+            await this.flushSpill();
+          })().catch(() => {}),
+          new Promise<void>((resolve) => {
+            timer = setTimeout(
+              resolve,
+              this.options.quitPrintMs ?? QUIT_PRINT_MS,
+            );
+          }),
+        ]);
+        clearTimeout(timer);
       }
       this.abort();
       return "quit";
@@ -2928,7 +2997,7 @@ export class TuimarkClient {
   private async fileRules(): Promise<
     PermissionFile & { untrusted?: PermissionRule[] }
   > {
-    const root = this.options.workspace?.root;
+    const root = this.options.workspace.root;
     if (!root) return this.permFile;
     const stamp = async (path: string) =>
       stat(path).then(
@@ -3161,7 +3230,7 @@ export class TuimarkClient {
       writes.push({ path: "header.sandbox_on", value: this.sandbox });
     }
     if (outcome.clearRules) {
-      const root = this.options.workspace?.root;
+      const root = this.options.workspace.root;
       if (root) {
         await clearRules(root);
         this.permStamp = undefined;
@@ -3174,7 +3243,7 @@ export class TuimarkClient {
       }
     }
     if (outcome.trustRules) {
-      const root = this.options.workspace?.root;
+      const root = this.options.workspace.root;
       writes[0] = {
         path: "status",
         value: root
@@ -4011,7 +4080,9 @@ export class TuimarkClient {
             const shown = this.ctx.observe(
               event.inputTokens + event.outputTokens,
             );
-            await this.write(this.ctxWrites(shown));
+            // Not awaited: event processing must not pause for a paint (see
+            // `flash`); the writer's tail keeps it in order.
+            void this.write(this.ctxWrites(shown));
             this.evalCount += event.evalCount ?? 0;
             this.evalDuration += event.evalDuration ?? 0;
             break;

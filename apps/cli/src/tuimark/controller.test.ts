@@ -49,6 +49,7 @@ import type { CopyResult } from "#cli/tuimark/clipboard";
 import { BUSY_STATUS, type PaletteItem } from "#cli/tuimark/commands";
 import {
   APPROVAL_ARM_MS,
+  EXPORT_NOTE,
   formatElapsed,
   TuimarkClient,
 } from "#cli/tuimark/controller";
@@ -63,6 +64,7 @@ import {
   APPROVAL_UNARMED_STATUS,
   APPROVAL_UNCHECKED_STATUS,
   APPROVAL_WAIT_STATUS,
+  emptyCommitView,
   NO_DETAILS_STATUS,
   PROVIDER_NO_ANSWER_STATUS,
   previewWidth,
@@ -84,7 +86,7 @@ const provider = {
   model: "fixture",
   context_size: 8192,
 } as Provider;
-const workspace = {} as Workspace;
+const workspace = { root: "" } as Workspace;
 
 type Ctx = { options: AgentOptions; messages: Message[] };
 type Script = (ctx: Ctx) => AsyncGenerator<AgentEvent>;
@@ -4629,7 +4631,7 @@ test("/export writes the visible conversation once, never overwriting", async ()
   await client.idle();
   await ui.fire("send", "/export");
   expect(store(ui).status).toBe(
-    "Exported transcript to local-agent-transcript-20261022-090503.md",
+    `Exported transcript to local-agent-transcript-20261022-090503.md${EXPORT_NOTE}`,
   );
   const only = [...files.values()][0] ?? "";
   expect(only).toContain("## You\n\nexport this");
@@ -4637,7 +4639,7 @@ test("/export writes the visible conversation once, never overwriting", async ()
   // The same second again: a suffixed name, the first file untouched.
   await ui.fire("send", "/export");
   expect(store(ui).status).toBe(
-    "Exported transcript to local-agent-transcript-20261022-090503-2.md",
+    `Exported transcript to local-agent-transcript-20261022-090503-2.md${EXPORT_NOTE}`,
   );
   expect(files.size).toBe(2);
 });
@@ -5044,7 +5046,7 @@ test("/export json writes the raw messages array to a .json file", async () => {
   await client.idle();
   await ui.fire("send", "/export json");
   expect(store(ui).status).toBe(
-    "Exported transcript to local-agent-transcript-20261022-090503.json",
+    `Exported transcript to local-agent-transcript-20261022-090503.json${EXPORT_NOTE}`,
   );
   const parsed = JSON.parse([...files.values()][0] ?? "") as Message[];
   expect(parsed.map((m) => [m.role, m.content])).toEqual([
@@ -5431,6 +5433,9 @@ test("F9: the export suffix loop is bounded at 100 attempts", async () => {
 test("F9: a real export file is created with mode 0o600", async () => {
   const root = await scratchDir("la-export-");
   const at = new Date(2026, 9, 22, 9, 5, 3).getTime();
+  // The user's .gitignore is theirs: the export never edits it, and says so
+  // on the status line instead.
+  await writeFile(join(root, ".gitignore"), "node_modules\n");
   const { ui, client } = setup(reply("mode reply"), {
     workspace: { root } as Workspace,
     now: () => at,
@@ -5441,6 +5446,10 @@ test("F9: a real export file is created with mode 0o600", async () => {
   const path = join(root, "local-agent-transcript-20261022-090503.md");
   expect((await stat(path)).mode & 0o777).toBe(0o600);
   expect(await readFile(path, "utf8")).toContain("mode prompt");
+  expect(await readFile(join(root, ".gitignore"), "utf8")).toBe(
+    "node_modules\n",
+  );
+  expect(store(ui).status).toContain("keep it out of commits");
 });
 
 // ------------------------------------------------------------ permission rules
@@ -7728,4 +7737,134 @@ test("a refused head write is sent again, whichever path wrote it", async () => 
   await until(() => store(ui).head.text === "waiting for the model · 1s");
   await ui.fire("cancel");
   await client.idle();
+});
+
+// ------------------------------------------------------------ the writer and its losses
+
+test("a client with no host attached reports a refused write, not a success", async () => {
+  const client = new TuimarkClient({
+    provider,
+    workspace,
+    intent: "build",
+    signal: new AbortController().signal,
+  });
+  await client.handlerFailed("send", new Error("boom"));
+  expect(client.writeErrors).toEqual(["no host attached: nothing was written"]);
+});
+
+/** The status the client writes when a print can no longer reach the scrollback. */
+const lost = (status: unknown) =>
+  typeof status === "string" && status.startsWith("Scrollback lost");
+
+test("inline: prints dropped past the spill bound are said on the status line", async () => {
+  const { ui, client } = setup(reply("hi"), inline);
+  ui.refuseCommit = () => "refused";
+  // Every print is refused, so each turn adds to the spill queue (bound: 50).
+  for (let turn = 0; turn < 40 && !ui.statusLog().some(lost); turn++) {
+    await ui.fire("send", `again ${turn}`);
+    await client.idle();
+  }
+  expect(
+    client.writeErrors.some((e) => e.includes("spill queue overflow")),
+  ).toBe(true);
+  expect(ui.statusLog().find(lost)).toBe("Scrollback lost 1 printed message");
+});
+
+test("a spilled print that throws is dropped, said, and does not hold back the next", async () => {
+  const { ui, client } = setup(reply("ok"), inline);
+  const spill = client as unknown as {
+    pushSpill(entry: unknown): void;
+    flushSpill(): Promise<void>;
+  };
+  spill.pushSpill({
+    get kind(): never {
+      throw new Error("poisoned");
+    },
+  });
+  spill.pushSpill({ kind: "view", view: emptyCommitView() });
+  await spill.flushSpill();
+  expect(client.writeErrors).toEqual([
+    "dropped a print that threw: poisoned (1 dropped)",
+  ]);
+  expect(ui.commits.filter((c) => c.ok)).toHaveLength(1);
+  expect(ui.statusLog()).toContain("Scrollback lost 1 printed message");
+});
+
+test("inline: a resumed session's history is waited for by idle() and ahead of a first send", async () => {
+  const session = {
+    state: {
+      publicId: "abc1234",
+      messages: [
+        { role: "user", content: "q1" },
+        { role: "assistant", content: "a1" },
+        { role: "user", content: "q2" },
+        { role: "assistant", content: "a2" },
+      ],
+    },
+  } as unknown as SessionContext;
+  const { ui, client } = setup(reply("ok"), { session, ...inline });
+  // Sent while the history is still printing: it queues behind it.
+  const sent = ui.fire("send", "next");
+  await client.idle();
+  await sent;
+  await client.idle();
+  expect(printed(ui).slice(0, 5)).toEqual([
+    "You: q1",
+    "Assistant: a1",
+    "You: q2",
+    "Assistant: a2",
+    "You: next",
+  ]);
+  expect(client.writeErrors).toEqual([]);
+});
+
+test("a done event does not hold the event loop for the header write", async () => {
+  let release: () => void = () => {};
+  const gate = new Promise<void>((r) => {
+    release = r;
+  });
+  onTestFinished(() => release());
+  let resumed = false;
+  const { ui, client } = setup(async function* () {
+    yield { type: "done", inputTokens: 10, outputTokens: 5 };
+    resumed = true;
+    yield { type: "message", message: { role: "assistant", content: "x" } };
+  });
+  const original = ui.batch.bind(ui);
+  ui.batch = async (writes) => {
+    if (
+      writes.some((w) => w.path === "header.ctx_label" && w.value === "15/8.0k")
+    )
+      await gate;
+    return original(writes);
+  };
+  await ui.fire("send", "hi");
+  // The runtime's generator goes on while the paint is still in flight.
+  await until(() => resumed);
+  release();
+  await client.idle();
+  expect(store(ui).header.ctx_label).toBe("15/8.0k");
+});
+
+test("inline: ctrl+c quits even when the host stops acking the exit prints", async () => {
+  const { ui, client } = setup(reply("ok"), { ...inline, quitPrintMs: 20 });
+  ui.refuseCommit = () => "refused";
+  await ui.fire("send", "hi");
+  await client.idle();
+  // The refused prints are owed to the scrollback; now the host goes silent.
+  ui.commit = () => new Promise(() => {});
+  expect(await ui.fire("quit_request")).toBe("quit");
+});
+
+test("/model shows the typed name cleaned: no escape sequence reaches the status line", async () => {
+  const { ui } = setup(reply("ok"), {
+    admitModel: async (candidate) => validated(candidate.model),
+  });
+  await ui.fire("send", "/model \x1b[31mred\x1b]0;title\x07");
+  const statuses = ui.statusLog().map(String);
+  expect(statuses).toContain("Switching model to red…");
+  expect(
+    statuses.filter((s) => s.includes("\x1b") || s.includes("\x07")),
+  ).toEqual([]);
+  expect(store(ui).status).toBe("Model changed to red");
 });

@@ -1,10 +1,12 @@
 import { expect, test } from "vitest";
+import { approvalPreview, MCP_UNVERIFIED } from "#cli/preview";
 import { SAMPLES } from "#cli/tuimark/fixtures";
 import {
   APPROVAL_MAX_ROWS,
   APPROVAL_STATUS,
   APPROVAL_TRUNCATED_STATUS,
   approvalState,
+  approvalText,
   armedStatus,
   CtxMeter,
   contextLabel,
@@ -12,10 +14,11 @@ import {
   ctxFlags,
   detailsRows,
   detailsState,
-  EMPTY_COMMIT_VIEW,
+  emptyCommitView,
   grantCovers,
   grantFor,
   grantsLabel,
+  grantsList,
   grantsOffered,
   headState,
   idleStatus,
@@ -174,8 +177,30 @@ test("the initial store has every path the document reads", () => {
   );
   // The inline client's scratch paths are present from the start, so a
   // commit's `with` never reads a missing path.
-  expect(store.commit_buf).toEqual(EMPTY_COMMIT_VIEW);
+  expect(store.commit_buf).toEqual(emptyCommitView());
   expect(store.commit_blocks).toEqual([]);
+});
+
+test("each store gets its own empty commit view, not a shared mutable sentinel", () => {
+  const fresh = () =>
+    initialStore({
+      provider: {
+        type: "ollama_remote",
+        base_url: "http://127.0.0.1:11434",
+        model: "m",
+        context_size: 8192,
+      },
+      intent: "plan",
+      mcpServers: 0,
+      transcript: new Transcript().snapshot(),
+    });
+  const a = fresh();
+  const b = fresh();
+  a.commit_buf?.blocks.push({} as never);
+  a.commit_buf?.links.push({} as never);
+  expect(b.commit_buf?.blocks).toEqual([]);
+  expect(b.commit_buf?.links).toEqual([]);
+  expect(emptyCommitView().blocks).toEqual([]);
 });
 
 test("the approval dialog says what is being approved", () => {
@@ -436,6 +461,80 @@ test("rows keep the add and delete marks across a wrapped line", () => {
   ]);
 });
 
+test("wrapLine stops at maxRows instead of segmenting the rest of the line", () => {
+  const long = "x".repeat(10_000);
+  // Asking for one row more than can be used says the line did not fit.
+  const rows = wrapLine(long, 20, 4);
+  expect(rows).toHaveLength(4);
+  expect(rows[0]).toBe("x".repeat(20));
+  expect(rows[1]?.startsWith("↪ ")).toBe(true);
+  // A line that needs exactly maxRows rows is returned whole.
+  const fits = wrapLine("y".repeat(30), 20, 3);
+  expect(unwrap(fits)).toBe("y".repeat(30));
+  expect(fits.length).toBeLessThan(3);
+  expect(wrapLine("short", 20, 1)).toEqual(["short"]);
+});
+
+test("the row cap cuts a wrapped line: the marker counts it as not shown whole", () => {
+  const long = "w".repeat(200);
+  const { lines, total, shown, truncated } = previewRows(
+    `first\n${long}\nlast`,
+    20,
+    5,
+  );
+  // `first` and four rows of the long line; the marker row comes after.
+  expect(truncated).toBe(true);
+  expect(total).toBe(3);
+  expect(shown).toBe(1);
+  expect(lines).toHaveLength(6);
+  expect(lines[0]?.t).toBe("first");
+  expect(lines[4]?.t).toBe(`↪ ${"w".repeat(18)}`);
+  expect(lines[5]).toMatchObject({
+    t: "… 2 more lines not shown",
+    note: true,
+  });
+  // A line that ends exactly on the cap is shown whole and not counted.
+  const exact = previewRows(`a\nb\nc`, 20, 3);
+  expect(exact.truncated).toBe(false);
+  expect(exact.lines).toHaveLength(3);
+  const onTheCap = previewRows(`a\nb\nc\nd`, 20, 3);
+  expect(onTheCap.lines.at(-1)?.t).toBe("… 1 more line not shown");
+});
+
+test("the details viewer cuts a huge single line at the row cap", () => {
+  const rows = detailsRows("z".repeat(500_000), 40);
+  expect(rows).toHaveLength(APPROVAL_MAX_ROWS + 1);
+  expect(rows.at(-1)).toMatchObject({
+    t: "… 1 more line not shown",
+    note: true,
+  });
+  expect(rows[APPROVAL_MAX_ROWS - 1]?.t.startsWith("↪ ")).toBe(true);
+});
+
+test("the MCP approval and the shared preview say the same call and the same caveat", () => {
+  const gateway = {
+    kind: "mcp" as const,
+    name: "mcphub__call_tool",
+    inner: "db__query",
+    gateway: "mcphub",
+    argumentsJson: "{}",
+  };
+  const plain = {
+    kind: "mcp" as const,
+    name: "db__query",
+    argumentsJson: "{}",
+  };
+  for (const [proposal, call] of [
+    [gateway, "db__query via mcphub"],
+    [plain, "db__query"],
+  ] as const) {
+    for (const text of [approvalText(proposal), approvalPreview(proposal)]) {
+      expect(text).toContain(MCP_UNVERIFIED);
+      expect(text.split("\n")[0]).toBe(call);
+    }
+  }
+});
+
 test("empty is derived from the transcript and the mouse starts on in fullscreen", () => {
   const fresh = initialStore({
     provider: {
@@ -541,7 +640,10 @@ test("the approval state spells out what `a` would grant, per kind", () => {
       .grant_hint,
   ).toBe("a allow `db__query` this session");
   expect(noApproval()).toMatchObject({ grant_hint: "" });
-  expect("grant_ok" in noApproval()).toBe(false);
+  // The idle shape carries exactly the fields a live dialog sets.
+  expect(Object.keys(noApproval()).sort()).toEqual(
+    Object.keys(approvalState(editP, 80)).sort(),
+  );
 });
 
 test("the dialog offers `a` and `!` only where the client would take them", () => {
@@ -785,6 +887,7 @@ test("grant matching: files shared, commands by argv prefix, MCP exact", () => {
   expect(mcpParts("plain")).toBeUndefined();
   expect(grantsLabel([])).toBe("");
   expect(grantsLabel(["files", "bun test"])).toBe("auto: files · bun test");
+  expect(grantsList(["files", "bun test"])).toBe("files · bun test");
 });
 
 test("a gateway call is shown, granted and keyed as the tool it runs", () => {

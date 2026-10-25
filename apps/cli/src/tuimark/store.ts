@@ -13,7 +13,7 @@ import {
   type Question,
   secretPathNotes,
 } from "@local-agent/runtime";
-import { approvalPreview } from "#cli/preview";
+import { approvalPreview, MCP_UNVERIFIED, mcpCallName } from "#cli/preview";
 import {
   type Block,
   cleanText,
@@ -403,20 +403,26 @@ export interface Store {
   commit_blocks: Block[];
 }
 
-/** The empty view a fresh store carries at `commit_buf`, before any commit. */
-export const EMPTY_COMMIT_VIEW: MessageView = Object.freeze({
-  id: "commit",
-  is_user: false,
-  is_asst: false,
-  is_tool: false,
-  is_notice: false,
-  is_error: false,
-  blocks: [],
-  card: NO_CARD,
-  links: [],
-  images: [],
-  images_more: 0,
-}) as MessageView;
+/**
+ * The empty view a fresh store carries at `commit_buf`, before any commit. A
+ * new one per call: `Object.freeze` is shallow, so a shared sentinel would
+ * hand every store the same mutable `blocks`, `links` and `images`.
+ */
+export function emptyCommitView(): MessageView {
+  return {
+    id: "commit",
+    is_user: false,
+    is_asst: false,
+    is_tool: false,
+    is_notice: false,
+    is_error: false,
+    blocks: [],
+    card: NO_CARD,
+    links: [],
+    images: [],
+    images_more: 0,
+  };
+}
 
 /** A token count in k = 1024 tokens: 32768 reads "32k", 9800 reads "9.6k". */
 /** The marker under a cut preview: lines not shown whole. */
@@ -762,7 +768,7 @@ export function initialStore(init: StoreInit): Store {
     status: idleStatus(init.mcpServers, init.intent, {
       connecting: init.mcpConnecting,
     }),
-    commit_buf: EMPTY_COMMIT_VIEW,
+    commit_buf: emptyCommitView(),
     commit_blocks: [],
   };
 }
@@ -798,8 +804,16 @@ const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
  * rows are marked with a leading arrow. A row breaks after its last space
  * when that still fills half of it, so prose keeps its words whole, and
  * otherwise at the cell it fills (a long path or token splits anyway).
+ * `maxRows` bounds the work, not just the result: past that many rows it
+ * stops segmenting and returns exactly `maxRows`, so a caller that asks for
+ * one more row than it can use can tell the line did not fit (a minified
+ * megabyte on one line costs the rows shown, not the whole line).
  */
-export function wrapLine(text: string, width: number): string[] {
+export function wrapLine(
+  text: string,
+  width: number,
+  maxRows = Number.POSITIVE_INFINITY,
+): string[] {
   if (Bun.stringWidth(text) <= width) return [text];
   const rows: string[] = [];
   // The row being filled, as graphemes and their widths; `start` is where its
@@ -816,6 +830,7 @@ export function wrapLine(text: string, width: number): string[] {
       const head = widths.slice(0, space + 1).reduce((a, b) => a + b, 0);
       const cut = space >= start && head * 2 >= width ? space + 1 : row.length;
       rows.push(row.slice(0, cut).join(""));
+      if (rows.length >= maxRows) return rows;
       row = ["↪ ", ...row.slice(cut)];
       widths = [2, ...widths.slice(cut)];
       start = 1;
@@ -854,7 +869,7 @@ export function previewRows(
     // line like any other.
     const add = line.startsWith("+") && !line.startsWith("+++ ");
     const del = line.startsWith("-") && !line.startsWith("--- ");
-    for (const t of wrapLine(line, width)) {
+    for (const t of wrapLine(line, width, maxRows - lines.length + 1)) {
       if (lines.length >= maxRows) {
         truncated = true;
         break outer;
@@ -885,7 +900,7 @@ function prettyJson(text: string): string {
 /** The full text the dialog previews: nothing the user approves is left out of it. */
 export function approvalText(proposal: ApprovalRequest, root?: string): string {
   if (proposal.kind === "mcp")
-    return `${mcpCallName(proposal)}\n${prettyJson(proposal.argumentsJson)}\n\nMCP effects are not verified by transport success.`;
+    return `${mcpCallName(proposal)}\n${prettyJson(proposal.argumentsJson)}\n\n${MCP_UNVERIFIED}`;
   return approvalPreview(proposal, root);
 }
 
@@ -971,15 +986,6 @@ function commandGrant(argv: readonly string[]): {
     (runner && (argv.length <= 2 || (argv[2] ?? "").startsWith("-")));
   if (exact) return { prefix: [...argv], exact };
   return { prefix: argv.slice(0, runner ? 3 : 2), exact };
-}
-
-/** The call as the user reads it: `SERVER__TOOL`, or `SERVER__TOOL via GATEWAY`. */
-export function mcpCallName(
-  proposal: Extract<ApprovalRequest, { kind: "mcp" }>,
-): string {
-  return proposal.inner && proposal.gateway
-    ? `${proposal.inner} via ${proposal.gateway}`
-    : proposal.name;
 }
 
 /** An argv word that is an option (`-x`, `--flag=value`, `--`), not `-` (stdin). */
@@ -1150,7 +1156,12 @@ export function secretStatus(proposal: ApprovalRequest): string {
 
 /** The header's compact grants label: "auto: files · bun test", "" for none. */
 export function grantsLabel(labels: readonly string[]): string {
-  return labels.length === 0 ? "" : `auto: ${labels.join(" · ")}`;
+  return labels.length === 0 ? "" : `auto: ${grantsList(labels)}`;
+}
+
+/** The grants as a list, without the header's `auto: ` (the /status line adds its own). */
+export function grantsList(labels: readonly string[]): string {
+  return labels.join(" · ");
 }
 
 /**
@@ -1265,7 +1276,11 @@ export function detailsRows(text: string, width: number): DiffLine[] {
   let shown = 0;
   let truncated = false;
   outer: for (const line of source) {
-    for (const t of wrapLine(line, width)) {
+    for (const t of wrapLine(
+      line,
+      width,
+      DETAILS_MAX_ROWS - lines.length + 1,
+    )) {
       if (lines.length >= DETAILS_MAX_ROWS) {
         truncated = true;
         break outer;
@@ -1417,7 +1432,7 @@ export function statusLines(facts: StatusFacts): string[] {
   lines.push(
     `Theme: ${facts.theme}`,
     `Mouse: ${facts.mouse}`,
-    `Grants: ${facts.grants.length ? grantsLabel(facts.grants).slice("auto: ".length) : "none"}`,
+    `Grants: ${facts.grants.length ? grantsList(facts.grants) : "none"}`,
     `Sandbox: ${cleanText(facts.sandbox)}`,
     `MCP: ${facts.mcpServers} servers · ${facts.mcpTools} tools`,
   );
