@@ -60,6 +60,9 @@ See [Providers](/providers).
 
 `--theme` accepts `dark`, `light`, `auto`, or a named theme. Two named themes
 are bundled: `midnight` and `sepia`. Themes apply to the tuimark client only.
+In every theme, each text color reads at WCAG AA (at least 4.5:1) on the
+background, panels, raised surfaces and selected rows, and so does the label
+on a badge, a button or a segment.
 
 `/theme dark|light|auto` changes the theme mid-session without restarting.
 Themes are presentation only; they do not affect authority, tool policy, or

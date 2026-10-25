@@ -234,7 +234,10 @@ Evaluation is deny → ask → allow, first match wins; deny always beats a
 session grant or a saved allow. `fetch` and `web_search` never ask, so only
 their deny rules matter. Headless runs consult the file first in both
 directions: a trusted allow approves with the flag off, a deny refuses with
-the flag on. The exception is a command that
+the flag on. An ask rule refuses whatever the flags say, since it wants a
+person and a headless run has none; stderr names the rule
+(`refused by ask rule: git push * (a headless run has no one to ask)`).
+The exception to the allow is a command that
 [names a secret path](#commands-that-name-a-secret-path): an allow rule does
 not approve it, so it needs `--approve-commands`, or is refused under
 `--sandbox-commands`. Rules are the user's durable intent; the flags remain
@@ -275,7 +278,9 @@ unless you pass the matching flag.
 - `--approve-mcp` — allow MCP tool calls.
 
 The flags are headless-only and independent; `--approve-commands` does not
-authorize edits. On macOS, `--sandbox-commands` runs commands confined
+authorize edits. The [rules file](#persistent-rules) comes first: a deny or
+ask rule refuses with the flag on, and a trusted allow approves with it off.
+On macOS, `--sandbox-commands` runs commands confined
 instead of `--approve-commands` (see [Sandboxed commands](#sandboxed-commands-macos)).
 See [Command reference](/reference).
 

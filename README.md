@@ -79,9 +79,10 @@ a child and draws the whole screen from `apps/cli/src/tuimark/ui/app.tui`.
   the SDK is pinned to (downloaded once, checksum-verified, into the
   user cache). Version 0.5.1 or newer is required: the composer is a
   `<textarea>`, the reply streams with the append write, and links and
-  images bind `href`/`src` to data. If no binary can be
-  found and `--ui` was not given, the Vue client starts with a line on stderr;
-  an explicit `--ui tuimark` fails instead.
+  images bind `href`/`src` to data. If `--ui` was not given and no binary
+  can be found, or `TUIMARK_BINARY` names one older than 0.5.1 or one whose
+  `--version` names no version, the Vue client starts with a line on stderr that says why,
+  and `--theme` is refused; an explicit `--ui tuimark` fails instead.
 - Tuimark inline is opt-in: `--ui tuimark --mode inline` runs
   `apps/cli/src/tuimark/ui/inline.tui` under `tuimark host --inline`. Finished
   blocks are committed into the terminal's own scrollback (the SDK `commit()`)
@@ -141,12 +142,13 @@ a child and draws the whole screen from `apps/cli/src/tuimark/ui/app.tui`.
   number, its label, or `y`/`n`; for free text, type the answer and press
   `enter`. `esc` skips it, and the model reads that you declined. What you
   were typing is put aside and comes back when the question closes.
-  Tool cards show only the first eight lines of a result; `/details` opens
-  the last tool call's full output in a scrollable viewer (a modal in
-  fullscreen, `esc` or `q` closes it; an expanded block in the inline live
-  region, never printed to the scrollback, `esc` closes it). The viewer
-  always shows the most recent tool output, whichever card pointed you to
-  it, and its title names that receipt. `/status` opens a read-only panel
+  Tool cards show only the first eight lines of a result, and a cut card
+  names its output (`/details 3 for full output`): `/details N` opens that
+  output in a scrollable viewer, and `/details` alone the last one (a modal
+  in fullscreen, `esc` or `q` closes it; an expanded block in the inline
+  live region, never printed to the scrollback, `esc` closes it). Outputs
+  are numbered as they first show and kept up to 2,000,000 characters and
+  500 outputs in all, each capped at 64,000; one let go says so. `/status` opens a read-only panel
   with the effective config (model, provider and endpoint, think, context
   used, workspace, mode, session and its database, theme, mouse, session
   grants, MCP counts, and the Chalupa environment when Chalupa launched the

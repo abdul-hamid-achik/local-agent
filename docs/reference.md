@@ -71,8 +71,12 @@ are no subcommands. Run `local-agent --help` for the authoritative short list.
 - **headless**: selected by `--mode headless`, `--prompt`, or `--json`.
 
 The tuimark binary is taken from `TUIMARK_BINARY` if set; otherwise a pinned
-release (0.5.1) is downloaded and checksum-verified. If the default-client
-binary is missing, the run falls back to vue with a note on stderr.
+release (0.5.1) is downloaded and checksum-verified. With no `--ui`, the run
+falls back to vue with a note on stderr that says why when the binary is
+missing, or when `TUIMARK_BINARY` names one older than 0.5.1 or one whose
+`--version` names no version (it is asked for at most 5 seconds; the pinned
+release is not asked). `--theme` is then refused. An explicit `--ui tuimark`
+fails instead.
 
 ### Headless output
 
@@ -86,8 +90,10 @@ request and again whenever the window's start moves.
 
 Approval in headless is fail-closed by default. Without `--approve-edits`,
 `--approve-commands`, or `--approve-mcp`, the matching request class is denied:
-there is no approval dialog to answer. On macOS, `--sandbox-commands` runs
-commands confined instead. See [Safety](/safety).
+there is no approval dialog to answer. A call that matches an ask rule in
+`.local-agent/permissions.json` is refused whatever the flags say, and stderr
+names the rule. On macOS, `--sandbox-commands` runs commands confined
+instead. See [Safety](/safety#headless-approval).
 
 ## Slash commands
 
@@ -102,7 +108,7 @@ commands confined instead. See [Safety](/safety).
 | `/permissions trust` | List the allow rules in the workspace's `.local-agent/permissions.json` that you have not trusted on this machine |
 | `/permissions trust confirm` | Trust exactly the rules the last `/permissions trust` listed, if the file still holds them |
 | `/sandbox on\|off` | Tuimark client, macOS: run commands in the sandbox without a card (an ask rule still shows one, and its `y` runs that command outside; so does a command that names a secret path). `/sandbox` alone says whether it is on. Where it is unavailable it stays off and says why |
-| `/details` | Show the last tool output in full |
+| `/details [N]` | Tuimark client: show tool output N in full (the number a cut card names), or the last one. Outputs are kept up to 2,000,000 characters and 500 outputs in all, each capped at 64,000 characters; one let go, or from an earlier conversation, says so |
 | `/copy` | Tuimark client: put the last reply's markdown on the clipboard (also `ctrl+y`). During a turn it copies the last finished reply. With no clipboard tool, the status says how to select text by hand |
 | `/copy code` | Tuimark client: copy the last code block of the last reply |
 | `/status` | Show the effective config panel (model, workspace, session) |
