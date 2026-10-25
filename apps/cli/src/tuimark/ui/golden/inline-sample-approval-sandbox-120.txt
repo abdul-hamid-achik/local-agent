@@ -1,0 +1,16 @@
+=== grid 120x15 ===
+ Local Agent           build  Ollama / loopback  qwen3-coder:30b            session a1b2c3d  ctx 9.6k/32k  ███▋░░░░░░░░ 
+╭─ Run command? ───────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ Runs outside the sandbox, as you, exactly as written (no shell). It can run files that sandboxed commands changed.   │
+│ ╔══════════════════════════════════════════════════════════════════════════════════════════════════════════════════╗ │
+│ ║$ bun test tests/stats.test.ts -t 'mean of an empty list'                                                         ║ │
+│ ║in the workspace · timeout 120s · runs with your permissions                                                      ║ │
+│ ╚══════════════════════════════════════════════════════════════════════════════════════════════════════════════════╝ │
+│ sandbox on: session grant unavailable                                                                                │
+│ y allow · n deny · esc deny                                                                                          │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+                                                                                                                        
+╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ Type to queue a message                                                                                              │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+ Waiting for approval · y allow · ! always · n deny · Esc deny   y allow  ! always  n deny  ^P commands  ^Y copy        

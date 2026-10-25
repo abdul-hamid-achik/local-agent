@@ -34,11 +34,16 @@
     <bind keys="up,ctrl+p" action="move-prev" to="#palette__list"/>
   </keymap>
   <!-- The in-flow approval: y allows, n and esc deny, and every row of what
-       is being approved is reachable by key (the composer is disabled). -->
+       is being approved is reachable by key (the composer is disabled).
+       `a` and `!` are named only while the client would take them (the
+       screen's grant-session and grant-always classes); the unlabeled row
+       after each still sends the key, so the client says why not. -->
   <keymap when=".approving">
     <bind keys="y" action="dialog_confirm" label="allow" keycap="y"/>
-    <bind keys="a" action="dialog_session" label="session" keycap="a"/>
-    <bind keys="!" action="dialog_always" label="always" keycap="!"/>
+    <bind keys="a" action="dialog_session" when=".approving.grant-session" label="session" keycap="a"/>
+    <bind keys="a" action="dialog_session"/>
+    <bind keys="!" action="dialog_always" when=".approving.grant-always" label="always" keycap="!"/>
+    <bind keys="!" action="dialog_always"/>
     <bind keys="n" action="dialog_cancel" label="deny" keycap="n"/>
     <bind keys="esc" action="dialog_cancel"/>
     <bind keys="ctrl+c" action="quit_request"/>
@@ -238,7 +243,7 @@
     </box>
   </template>
 
-  <screen id="main" focus="#composer" class:approving="approval.open" class:slashpop="slash.open" class:asking="question.open" class:viewing="details.open" class:paneling="panel.open" class:picking="panel.picking">
+  <screen id="main" focus="#composer" class:approving="approval.open" class:grant-session="approval.session_ok" class:grant-always="approval.always_ok" class:slashpop="slash.open" class:asking="question.open" class:viewing="details.open" class:paneling="panel.open" class:picking="panel.picking">
     <col id="app">
       <use template="k-appbar" brand="Local Agent" title="">
         <!-- By priority, so a narrow terminal clips the least important:

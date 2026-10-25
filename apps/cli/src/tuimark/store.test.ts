@@ -2,7 +2,10 @@ import { expect, test } from "vitest";
 import { SAMPLES } from "#cli/tuimark/fixtures";
 import {
   APPROVAL_MAX_ROWS,
+  APPROVAL_STATUS,
+  APPROVAL_TRUNCATED_STATUS,
   approvalState,
+  armedStatus,
   CtxMeter,
   contextLabel,
   contextPct,
@@ -13,6 +16,7 @@ import {
   grantCovers,
   grantFor,
   grantsLabel,
+  grantsOffered,
   headState,
   idleStatus,
   initialStore,
@@ -501,6 +505,77 @@ test("the approval state spells out what `a` would grant, per kind", () => {
   ).toBe("a allow `db__query` this session");
   expect(noApproval()).toMatchObject({ grant_hint: "" });
   expect("grant_ok" in noApproval()).toBe(false);
+});
+
+test("the dialog offers `a` and `!` only where the client would take them", () => {
+  const both = { session: true, always: true };
+  expect(grantsOffered(editP, false)).toEqual(both);
+  expect(grantsOffered(cmd(["ls"]), false)).toEqual(both);
+  // Nothing is granted from a preview nobody could read whole.
+  expect(grantsOffered(editP, true)).toEqual({ session: false, always: false });
+  // Nor from a command that names a secret path, or too many to check.
+  const secret = { ...cmd(["cat", ".env"]), secretPaths: [".env"] };
+  expect(grantsOffered(secret, false)).toEqual({
+    session: false,
+    always: false,
+  });
+  expect(
+    grantsOffered(
+      { ...cmd(["cat", "a"]), secretPaths: ["65 path words, only 64 checked"] },
+      false,
+    ),
+  ).toEqual({ session: false, always: false });
+  // With the sandbox on, a command card lets out only its own command;
+  // a file change or an MCP call is granted as before.
+  expect(grantsOffered(cmd(["ls"]), false, true)).toEqual({
+    session: false,
+    always: true,
+  });
+  expect(grantsOffered(editP, false, true)).toEqual(both);
+  expect(
+    grantsOffered(
+      { kind: "mcp", name: "db__query", argumentsJson: "{}" },
+      false,
+      true,
+    ),
+  ).toEqual(both);
+  // The state carries the same answer for the markup's classes.
+  expect(approvalState(editP)).toMatchObject({
+    session_ok: true,
+    always_ok: true,
+  });
+  expect(approvalState(cmd(["ls"]), 80, undefined, false, true)).toMatchObject({
+    session_ok: false,
+    always_ok: true,
+  });
+  expect(approvalState(secret)).toMatchObject({
+    session_ok: false,
+    always_ok: false,
+  });
+  const big = Array.from({ length: 2100 }, (_, i) => `+line ${i}`).join("\n");
+  expect(approvalState({ ...editP, diff: big })).toMatchObject({
+    truncated: true,
+    session_ok: false,
+    always_ok: false,
+  });
+  expect(noApproval()).toMatchObject({ session_ok: false, always_ok: false });
+});
+
+test("the armed status names only the keys that act", () => {
+  const offered = { truncated: false, session_ok: true, always_ok: true };
+  expect(armedStatus(offered)).toBe(APPROVAL_STATUS);
+  expect(armedStatus({ ...offered, session_ok: false })).toBe(
+    "Waiting for approval · y allow · ! always · n deny · Esc deny",
+  );
+  expect(armedStatus({ ...offered, always_ok: false })).toBe(
+    "Waiting for approval · y allow · a session · n deny · Esc deny",
+  );
+  expect(
+    armedStatus({ truncated: false, session_ok: false, always_ok: false }),
+  ).toBe("Waiting for approval · y allow · n deny · Esc deny");
+  expect(
+    armedStatus({ truncated: true, session_ok: false, always_ok: false }),
+  ).toBe(APPROVAL_TRUNCATED_STATUS);
 });
 
 test("grant matching: files shared, commands by argv prefix, MCP exact", () => {

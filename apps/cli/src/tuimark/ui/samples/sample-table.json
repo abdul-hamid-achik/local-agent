@@ -220,6 +220,8 @@
     "yes": "Allow",
     "truncated": false,
     "grant_hint": "",
+    "session_ok": false,
+    "always_ok": false,
     "lines": []
   },
   "question": {

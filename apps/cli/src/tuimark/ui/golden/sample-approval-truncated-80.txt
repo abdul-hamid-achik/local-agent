@@ -28,4 +28,4 @@
 ╭──────────────────────────────────────────────────────────────────────────────╮
 │ Type to queue a message                                                      │
 ╰──────────────────────────────────────────────────────────────────────────────╯
- Preview truncated · y allow · n deny · Esc deny   a session  ! always          
+ Preview truncated · y allow · n deny · Esc deny   pgup/pgdn scroll             

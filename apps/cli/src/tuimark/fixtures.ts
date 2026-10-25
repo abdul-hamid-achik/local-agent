@@ -17,6 +17,7 @@ import {
   APPROVAL_STATUS,
   APPROVAL_TRUNCATED_STATUS,
   approvalState,
+  armedStatus,
   contextLabel,
   contextPct,
   detailsState,
@@ -477,14 +478,19 @@ export function mcpApprovalSample(): Store {
   return store;
 }
 
-/** A preview past the row cap: it says so, and the dialog is red and still defaults to Deny. */
+/** An edit whose preview is past the row cap at any width. */
+function truncatedProposal(): ApprovalRequest {
+  const lines = Array.from({ length: 2100 }, (_, i) => `+line ${i}`);
+  return { ...EDIT_PROPOSAL, path: "big.txt", diff: lines.join("\n") };
+}
+
+/**
+ * A preview past the row cap: it says so, and the dialog is red and still
+ * defaults to Deny. Neither `a` nor `!` is named: no grant is taken from it.
+ */
 export function truncatedApprovalSample(): Store {
   const store = approvalSample();
-  const lines = Array.from({ length: 2100 }, (_, i) => `+line ${i}`);
-  store.approval = approvalState(
-    { ...EDIT_PROPOSAL, path: "big.txt", diff: lines.join("\n") },
-    80,
-  );
+  store.approval = approvalState(truncatedProposal(), 80);
   store.status = APPROVAL_TRUNCATED_STATUS;
   return store;
 }
@@ -575,7 +581,14 @@ export function goalSample(): Store {
 }
 
 /** A command waiting for approval: one shell-quoted line, then where it runs. */
-export function commandApprovalSample(): Store {
+const COMMAND_PROPOSAL: ApprovalRequest = {
+  kind: "command",
+  argv: ["bun", "test", "tests/stats.test.ts", "-t", "mean of an empty list"],
+  cwd: "/home/me/project",
+  timeoutMs: 120_000,
+};
+
+export function commandApprovalSample(sandboxOn = false): Store {
   const { store, builder } = base();
   builder.fromMessage({
     role: "assistant",
@@ -584,24 +597,15 @@ export function commandApprovalSample(): Store {
   });
   store.live = liveToolView(builder.takeCall(), "run_command", "approval");
   store.approval = approvalState(
-    {
-      kind: "command",
-      argv: [
-        "bun",
-        "test",
-        "tests/stats.test.ts",
-        "-t",
-        "mean of an empty list",
-      ],
-      cwd: "/home/me/project",
-      timeoutMs: 120_000,
-    },
+    COMMAND_PROPOSAL,
     80,
     "/home/me/project",
+    false,
+    sandboxOn,
   );
   store.placeholder = PLACEHOLDER_BUSY;
   store.head = headState("approval", 12);
-  store.status = APPROVAL_STATUS;
+  store.status = armedStatus(store.approval);
   return store;
 }
 
@@ -808,7 +812,9 @@ export const SAMPLES = {
   "sample-approval-long": longApprovalSample,
   "sample-approval-mcp": mcpApprovalSample,
   "sample-approval-truncated": truncatedApprovalSample,
-  "sample-approval-command": commandApprovalSample,
+  "sample-approval-command": () => commandApprovalSample(),
+  // With the sandbox on, `a` grants nothing for a command; `!` still saves a rule.
+  "sample-approval-sandbox": () => commandApprovalSample(true),
   "sample-question": questionSample,
   "sample-question-text": questionTextSample,
   "sample-thinking": thinkingSample,
@@ -849,6 +855,26 @@ export function inlineApprovalSample(): Store {
   return store;
 }
 
+/** The in-flow approval past the row cap: neither `a` nor `!` is named. */
+export function inlineTruncatedApprovalSample(): Store {
+  const store = toInline(truncatedApprovalSample());
+  store.approval = approvalState(truncatedProposal(), 80, undefined, true);
+  return store;
+}
+
+/** The in-flow command approval with the sandbox on: `!` is named, `a` is not. */
+export function inlineSandboxApprovalSample(): Store {
+  const store = toInline(commandApprovalSample(true));
+  store.approval = approvalState(
+    COMMAND_PROPOSAL,
+    80,
+    "/home/me/project",
+    true,
+    true,
+  );
+  return store;
+}
+
 /** The in-flow approval over the long diff, wrapped at the inline width. */
 export function inlineLongApprovalSample(): Store {
   const store = toInline(longApprovalSample());
@@ -869,6 +895,8 @@ export const INLINE_SAMPLES = {
   "inline-sample-thinking": () => toInline(thinkingSample()),
   "inline-sample-approval": inlineApprovalSample,
   "inline-sample-approval-long": inlineLongApprovalSample,
+  "inline-sample-approval-truncated": inlineTruncatedApprovalSample,
+  "inline-sample-approval-sandbox": inlineSandboxApprovalSample,
   "inline-sample-question": () => toInline(questionSample()),
   "inline-sample-palette": () => toInline(paletteSample()),
   "inline-sample-help": () => toInline(helpSample()),

@@ -112,7 +112,10 @@ export const PLACEHOLDER = "Message the model";
 export const PLACEHOLDER_BUSY = "Type to queue a message";
 /** While the dialog is not armed yet: only deny works. */
 export const APPROVAL_WAIT_STATUS = "Waiting for approval · n deny · Esc deny";
-/** Once the dialog accepts `y` (and `a`, the session grant, `!` the rule). */
+/**
+ * Once the dialog accepts `y` (and `a`, the session grant, `!` the rule).
+ * armedStatus leaves out each grant a card does not offer.
+ */
 export const APPROVAL_STATUS =
   "Waiting for approval · y allow · a session · ! always · n deny · Esc deny";
 export const APPROVAL_TRUNCATED_STATUS =
@@ -207,6 +210,14 @@ export interface ApprovalState {
    * no grant is offered, when the preview is truncated). "" when closed.
    */
   grant_hint: string;
+  /**
+   * `a` would take a session grant (see grantsOffered). The key hint and
+   * the armed status name `a` only then; the key still reaches the client,
+   * which says why it refuses.
+   */
+  session_ok: boolean;
+  /** `!` would save an always rule: the same, for `!`. */
+  always_ok: boolean;
   lines: DiffLine[];
 }
 
@@ -646,6 +657,8 @@ export function noApproval(): ApprovalState {
     yes: "Allow",
     truncated: false,
     grant_hint: "",
+    session_ok: false,
+    always_ok: false,
     lines: [],
   };
 }
@@ -1043,6 +1056,40 @@ export function grantHint(
 }
 
 /**
+ * Which grants the dialog's keys would take, as the card alone decides:
+ * neither from a preview nobody could read whole or from a command that
+ * names a secret path, and no session grant for a command while the
+ * sandbox is on. (`!` also checks the rules file when pressed: a deny rule
+ * written while the card is open still keeps it from saving.)
+ */
+export function grantsOffered(
+  proposal: ApprovalRequest,
+  truncated: boolean,
+  sandboxOn = false,
+): { session: boolean; always: boolean } {
+  const unread = truncated || namesSecret(proposal);
+  return {
+    session: !unread && !(sandboxOn && proposal.kind === "command"),
+    always: !unread,
+  };
+}
+
+/** The status once the dialog is armed: it names only the keys that act. */
+export function armedStatus(
+  approval: Pick<ApprovalState, "truncated" | "session_ok" | "always_ok">,
+): string {
+  if (approval.truncated) return APPROVAL_TRUNCATED_STATUS;
+  const keys = [
+    "y allow",
+    ...(approval.session_ok ? ["a session"] : []),
+    ...(approval.always_ok ? ["! always"] : []),
+    "n deny",
+    "Esc deny",
+  ];
+  return `Waiting for approval · ${keys.join(" · ")}`;
+}
+
+/**
  * A command with an argument that names a path the file tools refuse, or
  * with too many path words to check each for a link to one.
  */
@@ -1090,12 +1137,15 @@ export function approvalState(
 ): ApprovalState {
   const width = inline ? previewWidthInline(cols) : previewWidth(cols);
   const preview = previewRows(approvalText(proposal, root), width);
+  const offered = grantsOffered(proposal, preview.truncated, sandboxOn);
   const base = {
     ...noApproval(),
     open: true,
     lines: preview.lines,
     truncated: preview.truncated,
     grant_hint: grantHint(proposal, preview.truncated, sandboxOn),
+    session_ok: offered.session,
+    always_ok: offered.always,
   };
   const body = (text: string) => (preview.truncated ? TRUNCATED_BODY : text);
   switch (proposal.kind) {

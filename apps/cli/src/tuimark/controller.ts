@@ -118,15 +118,14 @@ import {
 } from "#cli/tuimark/goal";
 import {
   APPROVAL_SANDBOX_SESSION_STATUS,
-  APPROVAL_STATUS,
   APPROVAL_TRUNCATED_ALWAYS_STATUS,
   APPROVAL_TRUNCATED_SESSION_STATUS,
-  APPROVAL_TRUNCATED_STATUS,
   APPROVAL_UNARMED_ALWAYS_STATUS,
   APPROVAL_UNARMED_SESSION_STATUS,
   APPROVAL_UNARMED_STATUS,
   APPROVAL_WAIT_STATUS,
   approvalState,
+  armedStatus,
   CtxMeter,
   compactedNotice,
   contextLabel,
@@ -506,6 +505,8 @@ export class TuimarkClient {
   private proposal?: ApprovalRequest;
   /** The open proposal's preview was truncated: `a` must not grant from it. */
   private proposalTruncated = false;
+  /** The armed status the open dialog last showed (see resize). */
+  private armedLine = "";
   /** `/sandbox`: commands no rule decides run confined, without a card. */
   private sandbox = false;
   /** Why the sandbox was last found unavailable (`/status` says it). */
@@ -929,9 +930,16 @@ export class TuimarkClient {
     const proposal = this.proposal;
     if (proposal) {
       const approval = this.approvalFor(proposal);
-      // A narrower terminal wraps more rows: truncation can change with it.
+      // A narrower terminal wraps more rows: truncation can change with it,
+      // and with it the grants an armed dialog's status names. Only then is
+      // the status written: a refusal the person just read stays.
       this.proposalTruncated = approval.truncated;
       writes.push({ path: "approval", value: approval });
+      const line = armedStatus(approval);
+      if (this.armed && line !== this.armedLine) {
+        this.armedLine = line;
+        writes.push({ path: "status", value: line });
+      }
     }
     if (this.detailsOpen && this.shownReceipt)
       writes.push({
@@ -3426,14 +3434,8 @@ export class TuimarkClient {
         this.armTimer = setTimeout(() => {
           if (this.decide !== finish) return;
           this.armed = true;
-          void this.write([
-            {
-              path: "status",
-              value: approval.truncated
-                ? APPROVAL_TRUNCATED_STATUS
-                : APPROVAL_STATUS,
-            },
-          ]);
+          this.armedLine = armedStatus(approval);
+          void this.write([{ path: "status", value: this.armedLine }]);
         }, this.options.armMs ?? APPROVAL_ARM_MS);
       });
     });

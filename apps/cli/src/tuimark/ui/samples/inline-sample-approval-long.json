@@ -73,6 +73,8 @@
     "yes": "Allow",
     "truncated": false,
     "grant_hint": "a allow file changes this session",
+    "session_ok": true,
+    "always_ok": true,
     "lines": [
       {
         "n": 0,

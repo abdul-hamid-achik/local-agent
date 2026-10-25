@@ -27,9 +27,14 @@
   <keymap when=".k-dialog">
     <!-- Allow this call and matching ones for the session (the dialog's
          grant line spells out what matches). The kit's own dialog rows
-         (y/n) are fixed, so `a` is this document's row, like scroll. -->
-    <bind keys="a" action="dialog_session" label="session" keycap="a"/>
-    <bind keys="!" action="dialog_always" label="always" keycap="!"/>
+         (y/n) are fixed, so `a` is this document's row, like scroll.
+         `a` and `!` are named only while the client would take them (the
+         screen's grant-session and grant-always classes); the unlabeled
+         row after each still sends the key, so the client says why not. -->
+    <bind keys="a" action="dialog_session" when=".grant-session > .k-dialog" label="session" keycap="a"/>
+    <bind keys="a" action="dialog_session"/>
+    <bind keys="!" action="dialog_always" when=".grant-always > .k-dialog" label="always" keycap="!"/>
+    <bind keys="!" action="dialog_always"/>
     <bind keys="pgup" action="move-page-up" to="#approval_diff" label="scroll" keycap="pgup/pgdn"/>
     <bind keys="pgdn" action="move-page-down" to="#approval_diff"/>
     <bind keys="up" action="move-prev" to="#approval_diff"/>
@@ -236,7 +241,7 @@
     </box>
   </template>
 
-  <screen id="main" focus="#composer" class:slashpop="slash.open" class:asking="question.open">
+  <screen id="main" focus="#composer" class:slashpop="slash.open" class:asking="question.open" class:grant-session="approval.session_ok" class:grant-always="approval.always_ok">
     <col id="app">
       <use template="k-appbar" brand="Local Agent" title="">
         <!-- By priority, so a narrow terminal clips the least important:

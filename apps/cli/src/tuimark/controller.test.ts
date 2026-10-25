@@ -556,9 +556,19 @@ async function until(ok: () => boolean) {
   if (!ok()) throw new Error(`until: still false after 1 s: ${ok}`);
 }
 
-/** The dialog is open and has armed itself (the status line offers "y allow"). */
-async function untilApproval(ui: FakeHost) {
-  await until(() => store(ui).status === APPROVAL_STATUS);
+/** The armed status of a command card with the sandbox on: no `a`. */
+const SANDBOX_ARMED_STATUS =
+  "Waiting for approval · y allow · ! always · n deny · Esc deny";
+/** The armed status of a card that offers no grant (a secret path). */
+const NO_GRANT_ARMED_STATUS =
+  "Waiting for approval · y allow · n deny · Esc deny";
+
+/**
+ * Until the dialog is open and has armed itself: its status offers "y
+ * allow" and names the grant keys that act.
+ */
+async function untilApproval(ui: FakeHost, status = APPROVAL_STATUS) {
+  await until(() => store(ui).status === status);
   expect(store(ui).approval.open).toBe(true);
 }
 
@@ -3113,6 +3123,60 @@ test("grants: a truncated preview refuses `a` (dialog stays, `y` still works, no
   expect(decisions).toEqual([true, false]);
 });
 
+test("grants: a resize that truncates the preview takes `a` and `!` off the armed status, and puts them back", async () => {
+  const timer = holdArmTimer();
+  try {
+    let cols = 100;
+    // 1100 lines of 50 columns: one row each at 100 columns, two at 40,
+    // which is past the row cap.
+    const diff = Array.from(
+      { length: 1100 },
+      (_, i) => `+${String(i).padStart(4, "0")}${"x".repeat(45)}`,
+    ).join("\n");
+    const { ui, client } = setup(turnsAsking([[editProposal(diff)]]), {
+      armMs: timer.armMs,
+      columns: () => cols,
+    });
+    await ui.fire("send", "one");
+    await until(() => store(ui).approval.open);
+    // Not armed yet: a resize leaves the waiting status alone.
+    cols = 40;
+    await client.resize();
+    expect(store(ui).approval).toMatchObject({
+      truncated: true,
+      session_ok: false,
+      always_ok: false,
+    });
+    expect(store(ui).status).toBe(APPROVAL_WAIT_STATUS);
+    cols = 100;
+    await client.resize();
+    await timer.arm();
+    await until(() => store(ui).status === APPROVAL_STATUS);
+    cols = 40;
+    await client.resize();
+    expect(store(ui).status).toBe(APPROVAL_TRUNCATED_STATUS);
+    await ui.fire("dialog_session");
+    expect(store(ui).status).toBe(APPROVAL_TRUNCATED_SESSION_STATUS);
+    // A resize that changes no grant keeps the refusal on the status line.
+    cols = 39;
+    await client.resize();
+    expect(store(ui).status).toBe(APPROVAL_TRUNCATED_SESSION_STATUS);
+    cols = 100;
+    await client.resize();
+    expect(store(ui).approval).toMatchObject({
+      truncated: false,
+      session_ok: true,
+      always_ok: true,
+    });
+    expect(store(ui).status).toBe(APPROVAL_STATUS);
+    await ui.fire("dialog_cancel");
+    await client.idle();
+    expect(decisions).toEqual([false]);
+  } finally {
+    timer.release();
+  }
+});
+
 test("grants: an unarmed `a` is swallowed with feedback, like `y`", async () => {
   const timer = holdArmTimer();
   try {
@@ -5357,7 +5421,7 @@ test("sandbox: on, every command runs confined without a card unless a deny or a
   // An ask rule wants a person, sandbox or not; so does an edit. The card
   // says it runs outside, and lets out only its own command: no grant.
   await ui.fire("send", "two");
-  await untilApproval(ui);
+  await untilApproval(ui, SANDBOX_ARMED_STATUS);
   expect(store(ui).approval.body).toMatch(/^Runs outside the sandbox, as you/);
   expect(store(ui).approval.grant_hint).toBe(
     "sandbox on: session grant unavailable",
@@ -5518,7 +5582,7 @@ test("a command that names a secret path always gets its card: no allow rule, gr
   );
   // No sandbox: the allow rule runs the plain one; the secret one asks.
   await ui.fire("send", "one");
-  await untilApproval(ui);
+  await untilApproval(ui, NO_GRANT_ARMED_STATUS);
   expect(store(ui).approval.body).toContain(
     "names a path the workspace treats as secret: .env",
   );
@@ -5533,7 +5597,7 @@ test("a command that names a secret path always gets its card: no allow rule, gr
   // With the sandbox on, the sandbox does not spare the next card either.
   await ui.fire("send", "/sandbox on");
   await ui.fire("send", "two");
-  await untilApproval(ui);
+  await untilApproval(ui, NO_GRANT_ARMED_STATUS);
   expect(store(ui).approval.body).toContain("treats as secret");
   await ui.fire("dialog_cancel");
   await client.idle();
@@ -5550,7 +5614,7 @@ test("a card that names a secret path offers no session grant and no always rule
     workspace: { root } as Workspace,
   });
   await ui.fire("send", "one");
-  await untilApproval(ui);
+  await untilApproval(ui, NO_GRANT_ARMED_STATUS);
   expect(store(ui).approval.grant_hint).toBe(
     "names a secret path: session grant and always rule unavailable",
   );
@@ -5579,7 +5643,7 @@ test("a card with too many path words to check says that, and offers no grant ei
     workspace: { root } as Workspace,
   });
   await ui.fire("send", "one");
-  await untilApproval(ui);
+  await untilApproval(ui, NO_GRANT_ARMED_STATUS);
   expect(store(ui).approval.body).toContain(
     "It names 65 path words, too many to check each for a link to a secret.",
   );
@@ -5612,7 +5676,7 @@ test("a session grant for a command never covers a later one that names a secret
   await ui.fire("dialog_session");
   await client.idle();
   await ui.fire("send", "two");
-  await untilApproval(ui);
+  await untilApproval(ui, NO_GRANT_ARMED_STATUS);
   await ui.fire("dialog_cancel");
   await client.idle();
   expect(decisions).toEqual([true, false]);
