@@ -1,14 +1,10 @@
 /* local-agent's own styling, loaded after the kit (kit/theme.tcss, kit/kit.tcss).
- * Tokens come from the kit; the syntax colors are this file's. The kit
- * tokens re-declared here are the ones that miss 4.5:1 on bg, panel, raised
- * or sel; muted moves with subtle so the two still rank (themes.test.ts).
- * Text that carries content is never dim: a terminal renders dim as it likes,
- * so no contrast check can see it. */
+ * Tokens come from the kit, whose palettes read at 4.5:1 on bg, panel, raised
+ * and sel since Tuimark 0.5.5; the syntax colors are this file's
+ * (themes.test.ts holds every one to the same rule). Text that carries
+ * content is never dim: a terminal renders dim as it likes, so no contrast
+ * check can see it. */
 :root {
-  --muted: #939ca5;
-  --subtle: #8a929c;
-  --danger: #f85c55;
-
   --kw: #ff7b72;
   --str: #a5d6ff;
   --num: #79c0ff;
@@ -18,15 +14,6 @@
 }
 @media (theme: light) {
   :root {
-    /* The kit's light muted, again: the dark one above would win otherwise. */
-    --muted: #59636e;
-    --subtle: #626b78;
-    --accent: #0967d5;
-    --ok: #197a35;
-    --warn: #916100;
-    --danger: #ce232e;
-    --code: #7d49de;
-
     --kw: #cf222e;
     --str: #0a3069;
     --num: #0550ae;

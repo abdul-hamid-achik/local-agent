@@ -1,8 +1,9 @@
-# Tuimark kit v2, vendored from Tuimark v0.4.5
+# Tuimark kit v2, vendored from Tuimark v0.4.5 and v0.5.5
 
-`kit.tui`, `theme.tcss` and `kit.tcss` are copied unmodified from
-`kit/` at the `v0.4.5` tag of `abdul-hamid-achik/tuimark`
-(`git show v0.4.5:kit/kit.tui`). Do not edit them here. local-agent's own
+`kit.tui` and `kit.tcss` are copied unmodified from `kit/` at the `v0.4.5` tag
+of `abdul-hamid-achik/tuimark` (`git show v0.4.5:kit/kit.tui`), and
+`theme.tcss` from the `v0.5.5` tag, whose palettes read at WCAG AA (only the
+token values changed since v0.4.5). Do not edit them here. local-agent's own
 styling and templates live in `../app.tcss` and `../app.tui`, which load after
 the kit and win ties by order.
 

@@ -13,6 +13,9 @@
  * the whole kit) or refine any rule.
  *
  * Tokens are CSS custom properties on :root, read as $name (or var(--name)).
+ * Every text token reads at WCAG AA (4.5:1) on bg, panel, raised and sel, and
+ * every on-* token on the fill it sits on, in both palettes. TestPaletteContrast
+ * (examples/kit-gallery/kit_test.go) holds them to it.
  * The first ten are the runtime's own required tokens (the same names its
  * built-in dark and light themes define); the rest are the kit's. Nothing
  * else in the kit holds a color.
@@ -38,8 +41,8 @@
 :root {
   --bg: #0d1117;
   --fg: #e6edf3;
-  --muted: #8b949e;
-  --subtle: #6e7681;
+  --muted: #939ca5;
+  --subtle: #8a929c;
   --border: #30363d;
   --panel: #161b22;
   --raised: #1c2128;
@@ -47,7 +50,7 @@
   --focus: #58a6ff;
   --ok: #3fb950;
   --warn: #d29922;
-  --danger: #f85149;
+  --danger: #f85c55;
   --info: #39c5cf;
   --sel: #1f2a37;
   --on-accent: #0d1117;
@@ -62,22 +65,22 @@
     --bg: #ffffff;
     --fg: #1f2328;
     --muted: #59636e;
-    --subtle: #818b98;
+    --subtle: #626b78;
     --border: #d1d9e0;
     --panel: #f6f8fa;
     --raised: #eef1f4;
-    --accent: #0969da;
+    --accent: #0967d5;
     --focus: #0969da;
-    --ok: #1a7f37;
-    --warn: #9a6700;
-    --danger: #d1242f;
+    --ok: #197a35;
+    --warn: #916100;
+    --danger: #ce232e;
     --info: #0550ae;
     --sel: #eaeef2;
     --on-accent: #ffffff;
     --on-ok: #ffffff;
     --on-warn: #ffffff;
     --on-danger: #ffffff;
-    --code: #8250df;
+    --code: #7d49de;
   }
 }
 
