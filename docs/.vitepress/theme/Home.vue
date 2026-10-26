@@ -51,6 +51,31 @@ const budgetParts = [
 const budgetBar = ref<HTMLElement | null>(null)
 let playObserver: IntersectionObserver | undefined
 
+// Groups marked data-reveal rise in turn as their children enter the view
+// (style.css). Armed only with JS and IntersectionObserver, never under
+// reduced motion: without it the children simply show. Each child is revealed
+// once, when it first shows, and then keeps its place.
+const home = ref<HTMLElement | null>(null)
+let revealObserver: IntersectionObserver | undefined
+
+onMounted(() => {
+  const root = home.value
+  if (!root || typeof IntersectionObserver === 'undefined') return
+  if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return
+  root.classList.add('is-revealing')
+  revealObserver = new IntersectionObserver(
+    (entries) => {
+      for (const entry of entries) {
+        if (!entry.isIntersecting) continue
+        entry.target.classList.add('is-revealed')
+        revealObserver?.unobserve(entry.target)
+      }
+    },
+    { threshold: 0.15 },
+  )
+  root.querySelectorAll('[data-reveal] > *').forEach((el) => revealObserver?.observe(el))
+})
+
 onMounted(() => {
   const el = budgetBar.value
   if (!el || typeof IntersectionObserver === 'undefined') return
@@ -69,6 +94,7 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   playObserver?.disconnect()
+  revealObserver?.disconnect()
   clearTimeout(copiedTimer)
 })
 
@@ -137,7 +163,7 @@ const ecosystemGroups = [
 </script>
 
 <template>
-  <main class="la-home">
+  <main ref="home" class="la-home">
     <section class="la-hero" aria-labelledby="home-title">
       <div class="la-hero-copy la-enter la-enter-first">
         <p class="la-eyebrow">
@@ -196,7 +222,7 @@ const ecosystemGroups = [
       </figure>
     </section>
 
-    <dl class="la-invariant-strip" aria-label="local-agent at a glance">
+    <dl class="la-invariant-strip" aria-label="local-agent at a glance" data-reveal>
       <div>
         <dt>Inference</dt>
         <dd>Ollama</dd>
@@ -216,7 +242,7 @@ const ecosystemGroups = [
     </dl>
 
     <section class="la-section la-authority" aria-labelledby="authority-title">
-      <header class="la-section-heading la-section-heading-sticky">
+      <header class="la-section-heading la-section-heading-sticky" data-reveal>
         <p class="la-kicker">Host-enforced modes</p>
         <h2 id="authority-title">Authority is a mode, not a suggestion.</h2>
         <p>
@@ -228,7 +254,7 @@ const ecosystemGroups = [
         </a>
       </header>
 
-      <div class="la-mode-ledger">
+      <div class="la-mode-ledger" data-reveal>
         <article
           v-for="mode in modes"
           :key="mode.id"
@@ -249,7 +275,7 @@ const ecosystemGroups = [
     </section>
 
     <section class="la-model-section la-section" aria-labelledby="models-title">
-      <div class="la-model-copy">
+      <div class="la-model-copy" data-reveal>
         <p class="la-kicker">Model admission</p>
         <h2 id="models-title">The host admits the model before the first turn.</h2>
         <p>
@@ -306,7 +332,12 @@ const ecosystemGroups = [
               ></i>
             </div>
             <ul class="la-budget-legend" aria-hidden="true">
-              <li v-for="part in budgetParts" :key="part.id" :class="`la-budget-${part.id}`">
+              <li
+                v-for="(part, index) in budgetParts"
+                :key="part.id"
+                :class="`la-budget-${part.id}`"
+                :style="{ '--step': index }"
+              >
                 <b></b>{{ part.label }} {{ part.gib.toFixed(1) }}
               </li>
             </ul>
@@ -320,7 +351,7 @@ const ecosystemGroups = [
     </section>
 
     <section class="la-section la-effects" aria-labelledby="effects-title">
-      <header class="la-section-heading la-section-heading-wide">
+      <header class="la-section-heading la-section-heading-wide" data-reveal>
         <div>
           <p class="la-kicker">Readable effects</p>
           <h2 id="effects-title">See the request, the decision, and the receipt.</h2>
@@ -331,7 +362,7 @@ const ecosystemGroups = [
         </p>
       </header>
 
-      <div class="la-effect-board">
+      <div class="la-effect-board" data-reveal>
         <article class="la-approval-panel" aria-labelledby="approval-panel-title">
           <div class="la-panel-number" aria-hidden="true">01 / APPROVAL</div>
           <h3 id="approval-panel-title">Decisions stay visible.</h3>
@@ -531,7 +562,7 @@ const ecosystemGroups = [
         <h2 id="safety-title">Local-first is precise, not absolute.</h2>
       </div>
 
-      <ul class="la-safety-list">
+      <ul class="la-safety-list" data-reveal>
         <li>
           <span>01</span>
           <p>
@@ -561,7 +592,7 @@ const ecosystemGroups = [
     </section>
 
     <section class="la-section la-ecosystem" aria-labelledby="ecosystem-title">
-      <header class="la-section-heading la-section-heading-wide">
+      <header class="la-section-heading la-section-heading-wide" data-reveal>
         <div>
           <p class="la-kicker">Focused local tools</p>
           <h2 id="ecosystem-title">One host. A wider local-first toolchain.</h2>

@@ -1005,6 +1005,70 @@ body {
   }
 }
 
+/* The legend names each part as its segment grows, in the same step. */
+.la-budget.is-armed .la-budget-legend li {
+  opacity: 0;
+}
+
+.la-budget.is-playing .la-budget-legend li {
+  animation: la-fade-in 360ms var(--la-ease) both;
+  animation-delay: calc(var(--step) * 300ms);
+}
+
+@keyframes la-fade-in {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+/*
+ * Reveal groups (Home.vue marks them data-reveal). Each child rises once as
+ * it first enters the view, 110 ms after its previous sibling, so a group
+ * reads in turn. Home.vue adds .is-revealing only with JS and without reduced
+ * motion, so without them every child shows. backwards fill lets a row's own
+ * hover transform take over once its rise has ended.
+ */
+.la-home.is-revealing [data-reveal] > :not(.is-revealed) {
+  opacity: 0;
+  transform: translate3d(0, 18px, 0);
+}
+
+.la-home [data-reveal] > .is-revealed {
+  animation: la-enter 620ms var(--la-ease) backwards;
+}
+
+.la-home [data-reveal] > .is-revealed:nth-child(2) {
+  animation-delay: 110ms;
+}
+
+.la-home [data-reveal] > .is-revealed:nth-child(3) {
+  animation-delay: 220ms;
+}
+
+.la-home [data-reveal] > .is-revealed:nth-child(4) {
+  animation-delay: 330ms;
+}
+
+.la-home [data-reveal] > .is-revealed:nth-child(5) {
+  animation-delay: 440ms;
+}
+
+.la-home [data-reveal] > .is-revealed:nth-child(6) {
+  animation-delay: 550ms;
+}
+
+.la-home [data-reveal] > .is-revealed:nth-child(7) {
+  animation-delay: 660ms;
+}
+
+.la-home [data-reveal] > .is-revealed:nth-child(n + 8) {
+  animation-delay: 770ms;
+}
+
 .la-effects {
   padding-bottom: 144px;
 }
@@ -1650,8 +1714,17 @@ body {
   .la-budget-bar i,
   .la-tui-frame,
   .la-tui-spin text,
-  .la-status-dot {
+  .la-status-dot,
+  .la-budget.is-playing .la-budget-legend li,
+  .la-home [data-reveal] > .is-revealed {
     animation: none;
+  }
+
+  /* Nothing waits for a reveal or a legend step under reduced motion. */
+  .la-home.is-revealing [data-reveal] > :not(.is-revealed),
+  .la-budget.is-armed .la-budget-legend li {
+    opacity: 1;
+    transform: none;
   }
 
   /* A screen armed before the preference changed rests, as with no script. */
