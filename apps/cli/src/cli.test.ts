@@ -227,6 +227,195 @@ test.each(["chalupa", "ollama"])(
   },
 );
 
+/** The environment chalupa exec gives a run on the GPU at `origin`. */
+const chalupaEnv = (origin: string, context_size = 65536) => ({
+  LOCAL_AGENT_PROVIDER: "chalupa",
+  LOCAL_AGENT_LOCAL_ONLY: "false",
+  LOCAL_AGENT_PROVIDER_CONFIG: JSON.stringify({
+    type: "ollama_remote",
+    model: "fixture",
+    base_url: origin,
+    context_size,
+    max_model_bytes: 40_000_000_000,
+    stream_idle_timeout: "10m",
+  }),
+});
+
+const readReceipt = async (path: string) =>
+  JSON.parse(await Bun.file(path).text()) as Record<string, unknown>;
+
+test("a Chalupa run writes its receipt for chalupa inference report", async () => {
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    async fetch(request) {
+      const path = new URL(request.url).pathname;
+      if (path === "/api/tags")
+        return Response.json({ models: [{ name: "fixture", size: 1000 }] });
+      if (path === "/api/show")
+        return Response.json({
+          capabilities: ["completion", "tools"],
+          model_info: { "fixture.context_length": 65536 },
+        });
+      return new Response(
+        `${JSON.stringify({ message: { role: "assistant", content: "Hello" }, done: false })}\n${JSON.stringify(
+          {
+            message: { role: "assistant", content: "" },
+            done: true,
+            done_reason: "stop",
+            prompt_eval_count: 7,
+            eval_count: 3,
+            load_duration: 4_000_000,
+            prompt_eval_duration: 20_000_000,
+            eval_duration: 30_000_000,
+          },
+        )}\n`,
+      );
+    },
+  });
+  const scratch = await makeHome();
+  const file = join(scratch.home, "receipt.json");
+  try {
+    const { stdout, stderr, code } = await runCli(
+      ["-p", "Hello", "--receipt", file, "--run-id", "ci-1"],
+      { home: scratch, env: chalupaEnv(server.url.origin) },
+    );
+    expect({ code, stderr }).toEqual({ code: 0, stderr: "" });
+    // The reply still goes to stdout; the receipt only to its file.
+    expect(stdout).toBe("Hello\n");
+    const receipt = await readReceipt(file);
+    expect(receipt).toMatchObject({
+      schema: "local-agent.turn-receipt.v1",
+      run_id: "ci-1",
+      model: { name: "fixture", num_ctx: 65536, remote: true },
+      status: "settled",
+      stop_reason: "completed",
+      truncated: false,
+      usage: { prompt_tokens: 7, eval_tokens: 3 },
+      tool_calls: [],
+      timing: { load_ms: 4, prompt_eval_ms: 20, eval_ms: 30 },
+    });
+    const timing = receipt.timing as Record<string, number>;
+    expect(timing.ttft_ms).toBeGreaterThanOrEqual(0);
+    expect(timing.total_ms).toBeGreaterThanOrEqual(timing.ttft_ms ?? 0);
+    // Written whole: no temporary file is left beside it.
+    expect(
+      [...new Bun.Glob("receipt.json*").scanSync(scratch.home)].sort(),
+    ).toEqual(["receipt.json"]);
+  } finally {
+    await server.stop(true);
+    await rm(scratch.home, { recursive: true, force: true });
+  }
+});
+
+test("a model the Chalupa host does not have leaves a not_admitted receipt", async () => {
+  const scratch = await makeHome();
+  const file = join(scratch.home, "receipt.json");
+  try {
+    await withOllama([{ name: "other:1b", size: 1000 }], async (origin) => {
+      const { stderr, code } = await runCli(
+        ["-p", "Hello", "--receipt", file],
+        { home: scratch, env: chalupaEnv(origin) },
+      );
+      expect(code).toBe(1);
+      expect(stderr).toContain("not on the Chalupa host");
+      const receipt = await readReceipt(file);
+      expect(receipt).toMatchObject({
+        model: { name: "fixture", remote: true },
+        status: "not_admitted",
+        stop_reason: "not_admitted",
+        usage: { prompt_tokens: 0, eval_tokens: 0 },
+        tool_calls: [],
+      });
+      expect(receipt).not.toHaveProperty("timing");
+      // No --run-id: a new UUID, as Chalupa wants one per run.
+      expect(receipt.run_id).toMatch(/^[0-9a-f-]{36}$/);
+    });
+  } finally {
+    await rm(scratch.home, { recursive: true, force: true });
+  }
+});
+
+// Written in the signal's handler: a hang-up's exit timer cannot beat it.
+test.each([
+  ["SIGHUP", 129],
+  ["SIGINT", 130],
+  ["SIGTERM", 143],
+] as const)("%s leaves a canceled receipt", async (signal, expected) => {
+  const { server, asked } = hungModel();
+  const scratch = await makeHome();
+  const file = join(scratch.home, "receipt.json");
+  const run = await startCli(["-p", "Hello", "--receipt", file], {
+    home: scratch,
+    env: chalupaEnv(server.url.origin, 16384),
+  });
+  try {
+    await asked;
+    run.child.kill(signal);
+    const { stderr, code } = await run.output;
+    expect({ code, stderr }).toEqual({ code: expected, stderr: "" });
+    expect(await readReceipt(file)).toMatchObject({
+      status: "canceled",
+      stop_reason: "interrupted",
+    });
+  } finally {
+    await server.stop(true);
+    await rm(scratch.home, { recursive: true, force: true });
+  }
+});
+
+test("a receipt that cannot be written fails a turn that worked, and says why", async () => {
+  await withOllama([{ name: "fixture", size: 1000 }], async (origin) => {
+    const scratch = await makeHome();
+    try {
+      const { stdout, stderr, code } = await runCli(
+        ["-p", "Hello", "--receipt", join(scratch.home, "missing", "r.json")],
+        { home: scratch, env: chalupaEnv(origin) },
+      );
+      expect(stdout).toBe("ok\n");
+      expect(code).toBe(1);
+      expect(stderr).toContain("receipt not written:");
+      expect([...new Bun.Glob("**/r.json*").scanSync(scratch.home)]).toEqual(
+        [],
+      );
+    } finally {
+      await rm(scratch.home, { recursive: true, force: true });
+    }
+  });
+});
+
+test.each([
+  [["-p", "Hello", "--receipt", "r.json"], "--receipt needs a Chalupa profile"],
+  [["-p", "Hello", "--run-id", "x"], "--run-id names a --receipt"],
+  [["--receipt", "r.json"], "--receipt records a headless turn"],
+  [["-p", "Hello", "--receipt", "-"], "--receipt needs a file path"],
+  [
+    ["-p", "Hello", "--receipt", "r.json", "--run-id", "has space"],
+    "--run-id must be",
+  ],
+])("%j is refused before anything runs", async (args, message) => {
+  await withOllama([{ name: "fixture", size: 1000 }], async (origin, chats) => {
+    const scratch = await makeHome();
+    // An earlier run's receipt: it must not pass for this one.
+    await writeFile(join(scratch.workspace, "r.json"), "{}\n");
+    try {
+      const { stderr, code } = await runCli(args, {
+        home: scratch,
+        env: { OLLAMA_HOST: origin, LOCAL_AGENT_MODEL: "fixture" },
+      });
+      expect(code).toBe(1);
+      expect(stderr).toContain(message);
+      expect(chats).toEqual([]);
+      // Removed when the run names it as its receipt, kept when it does not.
+      expect(existsSync(join(scratch.workspace, "r.json"))).toBe(
+        !args.includes("r.json"),
+      );
+    } finally {
+      await rm(scratch.home, { recursive: true, force: true });
+    }
+  });
+});
+
 test("a .env in the working directory is not read by a spawned CLI", async () => {
   // Bun loads a .env from the working directory unless told not to, and it
   // would choose the model of a run that names none.

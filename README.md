@@ -347,6 +347,11 @@ Arguments for local-agent go after `--` (`chalupa launch local-agent -- --ui vue
 The Tuimark client is the default on macOS and Linux, so neither command needs
 `--ui`.
 
+A headless run can leave a turn receipt (`local-agent.turn-receipt.v1`:
+model, context, token counts, tool call statuses, how the turn ended) for
+`chalupa inference report`: add `--receipt receipt.json` and, optionally,
+`--run-id ID`. See https://local-agent.dev/providers#turn-receipts.
+
 When you are done, stop the billing:
 
 ```bash

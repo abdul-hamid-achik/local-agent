@@ -1,3 +1,4 @@
+import { renameSync, rmSync, writeFileSync } from "node:fs";
 import { parseArgs } from "node:util";
 import {
   commandLine,
@@ -11,6 +12,9 @@ import {
   PLANNED_CONTEXT_MAX,
   type Provider,
   readMcpConfig,
+  receiptOutcome,
+  receiptProblem,
+  receiptRunId,
   resolveProvider,
   runAgent,
   type SessionContext,
@@ -18,6 +22,7 @@ import {
   sandboxUnavailable,
   sessionProblem,
   settleSession,
+  TurnReceiptRecorder,
   Workspace,
   workspaceRules,
 } from "@local-agent/runtime";
@@ -82,6 +87,36 @@ const unavailable = (failed: { name: string; error: string }) =>
  */
 let interrupted = 0;
 
+/** The --receipt of a headless run, once its provider is known. */
+let receipt: { file: string; recorder: TurnReceiptRecorder } | undefined;
+
+/**
+ * Writes the run's receipt once, whole or not at all (a temporary file
+ * renamed over it), so a reader never sees half a document. Synchronous, so
+ * a signal's handler writes it before a hang-up's exit or a second signal
+ * can end the process.
+ */
+function writeReceipt(
+  outcome: Parameters<TurnReceiptRecorder["finish"]>[0],
+): void {
+  const target = receipt;
+  receipt = undefined;
+  if (!target) return;
+  const temporary = `${target.file}.${process.pid}.tmp`;
+  try {
+    writeFileSync(
+      temporary,
+      `${JSON.stringify(target.recorder.finish(outcome))}\n`,
+    );
+    renameSync(temporary, target.file);
+  } catch (error) {
+    rmSync(temporary, { force: true });
+    throw new Error(
+      `receipt not written: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+}
+
 try {
   const { values } = parseArgs({
     args: Bun.argv.slice(2),
@@ -116,6 +151,8 @@ try {
       apply: { type: "boolean", default: false },
       "mcp-status": { type: "boolean", default: false },
       "trust-rules": { type: "boolean", default: false },
+      receipt: { type: "string" },
+      "run-id": { type: "string" },
     },
   });
   const ui = parseUi(values.ui);
@@ -156,6 +193,11 @@ local-agent [--model MODEL (default: ${DEFAULT_OLLAMA_MODEL})] [--mode fullscree
                        ${defaultMcpConfigPath()} when it exists)
   --no-mcp             Start without the default MCP servers
   --approve-mcp        Allow configured MCP tool calls in headless mode
+  --receipt FILE       With a Chalupa profile, headless: write the turn's receipt
+                       (local-agent.turn-receipt.v1: model, context, token counts,
+                       tool call statuses, how it ended) to FILE for chalupa
+                       inference report, whether the turn succeeds or not
+  --run-id ID          The run ID the receipt names (default: a new UUID)
   --sandbox-commands   Run commands in the macOS sandbox, without asking: no
                        network (not even this machine), writes only in the
                        workspace, no reads in the home folder beyond
@@ -216,6 +258,11 @@ A resumed session first closes the calls it was interrupted before running.`);
       process.off("SIGTERM", terminate);
     }
   } else {
+    if (values.receipt === "" || values.receipt === "-")
+      throw new Error("--receipt needs a file path");
+    // A receipt from an earlier run never passes for this one: the file is
+    // gone before any other check, and a run refused writes none.
+    if (values.receipt !== undefined) rmSync(values.receipt, { force: true });
     const mode = values.mode ?? "fullscreen";
     if (!["fullscreen", "inline", "headless"].includes(mode))
       throw new Error("Unknown presentation mode");
@@ -264,6 +311,15 @@ A resumed session first closes the calls it was interrupted before running.`);
     const prompt = values.prompt ?? "";
     const headless =
       mode === "headless" || values.prompt !== undefined || values.json;
+    if (values["run-id"] !== undefined && values.receipt === undefined)
+      throw new Error("--run-id names a --receipt; use it with --receipt FILE");
+    if (values.receipt !== undefined && (inspect || !headless))
+      throw new Error(
+        "--receipt records a headless turn; use it with --prompt",
+      );
+    // Checked before any setup, as every other flag.
+    const runId =
+      values.receipt !== undefined ? receiptRunId(values["run-id"]) : undefined;
     if (!inspect) {
       // --prompt and --json run headless: an interactive mode named beside
       // them would be dropped without a word.
@@ -383,6 +439,15 @@ A resumed session first closes the calls it was interrupted before running.`);
           context: values.context,
           think: values.think,
         });
+        if (values.receipt !== undefined && runId !== undefined) {
+          const problem = receiptProblem(resolved);
+          if (problem) throw new Error(problem);
+          // From here a failure is the turn's, and the receipt says so.
+          receipt = {
+            file: values.receipt,
+            recorder: new TurnReceiptRecorder(runId, resolved),
+          };
+        }
         // A resumed session first closes the calls it was interrupted
         // before running (ADR-0006); one that still cannot continue is
         // refused before the provider is asked anything. The Tuimark
@@ -445,6 +510,13 @@ A resumed session first closes the calls it was interrupted before running.`);
         const controller = new AbortController();
         const stopFor = (code: number) => () => {
           interrupted ||= code;
+          try {
+            writeReceipt({ status: "canceled", stopReason: "interrupted" });
+          } catch (error) {
+            console.error(
+              terminalText(error instanceof Error ? error.message : "receipt"),
+            );
+          }
           controller.abort();
         };
         const interrupt = stopFor(130);
@@ -592,6 +664,7 @@ A resumed session first closes the calls it was interrupted before running.`);
             // The model's text arrives in pieces: an escape sequence split
             // between two of them is still one sequence to remove.
             const streamText = terminalTextStream();
+            receipt?.recorder.start();
             // Native terminal rendering stays behind the interactive dynamic import.
             for await (const event of runAgent(
               provider,
@@ -655,6 +728,7 @@ A resumed session first closes the calls it was interrupted before running.`);
                 },
               },
             )) {
+              receipt?.recorder.observe(event);
               if (values.json) console.log(JSON.stringify(event));
               else if (event.type === "text")
                 process.stdout.write(streamText(event.text));
@@ -672,6 +746,7 @@ A resumed session first closes the calls it was interrupted before running.`);
                 );
             }
             if (!values.json) process.stdout.write("\n");
+            writeReceipt({ status: "settled", stopReason: "completed" });
           } else if (client === "tuimark") {
             // Tuimark owns the terminal; the Vue renderer stays unloaded.
             const { runTuimark } = await import("#cli/tuimark/launch");
@@ -741,4 +816,13 @@ A resumed session first closes the calls it was interrupted before running.`);
       ),
     );
   process.exitCode = interrupted || 1;
+  // A turn that failed still has its receipt; one that cannot be written
+  // is said, after the run's own error.
+  try {
+    writeReceipt(receiptOutcome(error, interrupted !== 0));
+  } catch (failure) {
+    console.error(
+      terminalText(failure instanceof Error ? failure.message : "receipt"),
+    );
+  }
 }
