@@ -1830,7 +1830,8 @@ export type AgentEvent =
 
 export type { SessionContext };
 
-export type Approval = boolean | "sandbox";
+/** "loopback" is "sandbox" with TCP to this machine open (sandbox.ts `loopback`). */
+export type Approval = boolean | "sandbox" | "loopback";
 
 /** A command stopped by its timeout or a cancel, its process group gone. */
 const STOPPED_NOTE =
@@ -1838,6 +1839,9 @@ const STOPPED_NOTE =
 /** Told to the model with a sandboxed command that failed. */
 const SANDBOX_NOTE =
   "This ran in the command sandbox: no network at all (not even this machine: no downloads, no DNS, no test server of its own), no writes outside the workspace (nor to any .git folder, .gitattributes or .local-agent), no reads in the home folder beyond toolchains, their caches, ~/.gitconfig and ~/.tool-versions. A failure caused by that (Operation not permitted, a refused connection) fails the same way on a retry: tell the user, who can run it outside the sandbox.";
+/** The same, for a command run with loopback: TCP to this machine works, nothing else does. */
+const LOOPBACK_SANDBOX_NOTE =
+  "This ran in the command sandbox with loopback: TCP to this machine works (a test server of its own, a local service), but no other network at all (no downloads, no DNS, no other hosts), no writes outside the workspace (nor to any .git folder, .gitattributes or .local-agent), no reads in the home folder beyond toolchains, their caches, ~/.gitconfig and ~/.tool-versions. A failure caused by that (Operation not permitted, a refused connection) fails the same way on a retry: tell the user, who can run it outside the sandbox.";
 
 export type AgentOptions = {
   workspace: Workspace;
@@ -1845,8 +1849,9 @@ export type AgentOptions = {
   intent?: Intent;
   /**
    * The host's decision on an effect: true runs it, false refuses it, and
-   * "sandbox" (commands only) runs a command confined by sandbox.ts. Any
-   * other proposal answered "sandbox" is refused, as is a command when the
+   * "sandbox" (commands only) runs a command confined by sandbox.ts, and
+   * "loopback" does the same with TCP to this machine open. Any other
+   * proposal answered with either is refused, as is a command when the
    * sandbox is unavailable: nothing meant for it runs outside it.
    */
   approve: (
@@ -2888,7 +2893,8 @@ async function* agentTurn(
             record("approval_requested");
             const allowed = await options.approve(proposal, signal);
             signal.throwIfAborted();
-            const sandboxed = allowed === "sandbox";
+            const sandboxed = allowed === "sandbox" || allowed === "loopback";
+            const loopback = allowed === "loopback";
             const unavailable = sandboxed
               ? (options.sandboxUnavailable ?? sandboxUnavailable)(
                   workspace.root,
@@ -2909,7 +2915,7 @@ async function* agentTurn(
               const result = await executeApprovedCommand(
                 proposal,
                 signal,
-                sandboxed ? {} : undefined,
+                sandboxed ? { loopback } : undefined,
               );
               // Stopped with its whole process group gone, a command has a
               // receipt like any other ending (ADR-0006 §1); only a process
@@ -2921,7 +2927,9 @@ async function* agentTurn(
                   : "failed";
               const notes = [
                 ...(result.timedOut || result.cancelled ? [STOPPED_NOTE] : []),
-                ...(sandboxed && status === "failed" ? [SANDBOX_NOTE] : []),
+                ...(sandboxed && status === "failed"
+                  ? [loopback ? LOOPBACK_SANDBOX_NOTE : SANDBOX_NOTE]
+                  : []),
               ];
               output = JSON.stringify({
                 ...result,

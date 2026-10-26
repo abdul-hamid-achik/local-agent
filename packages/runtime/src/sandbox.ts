@@ -111,9 +111,11 @@ const RUNS_LATER = String.raw`/(.*/)?(\.git(/(hooks|modules|worktrees|info)(/|$)
 function profile({
   workspaceAncestors,
   bunNode,
+  loopback,
 }: {
   workspaceAncestors: number;
   bunNode: boolean;
+  loopback: boolean;
 }): string {
   const home = (rel: string) => `(string-append (param "HOME") ${quote(rel)})`;
   return [
@@ -159,10 +161,30 @@ function profile({
     '(allow file-write* (subpath (param "WS")) (subpath (param "OWN"))',
     '  (literal "/dev/null") (literal "/dev/zero") (regex #"^/dev/fd/"))',
     `(deny file-write* (regex (string-append "^" (param "WS_RE") ${quote(RUNS_LATER)})))`,
-    // Network: none, not even this machine. Seatbelt's per-port rules are
-    // unreliable (a deny for one port in a list can let it through), and
-    // every port open on this machine (Ollama, an editor's or another
-    // agent's server, a database) would be reachable without them.
+    // Network: none, not even this machine, unless `loopback` opens TCP to
+    // this machine (below). Seatbelt's per-port rules are unreliable (a deny
+    // for one port in a list can let it through), and every port open on
+    // this machine (Ollama, an editor's or another agent's server, a
+    // database) would be reachable without them, so there is no per-port
+    // deny: loopback is all of it or nothing.
+    ...(loopback
+      ? [
+          // Opt-in, `loopback` only. This opens every TCP port listening on
+          // this machine to a confined command: Ollama, other agents' and
+          // editors' servers (some run commands, e.g. opencode), databases.
+          // Only TCP, both ways. Seatbelt names no address but `localhost`
+          // or `*`, and `localhost` matches the machine's own addresses too,
+          // so a command can also connect to this machine's LAN and IPv6
+          // addresses and listen on 0.0.0.0 or ::, which other hosts on the
+          // network may be able to reach (not tested: this machine has no
+          // second host). It cannot reach any other host: a LAN gateway and
+          // the internet are refused. No `network-bind` rule: binds succeeded
+          // with the inbound rule alone, and an extra one changed nothing.
+          // UDP stays closed (`ip` instead of `tcp` would open it).
+          '(allow network-inbound (local tcp "localhost:*"))',
+          '(allow network-outbound (remote tcp "localhost:*"))',
+        ]
+      : []),
     ...(bunNode
       ? [
           // Bun's links (see bunNodeFolder): readable, and creatable only
@@ -187,6 +209,11 @@ function literalRegex(text: string): string {
 export type CommandSandbox = Readonly<{
   /** The home folder whose reads are kept from a command (the user's). */
   home?: string;
+  /**
+   * Open TCP to this machine (every local port, in and out) for the command.
+   * Off by default: the command then has no network at all. See `profile`.
+   */
+  loopback?: boolean;
 }>;
 
 type Host = Readonly<{
@@ -367,6 +394,7 @@ export function sandboxedCommand(
       profile({
         workspaceAncestors: up.length,
         bunNode: bunNode !== undefined,
+        loopback: sandbox.loopback === true,
       }),
       ...Object.entries(params).flatMap(([key, value]) => [
         "-D",

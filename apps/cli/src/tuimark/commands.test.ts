@@ -7,6 +7,7 @@ import {
   PALETTE,
   paletteCommand,
   runSlash,
+  SANDBOX_LOOPBACK_NOTICE,
   SLASH_COMMANDS,
   slashMatches,
   slashRows,
@@ -394,7 +395,7 @@ test("the slash catalog lists exactly the commands the parser knows", () => {
     "/context [SIZE|auto]",
     "/clear",
     "/permissions [clear|trust]",
-    "/sandbox on|off",
+    "/sandbox on|loopback|off",
     "/details [N]",
     "/diff",
     "/status",
@@ -601,4 +602,42 @@ test("/context hands the controller what was typed, any case, nothing for none",
   expect(runSlash("/context auto", state).context).toBe("auto");
   // Two words are no size: the command is unknown, not a truncated size.
   expect(runSlash("/context 64k please", state).context).toBeUndefined();
+});
+
+test("/sandbox: on, loopback or off, and the status says which is active", () => {
+  const off = { ...state, sandbox: false };
+  expect(runSlash("/sandbox loopback", off)).toEqual({
+    status: SANDBOX_LOOPBACK_NOTICE,
+    sandbox: true,
+    loopback: true,
+  });
+  expect(runSlash("/sandbox on", off)).toMatchObject({
+    sandbox: true,
+    loopback: false,
+  });
+  expect(runSlash("/sandbox OFF", off)).toMatchObject({
+    sandbox: false,
+    loopback: false,
+  });
+  expect(runSlash("/sandbox maybe", off)).toEqual({
+    status:
+      "Unknown sandbox setting: maybe. Use /sandbox on, /sandbox loopback or /sandbox off",
+    unknown: true,
+  });
+  expect(runSlash("/sandbox", { ...off, sandbox: false }).status).toMatch(
+    /^Sandbox is off: .*\/sandbox loopback/,
+  );
+  expect(
+    runSlash("/sandbox", { ...off, sandbox: true, sandboxLoopback: true })
+      .status,
+  ).toMatch(/^Sandbox on with loopback: .*Ollama included/);
+  expect(
+    runSlash("/sandbox", { ...off, sandbox: true, sandboxLoopback: false })
+      .status,
+  ).toMatch(/^Sandbox is on \(no network\)/);
+  // The one sentence every loopback notice shares names what it opens.
+  expect(SANDBOX_LOOPBACK_NOTICE).toMatch(
+    /every local service, Ollama included/,
+  );
+  expect(SANDBOX_LOOPBACK_NOTICE.match(/\./g)).toHaveLength(1);
 });

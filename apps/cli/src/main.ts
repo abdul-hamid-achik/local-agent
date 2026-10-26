@@ -102,6 +102,7 @@ try {
       "approve-commands": { type: "boolean", default: false },
       "approve-mcp": { type: "boolean", default: false },
       "sandbox-commands": { type: "boolean", default: false },
+      "sandbox-loopback": { type: "boolean", default: false },
       "mcp-config": { type: "string" },
       "no-mcp": { type: "boolean", default: false },
       "session-db": { type: "string" },
@@ -162,6 +163,10 @@ local-agent [--model MODEL (default: ${DEFAULT_OLLAMA_MODEL})] [--mode fullscree
                        rules refuse and allow rules run confined too, so no
                        command runs outside it. Instead of --approve-commands;
                        in Tuimark, /sandbox on at start
+  --sandbox-loopback   With --sandbox-commands: also open TCP to this machine
+                       (every local port, Ollama included, in and out; no
+                       per-port rule is possible). Other hosts stay closed.
+                       In Tuimark, /sandbox loopback at start
   --session-db PATH    Opt into experimental durable sessions in a separate database
   --resume HANDLE      Resume a completed session from --session-db
   --sessions           List sessions in this workspace without contacting a model
@@ -279,6 +284,10 @@ A resumed session first closes the calls it was interrupted before running.`);
       )
         throw new Error(
           "--approve-edits, --approve-commands and --approve-mcp are only available in headless mode",
+        );
+      if (values["sandbox-loopback"] && !values["sandbox-commands"])
+        throw new Error(
+          "--sandbox-loopback needs --sandbox-commands: loopback only opens the sandbox's network",
         );
       if (values["sandbox-commands"] && values["approve-commands"])
         throw new Error(
@@ -631,7 +640,11 @@ A resumed session first closes the calls it was interrupted before running.`);
                   // an allow rule runs confined too, since outside it could
                   // run what a sandboxed command wrote in the workspace.
                   if (proposal.kind === "command" && values["sandbox-commands"])
-                    return secret ? false : "sandbox";
+                    return secret
+                      ? false
+                      : values["sandbox-loopback"]
+                        ? "loopback"
+                        : "sandbox";
                   if (verdict.effect === "allow") return true;
                   return proposal.kind === "edit" || proposal.kind === "write"
                     ? values["approve-edits"]
@@ -676,6 +689,9 @@ A resumed session first closes the calls it was interrupted before running.`);
                 ...(modelCheck ? { admission: modelCheck } : {}),
                 ...(bin ? { resolve: async () => bin } : {}),
                 ...(values["sandbox-commands"] ? { sandbox: true } : {}),
+                ...(values["sandbox-loopback"]
+                  ? { sandboxLoopback: true }
+                  : {}),
                 // One read-only GET /api/ps after the model's first turn.
                 placement: loadedModel,
                 ...(provider.type === "ollama_remote" &&

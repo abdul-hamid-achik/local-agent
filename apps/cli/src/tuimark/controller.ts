@@ -115,6 +115,7 @@ import {
   paletteCommand,
   QUEUE_RETURNED,
   runSlash,
+  SANDBOX_LOOPBACK_NOTICE,
   slashMatches,
   slashRows,
   type Theme,
@@ -335,6 +336,8 @@ export interface ClientOptions {
    * unavailable they ask, and the status says why.
    */
   sandbox?: boolean;
+  /** With `sandbox`: the sandbox also opens loopback (`--sandbox-loopback`). */
+  sandboxLoopback?: boolean;
   /** Why the command sandbox is unavailable in a workspace. Default the runtime's check; tests replace. */
   sandboxUnavailable?: (workspaceRoot: string) => string | undefined;
   /** Process-level abort (SIGINT, SIGTERM). */
@@ -595,6 +598,8 @@ export class TuimarkClient {
   private sandbox = false;
   /** Why the sandbox was last found unavailable (`/status` says it). */
   private sandboxWhy?: string;
+  /** The sandbox is on and also opens loopback (`/sandbox loopback`). */
+  private sandboxLoopback = false;
   /**
    * Session grants (`a` on an approval), grant key -> label, in grant order.
    * Memory only: they die with the process and are never persisted. They
@@ -718,6 +723,7 @@ export class TuimarkClient {
     if (options.sandbox) {
       this.sandboxWhy = this.sandboxProblem();
       this.sandbox = this.sandboxWhy === undefined;
+      this.sandboxLoopback = this.sandbox && options.sandboxLoopback === true;
     }
     this.run = options.run ?? runAgent;
     this.intent = options.intent;
@@ -779,6 +785,8 @@ export class TuimarkClient {
       store.status = oneLine(
         `Sandbox unavailable: ${this.sandboxWhy} · commands ask`,
       );
+    // Loopback is a safety matter too: its warning goes before the startup one.
+    else if (this.sandboxLoopback) store.status = SANDBOX_LOOPBACK_NOTICE;
     // The startup warning on stderr is under the screen: the first status
     // says it too (the sandbox's, a safety matter, goes first).
     else if (this.provider.context_warning)
@@ -1316,7 +1324,9 @@ export class TuimarkClient {
       mouse: this.inline ? "n/a (inline)" : this.mouse ? "on" : "off",
       grants: this.grantLabels(),
       sandbox: this.sandbox
-        ? "on"
+        ? this.sandboxLoopback
+          ? "on, with loopback (every local service reachable)"
+          : "on"
         : this.sandboxWhy !== undefined
           ? oneLine(`off (unavailable: ${this.sandboxWhy})`)
           : "off",
@@ -3612,6 +3622,7 @@ export class TuimarkClient {
       mouse: this.mouse,
       grants: this.grantLabels(),
       sandbox: this.sandbox,
+      sandboxLoopback: this.sandboxLoopback,
       ...(rules !== undefined ? { rules } : {}),
     });
     // `/model` and `/context SIZE` run on controller state and can still be
@@ -3733,13 +3744,16 @@ export class TuimarkClient {
       const why = outcome.sandbox ? this.sandboxProblem() : undefined;
       if (why !== undefined) this.sandboxWhy = why;
       this.sandbox = outcome.sandbox && why === undefined;
+      this.sandboxLoopback = this.sandbox && outcome.loopback === true;
       writes[0] = {
         path: "status",
         value:
           why !== undefined
             ? oneLine(`Sandbox unavailable: ${why} · commands ask`)
             : this.sandbox
-              ? "Sandbox on: commands run confined, without a card (no network, writes only in the workspace)"
+              ? this.sandboxLoopback
+                ? SANDBOX_LOOPBACK_NOTICE
+                : "Sandbox on: commands run confined, without a card (no network, writes only in the workspace)"
               : "Sandbox off: commands ask",
       };
       writes.push({ path: "header.sandbox_on", value: this.sandbox });
@@ -3953,11 +3967,12 @@ export class TuimarkClient {
       const why = this.sandboxProblem();
       if (why === undefined) {
         this.flash(oneLine(`sandboxed: ${commandLine(proposal.argv)}`));
-        return "sandbox";
+        return this.sandboxLoopback ? "loopback" : "sandbox";
       }
       // It stopped being available: off, and this command asks, whatever
       // rule or grant would have spared the card.
       this.sandbox = false;
+      this.sandboxLoopback = false;
       this.sandboxWhy = why;
       sandboxLost = true;
       await this.write([

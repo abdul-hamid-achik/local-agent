@@ -334,6 +334,38 @@ test("headless: a command that names a secret path is flagged on stderr, and no 
   }
 });
 
+test("--sandbox-loopback needs --sandbox-commands", async () => {
+  const root = await mkdtemp(join(tmpdir(), "local-agent-sandbox-loopback-"));
+  try {
+    const run = await headless(root, [], ["--sandbox-loopback"]);
+    expect(run.code).toBe(1);
+    expect(run.stderr).toContain(
+      "--sandbox-loopback needs --sandbox-commands: loopback only opens the sandbox's network",
+    );
+    expect(run.results).toEqual([]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("--sandbox-loopback with --sandbox-commands is checked like it, where the sandbox is unavailable", async () => {
+  if (process.platform === "darwin") return;
+  const root = await mkdtemp(join(tmpdir(), "local-agent-sandbox-loopback-"));
+  try {
+    const run = await headless(
+      root,
+      [],
+      ["--sandbox-commands", "--sandbox-loopback"],
+    );
+    expect(run.code).toBe(1);
+    expect(run.stderr).toContain(
+      "--sandbox-commands: the command sandbox needs macOS (Seatbelt)",
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("--sandbox-commands and --approve-commands cannot be combined", async () => {
   const root = await mkdtemp(join(tmpdir(), "local-agent-sandbox-flags-"));
   try {

@@ -11,7 +11,7 @@
 │ │  /context [SIZE|auto] show or set the context size (64k, auto)           │ ┃
 │ │  /clear start over with an empty conversation (same as /new)             │ ┃
 │ │  /permissions [clear|trust] show, clear or trust grants and rules        │ ┃
-│ │  /sandbox on|off run commands confined (macOS), without a card           │ ┃
+│ │  /sandbox on|loopback|off run commands confined (macOS), without a card  │ ┃
 │ │  /details [N] show tool output N, or the last                            │ ┃
 │ │  /diff show the files this session edited or wrote, and how              │ ┃
 │ │  /status show the effective config (model, workspace, session)           │ ┃

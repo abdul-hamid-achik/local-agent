@@ -44,7 +44,16 @@ export interface CommandState {
   model?: string;
   /** Whether commands run in the sandbox (`/sandbox` reports it). */
   sandbox?: boolean;
+  /** Whether the sandbox also opens loopback (`/sandbox` reports it). */
+  sandboxLoopback?: boolean;
 }
+
+/**
+ * What `/sandbox loopback` says and the controller shows when loopback is on.
+ * One sentence: the sandbox's network is the machine's own services too.
+ */
+export const SANDBOX_LOOPBACK_NOTICE =
+  "Sandbox on with loopback: confined commands can reach every local service, Ollama included, while the rest of the network stays closed.";
 
 export interface CommandOutcome {
   status: string;
@@ -59,10 +68,12 @@ export interface CommandOutcome {
   /** Set when the command changed the mouse toggle: write it to `mouse_on`. */
   mouse?: boolean;
   /**
-   * Set by `/sandbox on|off`. The controller checks the sandbox is
+   * Set by `/sandbox on|loopback|off`. The controller checks the sandbox is
    * available before turning it on, so it writes the real status itself.
    */
   sandbox?: boolean;
+  /** Set with `sandbox: true` by `/sandbox loopback`: loopback opens too. */
+  loopback?: boolean;
   /** Set by `/permissions clear`: revoke every session grant. */
   clearGrants?: boolean;
   /** Set by `/permissions clear rules`: empty the workspace's rule file. */
@@ -134,7 +145,7 @@ export interface CommandOutcome {
 }
 
 export const HELP_STATUS =
-  "/mode plan|build|chat · /model [NAME] · /context [SIZE|auto] · /theme dark|light|auto · /mouse on|off · /copy [code] · /compact · /permissions [clear|trust] · /sandbox on|off · /details [N] · /diff · /status · /sessions · /new · /clear · /recover · /find TEXT · /search TEXT · /export [json] · /mcp · /goal OBJECTIVE · /help · esc cancel · ctrl+c exit";
+  "/mode plan|build|chat · /model [NAME] · /context [SIZE|auto] · /theme dark|light|auto · /mouse on|off · /copy [code] · /compact · /permissions [clear|trust] · /sandbox on|loopback|off · /details [N] · /diff · /status · /sessions · /new · /clear · /recover · /find TEXT · /search TEXT · /export [json] · /mcp · /goal OBJECTIVE · /help · esc cancel · ctrl+c exit";
 
 /** Inline has no mouse (the engine ignores it there): the controller refuses with this. */
 export const MOUSE_INLINE_STATUS = "Mouse is not available in inline mode";
@@ -208,18 +219,27 @@ export function runSlash(text: string, state: CommandState): CommandOutcome {
     const requested = sandbox[1]?.toLowerCase();
     if (!requested)
       return {
-        status: state.sandbox
-          ? "Sandbox is on: commands run confined, without a card (an ask rule still shows one). Use /sandbox off"
-          : "Sandbox is off: commands ask. Use /sandbox on to run them confined, without a card",
+        status: !state.sandbox
+          ? "Sandbox is off: commands ask. Use /sandbox on to run them confined, without a card, or /sandbox loopback to also reach this machine"
+          : state.sandboxLoopback
+            ? `${SANDBOX_LOOPBACK_NOTICE} Use /sandbox on for no network, or /sandbox off`
+            : "Sandbox is on (no network): commands run confined, without a card (an ask rule still shows one). Use /sandbox loopback to also reach this machine, or /sandbox off",
       };
-    if (requested !== "on" && requested !== "off")
+    if (requested !== "on" && requested !== "off" && requested !== "loopback")
       return {
-        status: `Unknown sandbox setting: ${requested}. Use /sandbox on or /sandbox off`,
+        status: `Unknown sandbox setting: ${requested}. Use /sandbox on, /sandbox loopback or /sandbox off`,
         unknown: true,
       };
+    if (requested === "loopback")
+      return {
+        status: SANDBOX_LOOPBACK_NOTICE,
+        sandbox: true,
+        loopback: true,
+      };
     return {
-      status: `Sandbox ${requested}`,
+      status: requested === "on" ? "Sandbox on (no network)" : "Sandbox off",
       sandbox: requested === "on",
+      loopback: false,
     };
   }
   const model = command.match(/^\/model(?:\s+(\S+))?\s*$/i);
@@ -483,7 +503,7 @@ export const SLASH_COMMANDS: readonly SlashCommand[] = [
   },
   {
     name: "/sandbox",
-    usage: "/sandbox on|off",
+    usage: "/sandbox on|loopback|off",
     description: "run commands confined (macOS), without a card",
     insert: "/sandbox ",
   },

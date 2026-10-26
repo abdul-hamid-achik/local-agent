@@ -331,6 +331,8 @@ export interface LaunchDeps {
   admission?: ClientOptions["admission"];
   /** `--sandbox-commands`: commands start in the sandbox (ClientOptions.sandbox). */
   sandbox?: boolean;
+  /** `--sandbox-loopback`: with `sandbox`, the sandbox opens loopback (ClientOptions.sandboxLoopback). */
+  sandboxLoopback?: boolean;
   /** Reads how the model was loaded after its first turn (ClientOptions.placement). */
   placement?: ClientOptions["placement"];
   /** Chalupa's environment name (ClientOptions.environment). */
@@ -418,6 +420,7 @@ export async function runTuimark(
     ...(deps.mcpReady ? { mcpReady: deps.mcpReady } : {}),
     ...(deps.admission && !checked ? { admission: deps.admission } : {}),
     ...(deps.sandbox ? { sandbox: true } : {}),
+    ...(deps.sandbox && deps.sandboxLoopback ? { sandboxLoopback: true } : {}),
     ...(deps.placement ? { placement: deps.placement } : {}),
     ...(deps.environment ? { environment: deps.environment } : {}),
     // The real clipboard tools; Tuimark owns the TTY, so never OSC 52.

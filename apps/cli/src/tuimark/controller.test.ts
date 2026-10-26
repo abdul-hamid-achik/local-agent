@@ -46,7 +46,11 @@ import {
   runsText,
 } from "#cli/tuimark/blocks";
 import type { CopyResult } from "#cli/tuimark/clipboard";
-import { BUSY_STATUS, type PaletteItem } from "#cli/tuimark/commands";
+import {
+  BUSY_STATUS,
+  type PaletteItem,
+  SANDBOX_LOOPBACK_NOTICE,
+} from "#cli/tuimark/commands";
 import {
   APPROVAL_ARM_MS,
   EXPORT_NOTE,
@@ -3304,7 +3308,7 @@ test("the help overlay's store carries the slash commands", () => {
     "/context [SIZE|auto]",
     "/clear",
     "/permissions [clear|trust]",
-    "/sandbox on|off",
+    "/sandbox on|loopback|off",
     "/details [N]",
     "/diff",
     "/status",
@@ -6729,7 +6733,7 @@ test("sandbox: /sandbox turns it on only where it is available, and /status says
   );
   await ui.fire("send", "/sandbox");
   expect(store(ui).status).toBe(
-    "Sandbox is off: commands ask. Use /sandbox on to run them confined, without a card",
+    "Sandbox is off: commands ask. Use /sandbox on to run them confined, without a card, or /sandbox loopback to also reach this machine",
   );
   await ui.fire("send", "/sandbox on");
   expect(store(ui).status).toBe(
@@ -6761,7 +6765,7 @@ test("sandbox: /sandbox turns it on only where it is available, and /status says
   expect(store(ui).status).toBe("Sandbox off: commands ask");
   await ui.fire("send", "/sandbox maybe");
   expect(store(ui).status).toBe(
-    "Unknown sandbox setting: maybe. Use /sandbox on or /sandbox off",
+    "Unknown sandbox setting: maybe. Use /sandbox on, /sandbox loopback or /sandbox off",
   );
   expect(store(ui).header.sandbox_on).toBe(false);
 });
@@ -9162,4 +9166,54 @@ test("reduced motion keeps the elapsed time counting: it is information, the onl
   });
   release();
   await client.idle();
+});
+
+test("sandbox: /sandbox loopback opens loopback and says so; /sandbox on closes it again", async () => {
+  const { ui, client } = setup(
+    turnsAsking([
+      [commandProposal(["bun", "test"])],
+      [commandProposal(["bun", "test"])],
+      [commandProposal(["bun", "test"])],
+    ]),
+    {
+      sandboxUnavailable: () => undefined,
+      workspace: { root: "/w" } as Workspace,
+    },
+  );
+  await ui.fire("send", "/sandbox loopback");
+  expect(store(ui).header.sandbox_on).toBe(true);
+  expect(store(ui).status).toBe(SANDBOX_LOOPBACK_NOTICE);
+  await ui.fire("send", "/status");
+  expect(
+    store(ui).panel.lines.some((line) =>
+      line.t.startsWith("Sandbox: on, with loopback"),
+    ),
+  ).toBe(true);
+  await ui.fire("panel_close");
+  await ui.fire("send", "one");
+  await client.idle();
+  expect(decisions).toEqual(["loopback"]);
+
+  await ui.fire("send", "/sandbox on");
+  expect(store(ui).status).toBe(
+    "Sandbox on: commands run confined, without a card (no network, writes only in the workspace)",
+  );
+  await ui.fire("send", "two");
+  await client.idle();
+  expect(decisions).toEqual(["loopback", "sandbox"]);
+  await ui.fire("send", "/sandbox off");
+  expect(store(ui).header.sandbox_on).toBe(false);
+});
+
+test("sandbox: --sandbox-loopback starts with loopback and says so", async () => {
+  const { ui, client } = setup(turnsAsking([[commandProposal(["ls"])]]), {
+    sandbox: true,
+    sandboxLoopback: true,
+    sandboxUnavailable: () => undefined,
+    workspace: { root: "/w" } as Workspace,
+  });
+  expect(store(ui).status).toBe(SANDBOX_LOOPBACK_NOTICE);
+  await ui.fire("send", "one");
+  await client.idle();
+  expect(decisions).toEqual(["loopback"]);
 });
