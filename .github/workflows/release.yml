@@ -101,7 +101,7 @@ jobs:
         with:
           go-version: "1.26.6"
           cache: false
-      - run: go install github.com/abdul-hamid-achik/glyphrun/cmd/glyph@v0.23.0
+      - run: go install github.com/abdul-hamid-achik/glyphrun/cmd/glyph@v0.24.1
 
       - name: Tuimark specs against the compiled executable
         run: |

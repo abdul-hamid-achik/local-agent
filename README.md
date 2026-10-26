@@ -66,7 +66,7 @@ bun run build
 bun run start --help
 bun run site:build
 bun run tui:dev                       # Vue SFC playground, no model required
-bun run test:integration              # Vue client contracts, requires Glyphrun v0.23.0
+bun run test:integration              # Vue client contracts, requires Glyphrun v0.24.1
 bun run test:integration:tuimark      # Tuimark client contracts, needs TUIMARK_BINARY
 ```
 
@@ -456,7 +456,7 @@ Glyphrun contracts under `specs/bun/` exercise headless output, native inline
 scrollback, fullscreen resize, edit approval/denial and clean exit against a
 deterministic loopback fixture. They do not download models or contact GPUs.
 CI runs these contracts on Linux and macOS. Install the tested runner with
-`go install github.com/abdul-hamid-achik/glyphrun/cmd/glyph@v0.23.0`.
+`go install github.com/abdul-hamid-achik/glyphrun/cmd/glyph@v0.24.1`.
 
 For an already configured Chalupa environment, run from this checkout:
 

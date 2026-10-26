@@ -40,7 +40,7 @@ jobs:
       # (it does not skip) when the binary is missing.
       - run: bun run check
       - name: Install Glyphrun for Bun terminal contracts
-        run: go install github.com/abdul-hamid-achik/glyphrun/cmd/glyph@v0.23.0
+        run: go install github.com/abdul-hamid-achik/glyphrun/cmd/glyph@v0.24.1
       - name: Verify Bun terminal contract hashes
         run: |
           for spec in specs/bun/*.yml specs/tuimark/*.yml; do

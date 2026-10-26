@@ -28,10 +28,10 @@ links, assets and HTML anchors without making network requests.
 
 ## Terminal contracts
 
-Install Glyphrun v0.23.0 and run:
+Install Glyphrun v0.24.1 and run:
 
 ```bash
-go install github.com/abdul-hamid-achik/glyphrun/cmd/glyph@v0.23.0
+go install github.com/abdul-hamid-achik/glyphrun/cmd/glyph@v0.24.1
 bun run test:integration
 ```
 
