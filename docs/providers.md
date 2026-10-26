@@ -55,6 +55,43 @@ Once Chalupa is active, prompts and tool receipts go to the remote endpoint.
 That is exactly what the explicit `LOCAL_AGENT_LOCAL_ONLY=false`
 acknowledges. See [Safety and privacy](/safety).
 
+### Turn receipts
+
+A headless run under a Chalupa profile can leave a receipt for
+`chalupa inference report`:
+
+```sh
+chalupa exec -- local-agent -p "Fix the failing test" --approve-edits \
+  --receipt receipt.json --run-id ci-42
+chalupa inference report --config ./chalupa.yml \
+  --file receipt.json --provider-id 123456789 --dry-run
+```
+
+The receipt is one JSON document (`local-agent.turn-receipt.v1`), written
+whole when the turn ends, also when it fails, and at once when a signal
+stops it. A file already at that path is removed as the run starts, so a
+run refused (for its flags, or without a Chalupa profile) leaves none.
+It holds counts and states only, with no prompt, reply, path or tool output:
+
+- the model and the context it ran with, and a run ID (`--run-id`, or a new
+  UUID);
+- `status`: `settled`, `canceled`, `failed` or `not_admitted` (the model
+  was not admitted before any inference: the host refused it, or did not
+  answer the check), and `stop_reason`: `completed`,
+  `interrupted`, `not_admitted`, `step_limit`, `conversation_full`,
+  `tunnel_lost` or `error`;
+- prompt and output tokens summed over every model call of the turn, a
+  `task` subagent's included, and `truncated` when a reply was cut at its
+  length limit;
+- one status per tool call the turn made: `ok` only for a call that ran and
+  succeeded; a denied, failed or unverified one is `error`. A subagent's own
+  calls are not listed (its tokens are counted above);
+- `timing` (time to first token, load, prompt and output evaluation, total)
+  only when Ollama reported every call's durations.
+
+A local Ollama or OpenAI-compatible run has no receipt: `--receipt` is
+refused there, as it is for a model name Chalupa's receipt cannot carry.
+
 ## OpenAI-compatible local servers (opt-in)
 
 `LOCAL_AGENT_PROVIDER=openai_local` targets a local OpenAI-compatible server

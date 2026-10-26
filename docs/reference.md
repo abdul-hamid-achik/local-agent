@@ -32,6 +32,8 @@ the authoritative short list.
 | `--sandbox-commands` | macOS: run commands in the sandbox without asking: no network, writes only in the workspace, no reads in the home folder beyond toolchains (see [Sandboxed commands](/safety#sandboxed-commands-macos)). Headless, no command runs outside it: deny and ask rules refuse, allow rules run confined; a command that names a path the workspace treats as secret is refused. In the Tuimark client, starts with `/sandbox on` |
 | `--sandbox-loopback` | With `--sandbox-commands`: confined commands may also use TCP to this machine, in and out, so a test can start its own server and reach a local service. It opens every local port (Ollama and any other local server included), and a server a command starts may be reachable from your network; connecting to another host is refused, measured against the router and the internet (see [Loopback](/safety#loopback-opt-in)). In the Tuimark client, starts with `/sandbox loopback` |
 | `--approve-mcp` | Headless only: allow configured MCP tool calls |
+| `--receipt FILE` | Headless, Chalupa profile only: write the turn's receipt to `FILE` for `chalupa inference report`, whether the turn succeeds or not (see [Turn receipts](/providers#turn-receipts)) |
+| `--run-id ID` | With `--receipt`: the run ID the receipt names, 1–128 letters, digits, `.`, `_`, `:` or `-`. Default: a new UUID |
 | `--mcp-config PATH` | Trusted JSON array of MCP servers, instead of your own `~/.config/local-agent/mcp.json` (loaded by default when it exists). At most 1 MB and 16 servers; server names must be unique |
 | `--no-mcp` | Start without your own `mcp.json` |
 | `--session-db PATH` | Opt into experimental durable sessions in a separate database |
@@ -61,6 +63,8 @@ the authoritative short list.
   starts where the sandbox is unavailable (Linux, Windows, a workspace that
   contains your home folder).
 - `--sandbox-loopback` needs `--sandbox-commands`.
+- `--receipt` needs headless mode and a Chalupa profile; `--run-id` needs
+  `--receipt`.
 - `--mode fullscreen` and `--mode inline` cannot be combined with `--prompt`
   or `--json`, which run headless.
 - Interactive modes require a TTY.
@@ -97,7 +101,9 @@ the history is compacted or a request leaves its oldest messages out. With
 `{"type":"session","id":...}` event; a compaction is a `compacted` event
 carrying the shortened history, and a windowed request is a `windowed` event
 carrying counts only (`left`, `sent`). A run emits it at its first windowed
-request and again whenever the window's start moves.
+request and again whenever the window's start moves. A `task` subagent's
+model calls appear only as `subagent_usage` events (token counts and Ollama's
+durations), never as `done`, which stays the parent's own request.
 
 Approval in headless is fail-closed by default. Without `--approve-edits`,
 `--approve-commands`, or `--approve-mcp`, the matching request class is denied:
