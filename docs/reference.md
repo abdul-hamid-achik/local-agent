@@ -30,6 +30,7 @@ the authoritative short list.
 | `--approve-edits` | Headless only: allow file edits and writes |
 | `--approve-commands` | Headless only: allow command execution with your permissions |
 | `--sandbox-commands` | macOS: run commands in the sandbox without asking: no network, writes only in the workspace, no reads in the home folder beyond toolchains (see [Sandboxed commands](/safety#sandboxed-commands-macos)). Headless, no command runs outside it: deny and ask rules refuse, allow rules run confined; a command that names a path the workspace treats as secret is refused. In the Tuimark client, starts with `/sandbox on` |
+| `--sandbox-loopback` | With `--sandbox-commands`: confined commands may also use TCP to this machine, in and out, so a test can start its own server and reach a local service. It opens every local port (Ollama and any other local server included), and a server a command starts may be reachable from your network; connecting to other hosts stays refused (see [Loopback](/safety#loopback-opt-in)). In the Tuimark client, starts with `/sandbox loopback` |
 | `--approve-mcp` | Headless only: allow configured MCP tool calls |
 | `--mcp-config PATH` | Trusted JSON array of MCP servers, instead of your own `~/.config/local-agent/mcp.json` (loaded by default when it exists). At most 1 MB and 16 servers; server names must be unique |
 | `--no-mcp` | Start without your own `mcp.json` |
@@ -59,6 +60,7 @@ the authoritative short list.
   be combined with `--approve-commands`. Headless, it stops the run before it
   starts where the sandbox is unavailable (Linux, Windows, a workspace that
   contains your home folder).
+- `--sandbox-loopback` needs `--sandbox-commands`.
 - `--mode fullscreen` and `--mode inline` cannot be combined with `--prompt`
   or `--json`, which run headless.
 - Interactive modes require a TTY.
@@ -116,7 +118,7 @@ instead. See [Safety](/safety#headless-approval).
 | `/permissions clear rules` | Empty the rules in `.local-agent/permissions.json` and forget their trust |
 | `/permissions trust` | List the allow rules in the workspace's `.local-agent/permissions.json` that you have not trusted on this machine |
 | `/permissions trust confirm` | Trust exactly the rules the last `/permissions trust` listed, if the file still holds them |
-| `/sandbox on\|off` | Tuimark client, macOS: run commands in the sandbox without a card (an ask rule still shows one, and its `y` runs that command outside; so does a command that names a secret path). `/sandbox` alone says whether it is on. Where it is unavailable it stays off and says why |
+| `/sandbox on\|loopback\|off` | Tuimark client, macOS: run commands in the sandbox without a card (`loopback` also opens TCP to this machine, see [Loopback](/safety#loopback-opt-in)) (an ask rule still shows one, and its `y` runs that command outside; so does a command that names a secret path). `/sandbox` alone says whether it is on. Where it is unavailable it stays off and says why |
 | `/details [N]` | Tuimark client: show tool output N in full (the number a cut card names), or the last one. Outputs are kept up to 2,000,000 characters and 500 outputs in all, each capped at 64,000 characters; one let go, or from an earlier conversation, says so |
 | `/copy` | Tuimark client: put the last reply's markdown on the clipboard (also `ctrl+y`). During a turn it copies the last finished reply. With no clipboard tool, the status says how to select text by hand |
 | `/copy code` | Tuimark client: copy the last code block of the last reply |

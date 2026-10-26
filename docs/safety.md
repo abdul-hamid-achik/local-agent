@@ -398,7 +398,8 @@ profile that denies by default. It:
   `.gitattributes` (attributes pick diff, filter and merge drivers from your
   own git config) or `.local-agent`;
 - **has no network**: no internet, no DNS, and not this machine either —
-  not Ollama, not another local server, not a server of its own;
+  not Ollama, not another local server, not a server of its own — unless
+  you turn on [loopback](#loopback-opt-in);
 - is allowed to look up only a few named system services (user and group
   lookups, power assertions, notifications, logging): it cannot open an app
   or script another one, and it can signal and inspect only its own
@@ -426,7 +427,7 @@ What does not work inside it:
 
 - anything that needs the network: installing packages that are not
   already cached, Go modules missing from the module cache, `git push`,
-  and tests that start a local server;
+  and, without loopback, tests that start a local server;
 - `git init`, and git in a linked worktree or submodule whose git data
   lives outside the workspace.
 
@@ -436,6 +437,29 @@ workspace is your home folder or contains it, or when the client itself
 runs inside a sandbox, it is unavailable: `--sandbox-commands` stops a
 headless run before it starts, and the Tuimark client keeps asking and says
 why.
+
+### Loopback (opt-in)
+
+`/sandbox loopback` in the Tuimark client, or `--sandbox-loopback` with
+`--sandbox-commands`, also lets a confined command use TCP to this machine,
+in and out. A test can start its own server on `127.0.0.1` and connect to
+it, and a command can reach a local service. Everything else in the profile
+stays the same. `/sandbox on` goes back to no network.
+
+It is all of this machine or nothing. Seatbelt's rules for single ports
+proved unreliable (a refused port in a list could still be reached), so no
+port is held back. While loopback is on:
+
+- every TCP port listening on this machine is reachable: Ollama, a
+  database, an editor's or another agent's server, including servers that
+  run commands for whoever connects;
+- Seatbelt matches this machine's own network addresses as well as
+  `127.0.0.1` and `::1`, so a command can also listen on all interfaces, and
+  a server it starts may be reachable from other devices on your network;
+- connecting to any other host stays refused (your router and the internet
+  included), UDP stays closed, and DNS still does not work.
+
+Turn it on for a task that needs it and back off afterwards.
 
 ## MCP calls cross the same boundary
 

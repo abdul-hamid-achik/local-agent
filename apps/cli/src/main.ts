@@ -165,8 +165,10 @@ local-agent [--model MODEL (default: ${DEFAULT_OLLAMA_MODEL})] [--mode fullscree
                        in Tuimark, /sandbox on at start
   --sandbox-loopback   With --sandbox-commands: also open TCP to this machine
                        (every local port, Ollama included, in and out; no
-                       per-port rule is possible). Other hosts stay closed.
-                       In Tuimark, /sandbox loopback at start
+                       per-port rule is possible). A server a command starts
+                       may be reachable from your network; connecting to
+                       other hosts stays refused. In Tuimark, /sandbox
+                       loopback at start
   --session-db PATH    Opt into experimental durable sessions in a separate database
   --resume HANDLE      Resume a completed session from --session-db
   --sessions           List sessions in this workspace without contacting a model

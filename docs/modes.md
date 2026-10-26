@@ -90,7 +90,8 @@ Without the relevant flag, the headless run denies that class of proposal.
 See [Reference](/reference) for the full flag surface.
 
 On macOS, commands can run in a sandbox instead of asking: `/sandbox on` in
-the Tuimark client, or `--sandbox-commands` (headless or Tuimark). A
+the Tuimark client, or `--sandbox-commands` (headless or Tuimark);
+`/sandbox loopback` (or `--sandbox-loopback`) also opens TCP to this machine. A
 confined command has no network, writes only in the workspace (never git's
 hooks or config, a `.gitattributes`, nor `.local-agent`), and reads nothing in your home folder
 beyond the workspace and your toolchains. Deny rules still refuse; an ask

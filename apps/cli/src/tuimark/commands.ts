@@ -53,7 +53,7 @@ export interface CommandState {
  * One sentence: the sandbox's network is the machine's own services too.
  */
 export const SANDBOX_LOOPBACK_NOTICE =
-  "Sandbox on with loopback: confined commands can reach every local service, Ollama included, while the rest of the network stays closed.";
+  "Sandbox on with loopback: confined commands can reach every local service, Ollama included, and a server they start may be reachable from your network, but they cannot connect to other hosts.";
 
 export interface CommandOutcome {
   status: string;
