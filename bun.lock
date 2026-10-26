@@ -22,7 +22,7 @@
       "dependencies": {
         "@local-agent/runtime": "workspace:*",
         "@local-agent/vue-tui": "workspace:*",
-        "@thelacanians/tuimark": "0.5.3",
+        "@thelacanians/tuimark": "0.5.4",
         "vue": "3.5.44",
       },
     },
@@ -425,7 +425,7 @@
 
     "@szmarczak/http-timer": ["@szmarczak/http-timer@4.0.6", "", { "dependencies": { "defer-to-connect": "^2.0.0" } }, "sha512-4BAffykYOgO+5nzBWYwE3W90sBgLJoUPRWWcL8wlyiM8IB8ipJz3UMJ9KXQd1RKQXpKp8Tutn80HZtWsu2u76w=="],
 
-    "@thelacanians/tuimark": ["@thelacanians/tuimark@0.5.3", "", { "bin": { "tuimark": "bin/tuimark.js" } }, "sha512-QJnWZytbPixpIMpbiMB2vJTIuu2y2I3KLleDZtPlptzeay/XMIj3RGzp6rtnNram1hTKl4W5N4rcvLu8T+Jn9g=="],
+    "@thelacanians/tuimark": ["@thelacanians/tuimark@0.5.4", "", { "bin": { "tuimark": "bin/tuimark.js" } }, "sha512-LEos7OU2s1KK+Zab5QR6mtLBLYMemDdJY+wLXHov6OCL9bhXz1Z3We7qq49rly/doLLa+LTyYxsxphrslM3VOw=="],
 
     "@types/bun": ["@types/bun@1.4.2", "", { "dependencies": { "bun-types": "1.4.2" } }, "sha512-GimotNn7+ZV0uVArItBbriZsR1oNf0+WTzPkdcFrzShI7k2norL0uzEaJT8T33dWr7O/c9ZDuAFQrctKCi72oQ=="],
 

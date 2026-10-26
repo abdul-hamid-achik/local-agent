@@ -111,7 +111,7 @@ a child and draws the whole screen from `apps/cli/src/tuimark/ui/app.tui`.
   session, `!` saves an always rule, `n`/`esc` deny), the
   composer, and the status. A bare `--mode inline` still uses the Vue client,
   and the headless flags refuse `--ui tuimark`.
-- The SDK comes from npm (`@thelacanians/tuimark@0.5.3`); it downloads the
+- The SDK comes from npm (`@thelacanians/tuimark@0.5.4`); it downloads the
   pinned, checksum-verified `tuimark` binary itself.
 - Composer: `enter` sends, `shift+enter` or `alt+enter` start a new line, and a
   pasted block stays one message. The box grows to eight rows, then scrolls.

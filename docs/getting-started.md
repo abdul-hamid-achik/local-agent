@@ -46,7 +46,7 @@ local-agent --version
 
 The release is one executable next to a `ui/` folder, with the LICENSE and
 README. The Tuimark host it drives is downloaded on first run (stderr says
-`Downloading Tuimark 0.5.3…` meanwhile) and checked against a pinned
+`Downloading Tuimark 0.5.4…` meanwhile) and checked against a pinned
 checksum; if that fails and `--ui` was not given, it starts the Vue client
 instead and says so.
 Every [release](https://github.com/abdul-hamid-achik/local-agent/releases)

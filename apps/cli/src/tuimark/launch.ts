@@ -56,11 +56,12 @@ export const MIN_TUIMARK = "0.5.1";
 /**
  * The tuimark release the client downloads when TUIMARK_BINARY is not set,
  * named here so the binary matches the SDK this client was checked against.
- * 0.5.3 changes no language: a FIFO, socket or device link at a file a
- * document names (an `<img>` source among them) is refused without being
- * opened, on top of 0.5.2's fixes to data-bound links and kitty images.
+ * 0.5.4 changes no language: in photo mode an `<img>` is transmitted only
+ * when a frame paints one of its cells, on top of 0.5.3's refusal to open a
+ * FIFO, socket or device at a path a document names and 0.5.2's fixes to
+ * data-bound links and kitty images.
  */
-export const PINNED_TUIMARK = "0.5.3";
+export const PINNED_TUIMARK = "0.5.4";
 
 /**
  * The SDK's resolution (TUIMARK_BINARY, the cache, a checked download) for
