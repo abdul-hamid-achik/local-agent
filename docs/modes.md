@@ -91,9 +91,9 @@ See [Reference](/reference) for the full flag surface.
 
 On macOS, commands can run in a sandbox instead of asking: `/sandbox on` in
 the Tuimark client, or `--sandbox-commands` (headless or Tuimark);
-`/sandbox loopback` (or `--sandbox-loopback`) also opens TCP to this machine. A
-confined command has no network, writes only in the workspace (never git's
-hooks or config, a `.gitattributes`, nor `.local-agent`), and reads nothing in your home folder
-beyond the workspace and your toolchains. Deny rules still refuse; an ask
-rule still shows its card, and headless refuses instead. See
+`/sandbox loopback` (or `--sandbox-loopback`) also opens TCP to this machine.
+A confined command has no network, writes only in the workspace (never git's
+hooks or config, a `.gitattributes`, nor `.local-agent`), and reads nothing in
+your home folder beyond the workspace and your toolchains. Deny rules still
+refuse; an ask rule still shows its card, and headless refuses instead. See
 [Sandboxed commands](/safety#sandboxed-commands-macos).

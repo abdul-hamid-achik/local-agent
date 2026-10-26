@@ -172,8 +172,8 @@ function profile({
           // Opt-in, `loopback` only. This opens every TCP port listening on
           // this machine to a confined command: Ollama, other agents' and
           // editors' servers (some run commands, e.g. opencode), databases.
-          // Only TCP, both ways. Seatbelt names no address but `localhost`
-          // or `*`, and `localhost` matches the machine's own addresses too,
+          // Only TCP, both ways. In these filters, Seatbelt names no address
+          // but `localhost` or `*`, and `localhost` matches the machine's own addresses too,
           // so a command can also connect to this machine's LAN and IPv6
           // addresses and listen on 0.0.0.0 or ::, which other hosts on the
           // network may be able to reach (not tested: this machine has no

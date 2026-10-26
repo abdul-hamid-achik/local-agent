@@ -9217,3 +9217,54 @@ test("sandbox: --sandbox-loopback starts with loopback and says so", async () =>
   await client.idle();
   expect(decisions).toEqual(["loopback"]);
 });
+
+test("sandbox: loopback is cleared by /sandbox off and /sandbox on, and when the sandbox is lost or unavailable", async () => {
+  let why: string | undefined;
+  const { ui, client } = setup(
+    turnsAsking([
+      [commandProposal(["bun", "test"])],
+      [commandProposal(["bun", "test"])],
+    ]),
+    { sandboxUnavailable: () => why, workspace: { root: "/w" } as Workspace },
+  );
+  await ui.fire("send", "/sandbox loopback");
+  expect(store(ui).header.sandbox_on).toBe(true);
+  expect(store(ui).header.sandbox_loopback).toBe(true);
+  expect(store(ui).header.sandbox_label).toBe("sandbox+loopback");
+  await ui.fire("send", "one");
+  await client.idle();
+  expect(
+    ui.batches
+      .flat()
+      .some(
+        (w) =>
+          w.path === "status" &&
+          String(w.value) === "sandboxed (loopback): bun test",
+      ),
+  ).toBe(true);
+  expect(decisions).toEqual(["loopback"]);
+
+  await ui.fire("send", "/sandbox off");
+  expect(store(ui).header.sandbox_loopback).toBe(false);
+  expect(store(ui).header.sandbox_label).toBe("sandbox");
+  await ui.fire("send", "/sandbox loopback");
+  await ui.fire("send", "/sandbox on");
+  expect(store(ui).header.sandbox_on).toBe(true);
+  expect(store(ui).header.sandbox_loopback).toBe(false);
+  expect(store(ui).header.sandbox_label).toBe("sandbox");
+
+  // The sandbox is lost while loopback is on: off, the command asks.
+  await ui.fire("send", "/sandbox loopback");
+  why = "the command sandbox needs macOS (Seatbelt)";
+  await ui.fire("send", "two");
+  await untilApproval(ui);
+  expect(store(ui).header.sandbox_on).toBe(false);
+  expect(store(ui).header.sandbox_loopback).toBe(false);
+  await ui.fire("dialog_cancel");
+  await client.idle();
+
+  // Unavailable from the start: /sandbox loopback does not turn it on.
+  await ui.fire("send", "/sandbox loopback");
+  expect(store(ui).header.sandbox_on).toBe(false);
+  expect(store(ui).header.sandbox_loopback).toBe(false);
+});

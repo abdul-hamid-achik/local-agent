@@ -407,6 +407,18 @@ export const QUIT_PRINT_MS = 2000;
 const STATUS_MAX = 300;
 
 /** A message as one clean line, before any clipping. */
+/** The header's sandbox fields: the label names loopback while it is open. */
+function sandboxHeader(on: boolean, loopback: boolean) {
+  return [
+    { path: "header.sandbox_on", value: on },
+    { path: "header.sandbox_loopback", value: on && loopback },
+    {
+      path: "header.sandbox_label",
+      value: on && loopback ? "sandbox+loopback" : "sandbox",
+    },
+  ];
+}
+
 function flatLine(message: string): string {
   return terminalText(message).replace(/\s+/g, " ").trim();
 }
@@ -777,6 +789,7 @@ export class TuimarkClient {
         ? { messages: [], earlier: earlier(0) }
         : this.transcript.snapshot(),
       sandbox: this.sandbox,
+      sandboxLoopback: this.sandboxLoopback,
       termProgram: this.options.termProgram,
     });
     // `--sandbox-commands` where the sandbox is unavailable: commands ask,
@@ -3756,7 +3769,7 @@ export class TuimarkClient {
                 : "Sandbox on: commands run confined, without a card (no network, writes only in the workspace)"
               : "Sandbox off: commands ask",
       };
-      writes.push({ path: "header.sandbox_on", value: this.sandbox });
+      writes.push(...sandboxHeader(this.sandbox, this.sandboxLoopback));
     }
     if (outcome.clearRules) {
       const root = this.options.workspace.root;
@@ -3966,7 +3979,11 @@ export class TuimarkClient {
     ) {
       const why = this.sandboxProblem();
       if (why === undefined) {
-        this.flash(oneLine(`sandboxed: ${commandLine(proposal.argv)}`));
+        this.flash(
+          oneLine(
+            `sandboxed${this.sandboxLoopback ? " (loopback)" : ""}: ${commandLine(proposal.argv)}`,
+          ),
+        );
         return this.sandboxLoopback ? "loopback" : "sandbox";
       }
       // It stopped being available: off, and this command asks, whatever
@@ -3976,7 +3993,7 @@ export class TuimarkClient {
       this.sandboxWhy = why;
       sandboxLost = true;
       await this.write([
-        { path: "header.sandbox_on", value: false },
+        ...sandboxHeader(false, false),
         {
           path: "status",
           value: oneLine(`Sandbox unavailable: ${why} · commands ask`),

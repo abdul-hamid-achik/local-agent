@@ -1,0 +1,31 @@
+=== grid 80x30 ===
+ Local Agent    build  sandbox+loopback  LOCAL  qwen3-coder:30b    ctx 9.6k/32k 
+┌──────────────────────────────────────────────────────────────────────────────┐
+│      catch (e) { if (attempt === tries) throw e; }                           │
+│    }                                                                         │
+│  }                                                                           │
+│                                                                              │
+│ ╭─ Edit ───────────────────────────────────────────────────────────────────╮ │
+│ │ ✓ applied                                                                │ │
+│ ╭─ Run command? ───────────────────────────────────────────────────────────╮ │
+│ │                                                                          │ ┃
+│ │  Runs outside the sandbox, as you, exactly as written (no shell). It     │ ┃
+│ │  can run files that sandboxed commands changed.                          │ ┃
+│ │  ┌────────────────────────────────────────────────────────────────────┐  │ ┃
+│ │  │$ bun test tests/stats.test.ts -t 'mean of an empty list'           │  │ ┃
+│ │  │in the workspace · timeout 120s · runs with your permissions        │  │ ┃
+│ │  └────────────────────────────────────────────────────────────────────┘  │ ┃
+│ │  sandbox on: session grant unavailable                                   │ ┃
+│ │                                                                          │ ┃
+│ │                                                     [ Deny ]  [ Allow ]  │ ┃
+│ │                                                                          │ ┃
+│ ╰──────────────────────────────────────────────────────────────────────────╯ ┃
+│ │ ⠋  waiting for approval                                                  │ ┃
+│ │ bun test fetch                                                           │ ┃
+│ ╰──────────────────────────────────────────────────────────────────────────╯ ┃
+│                                                                              ┃
+└──────────────────────────────────────────────────────────────────────────────┘
+╭──────────────────────────────────────────────────────────────────────────────╮
+│ Answer the approval first                                                    │
+╰──────────────────────────────────────────────────────────────────────────────╯
+ Waiting for approval · y allow · n deny · ! always · esc deny   ! always       

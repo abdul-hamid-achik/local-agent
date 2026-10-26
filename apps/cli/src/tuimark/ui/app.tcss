@@ -32,6 +32,8 @@
 .la-model { bold: true; width: auto; }
 .la-mode { color: $warn; width: auto; }
 .la-sandbox { color: $ok; width: auto; }
+/* Loopback is open: the label names it, in the warn color. */
+.la-sandbox.loopback { color: $warn; }
 .la-goal { color: $accent; width: auto; }
 .la-provider, .la-locality, .la-session, .la-ctx, .la-grants { width: auto; }
 /* Where the prompt goes is in the appbar at every width: the provider

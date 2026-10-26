@@ -1,4 +1,5 @@
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -348,23 +349,73 @@ test("--sandbox-loopback needs --sandbox-commands", async () => {
   }
 });
 
-test("--sandbox-loopback with --sandbox-commands is checked like it, where the sandbox is unavailable", async () => {
-  if (process.platform === "darwin") return;
-  const root = await mkdtemp(join(tmpdir(), "local-agent-sandbox-loopback-"));
-  try {
-    const run = await headless(
-      root,
-      [],
-      ["--sandbox-commands", "--sandbox-loopback"],
+// Off macOS only: there the sandbox is unavailable, which is what this checks.
+// On macOS the run would start, so the test is skipped.
+test.skipIf(process.platform === "darwin")(
+  "--sandbox-loopback with --sandbox-commands is checked like it, where the sandbox is unavailable",
+  async () => {
+    const root = await mkdtemp(join(tmpdir(), "local-agent-sandbox-loopback-"));
+    try {
+      const run = await headless(
+        root,
+        [],
+        ["--sandbox-commands", "--sandbox-loopback"],
+      );
+      expect(run.code).toBe(1);
+      expect(run.stderr).toContain(
+        "--sandbox-commands: the command sandbox needs macOS (Seatbelt)",
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+);
+
+// A command that connects to a server the test opened on loopback. Confined
+// with --sandbox-loopback it reaches the server; confined alone, it cannot.
+test.skipIf(process.platform !== "darwin")(
+  "--sandbox-loopback lets a confined command reach a local server; --sandbox-commands alone does not",
+  async () => {
+    const root = await mkdtemp(
+      join(tmpdir(), "local-agent-sandbox-loopback-e2e-"),
     );
-    expect(run.code).toBe(1);
-    expect(run.stderr).toContain(
-      "--sandbox-commands: the command sandbox needs macOS (Seatbelt)",
+    const server = createServer((socket) => socket.end("ok"));
+    await new Promise<void>((resolve) =>
+      server.listen(0, "127.0.0.1", resolve),
     );
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
-});
+    const port = (server.address() as { port: number }).port;
+    try {
+      const connect = [
+        process.execPath,
+        "-e",
+        `require("node:net").connect(${port}, "127.0.0.1").on("connect", () => { console.log("connected"); process.exit(0); }).on("error", (e) => { console.log(e.code); process.exit(1); });`,
+      ];
+      const call = [{ name: "run_command", arguments: { argv: connect } }];
+      const open = await headless(root, call, [
+        "--sandbox-commands",
+        "--sandbox-loopback",
+      ]);
+      expect(open.code).toBe(0);
+      expect(open.results[0]?.status).toBe("succeeded");
+      expect(JSON.parse(open.results[0]?.output ?? "{}")).toMatchObject({
+        sandboxed: true,
+        exitCode: 0,
+        output: expect.stringContaining("connected"),
+      });
+
+      const closed = await headless(root, call, ["--sandbox-commands"]);
+      expect(closed.results[0]?.status).toBe("failed");
+      expect(JSON.parse(closed.results[0]?.output ?? "{}")).toMatchObject({
+        sandboxed: true,
+        exitCode: 1,
+        output: expect.stringContaining("ECONNREFUSED"),
+      });
+    } finally {
+      server.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  },
+);
 
 test("--sandbox-commands and --approve-commands cannot be combined", async () => {
   const root = await mkdtemp(join(tmpdir(), "local-agent-sandbox-flags-"));

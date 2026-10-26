@@ -258,7 +258,7 @@
              build; the sandbox), then where the prompt goes, then the model. -->
         <text if="!header.goal_on" class="la-mode">{header.mode}</text>
         <text if="header.goal_on" class="la-goal">{header.goal}</text>
-        <text if="header.sandbox_on" class="la-sandbox">sandbox</text>
+        <text if="header.sandbox_on" class="la-sandbox" class:loopback="header.sandbox_loopback">{header.sandbox_label}</text>
         <text class="la-muted la-provider">{header.provider}</text>
         <text class="la-locality" class:remote="header.remote">{header.locality}</text>
         <text class="la-model">{header.model}</text>

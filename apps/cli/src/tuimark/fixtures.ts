@@ -763,6 +763,15 @@ export function commandApprovalSample(sandboxOn = false): Store {
   return store;
 }
 
+/** The sandbox's approval with loopback open: the header names it, in the warn color. */
+export function loopbackHeaderSample(): Store {
+  const store = commandApprovalSample(true);
+  store.header.sandbox_on = true;
+  store.header.sandbox_loopback = true;
+  store.header.sandbox_label = "sandbox+loopback";
+  return store;
+}
+
 /** The command palette, filtered to "mode". */
 export function paletteSample(): Store {
   const { store } = base();
@@ -1599,6 +1608,7 @@ export const SAMPLES = {
   "sample-approval-command": () => commandApprovalSample(),
   // With the sandbox on, `a` grants nothing for a command; `!` still saves a rule.
   "sample-approval-sandbox": () => commandApprovalSample(true),
+  "sample-approval-loopback": loopbackHeaderSample,
   "sample-question": questionSample,
   "sample-question-text": questionTextSample,
   "sample-thinking": thinkingSample,

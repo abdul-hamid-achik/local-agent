@@ -723,6 +723,7 @@ test("--help shows the default model and the new flags", async () => {
   expect(stdout).toContain("default: qwen3.5:4b-q4_K_M");
   expect(stdout).toContain("--think on|off");
   expect(stdout).toContain("--context N");
+  expect(stdout).toContain("--sandbox-loopback");
 });
 
 test("a missing default model fails with one actionable line before any chat request", async () => {

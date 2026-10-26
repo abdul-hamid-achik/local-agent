@@ -357,8 +357,9 @@ judged when the command is proposed; one changed afterwards is not seen.
 On macOS, commands can run confined instead of asking. Turn it on with
 `/sandbox on` in the Tuimark client, or start with `--sandbox-commands`
 (headless, or the Tuimark client with the sandbox already on). The header
-shows `sandbox` while it is on; `/status` says whether it is on, off, or
-unavailable and why.
+shows `sandbox` while it is on, and `sandbox+loopback` in the warning color
+while [loopback](#loopback-opt-in) is open; `/status` says whether it is on,
+on with loopback, off, or unavailable and why.
 
 With the sandbox on, in build intent:
 
@@ -456,8 +457,8 @@ port is held back. While loopback is on:
 - Seatbelt matches this machine's own network addresses as well as
   `127.0.0.1` and `::1`, so a command can also listen on all interfaces, and
   a server it starts may be reachable from other devices on your network;
-- connecting to any other host stays refused (your router and the internet
-  included), UDP stays closed, and DNS still does not work.
+- connecting to another host is refused (measured against the router and the
+  internet), UDP stays closed, and DNS still does not work.
 
 Turn it on for a task that needs it and back off afterwards.
 

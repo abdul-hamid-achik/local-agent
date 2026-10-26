@@ -1,4 +1,5 @@
 import { createSocket } from "node:dgram";
+import { lookup } from "node:dns";
 import { mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
 import { connect, createServer, type Server } from "node:net";
 import { networkInterfaces, tmpdir } from "node:os";
@@ -75,6 +76,8 @@ describe.runIf(available)("a loopback sandboxed command", () => {
   let lanAddress: string | undefined;
   /** Whether this machine can reach the internet (a control for test (d)). */
   let internetProbe: string;
+  /** Whether a DNS lookup works outside the sandbox (a control for the DNS test). */
+  let dnsOutside = false;
 
   const listen = (host: string) =>
     new Promise<number>((resolve, reject) => {
@@ -115,6 +118,9 @@ describe.runIf(available)("a loopback sandboxed command", () => {
       .find((i) => i?.family === "IPv4" && !i.internal);
     lanAddress = lan?.address;
     internetProbe = await connectOutside("1.1.1.1", 443, 3_000);
+    dnsOutside = await new Promise<boolean>((resolve) =>
+      lookup("example.com", (error) => resolve(error === null)),
+    );
   });
   afterAll(async () => {
     for (const server of servers)
@@ -196,23 +202,22 @@ describe.runIf(available)("a loopback sandboxed command", () => {
     );
   });
 
-  test("(d) a connect to a non-loopback address still fails, with a control", async () => {
+  test("(d) a connect to a non-loopback address still fails, with a control", async (ctx) => {
     // Control: the internet is reachable outside the sandbox. Without that
-    // the "fails" below would prove nothing.
-    expect(
-      internetProbe,
-      "1.1.1.1:443 is unreachable outside the sandbox",
-    ).toBe("ok");
+    // the "fails" below would prove nothing, so an offline host skips.
+    if (internetProbe !== "ok")
+      ctx.skip("1.1.1.1:443 is unreachable outside the sandbox (offline)");
     expect(await attempt(connectInside("1.1.1.1", 443), true)).not.toBe("ok");
     expect(await attempt(connectInside("1.1.1.1", 443), false)).not.toBe("ok");
   });
 
-  test("(d) this machine's own LAN address: NOT refused (Seatbelt limit)", async () => {
+  test("(d) this machine's own LAN address: NOT refused (Seatbelt limit)", async (ctx) => {
     // Known deviation from the owner's spec. Seatbelt matches `localhost`
     // against this machine's own addresses too, so a connect to the LAN
     // address of this machine is allowed with loopback. This asserts that
     // actual behavior so it is visible; it must change if the rule changes.
-    if (lanAddress === undefined) return;
+    if (lanAddress === undefined)
+      return ctx.skip("this machine has no non-internal IPv4 address");
     const lanPort = await new Promise<number>((resolve, reject) => {
       const server = createServer((socket) => socket.end("ok"));
       servers.push(server);
@@ -228,14 +233,31 @@ describe.runIf(available)("a loopback sandboxed command", () => {
     );
   });
 
-  test("(e) IPv6 loopback works with loopback, and not without", async () => {
-    if (outside6 === undefined) return;
+  test("(e) IPv6 loopback works with loopback, and not without", async (ctx) => {
+    if (outside6 === undefined)
+      return ctx.skip("no IPv6 loopback: ::1 cannot be listened on here");
     expect(await connectOutside("::1", outside6)).toBe("ok");
     expect(await attempt(connectInside("::1", outside6), true)).toBe("ok");
     expect(await attempt(serveAndConnect("::1"), true)).toBe("ok");
     expect(await attempt(connectInside("::1", outside6), false)).toBe(
       "ECONNREFUSED",
     );
+  });
+
+  test("binds 0.0.0.0 with loopback, and not without: the wildcard is what other devices can reach", async () => {
+    // Pins the profile comment and the docs: a confined server may listen on
+    // every interface, so a device on the network may reach it.
+    const bind = `await new Promise((resolve, reject) => { const srv = net.createServer(); srv.on("error", reject); srv.listen(0, "0.0.0.0", () => srv.close(() => resolve())); })`;
+    expect(await attempt(bind, true)).toBe("ok");
+    expect(await attempt(bind, false)).toBe("EPERM");
+  });
+
+  test("DNS does not work with loopback: a lookup inside fails", async (ctx) => {
+    // Control: the lookup works outside the sandbox, or this proves nothing.
+    if (!dnsOutside)
+      ctx.skip("DNS does not resolve outside the sandbox either");
+    const lookup = `await new Promise((resolve, reject) => require("node:dns").lookup("example.com", (e) => (e ? reject(e) : resolve())))`;
+    expect(await attempt(lookup, true)).not.toBe("ok");
   });
 
   test("UDP stays closed with loopback", async () => {

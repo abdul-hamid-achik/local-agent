@@ -384,6 +384,10 @@ export interface Store {
     grants_on: boolean;
     /** Commands no rule decides run in the sandbox, without a card (`/sandbox`). */
     sandbox_on: boolean;
+    /** The sandbox also opens loopback (`/sandbox loopback`): the label says so. */
+    sandbox_loopback: boolean;
+    /** The sandbox's header label: `sandbox`, or `sandbox+loopback`. */
+    sandbox_label: string;
     /** The running goal's turn of its most ("goal 3/8"), shown only while it runs. */
     goal: string;
     goal_on: boolean;
@@ -793,6 +797,8 @@ export interface StoreInit {
   inline?: boolean;
   /** Commands start sandboxed (`--sandbox-commands`, when available). */
   sandbox?: boolean;
+  /** With `sandbox`: loopback is open too (`--sandbox-loopback`). */
+  sandboxLoopback?: boolean;
   /** `$TERM_PROGRAM`, for the native-selection hint (a modifier differs by terminal). */
   termProgram?: string;
 }
@@ -821,6 +827,8 @@ export function initialStore(init: StoreInit): Store {
       grants: "",
       grants_on: false,
       sandbox_on: init.sandbox ?? false,
+      sandbox_loopback: init.sandboxLoopback ?? false,
+      sandbox_label: init.sandboxLoopback ? "sandbox+loopback" : "sandbox",
       goal: "",
       goal_on: false,
     },

@@ -14,6 +14,8 @@
     "grants": "auto: files · bun test",
     "grants_on": true,
     "sandbox_on": false,
+    "sandbox_loopback": false,
+    "sandbox_label": "sandbox",
     "goal": "",
     "goal_on": false
   },

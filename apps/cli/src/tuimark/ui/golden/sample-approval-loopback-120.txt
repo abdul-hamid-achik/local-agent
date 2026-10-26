@@ -1,0 +1,31 @@
+=== grid 120x30 ===
+ Local Agent    build  sandbox+loopback  Ollama / loopback  qwen3-coder:30b    session a1b2c3d  ctx 9.6k/32k  ███▋░░░░░ 
+┌──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│      catch (e) { if (attempt === tries) throw e; }                                                                   │
+│    }                                                                                                                 │
+│  }                                                                                                                   │
+│                                                                                                                      │
+│ ╭─ Edit ───────────────────────────────────────────────────────────────────────────────────────────────────────────╮ │
+│ │ ✓ applied                                                                                                        │ │
+│ │ src/fetch.ts      ╭─ Run command? ───────────────────────────────────────────────────────────╮                   │ │
+│ │ Updated src/fetch.│                                                                          │                   │ ┃
+│ │   import { sleep }│  Runs outside the sandbox, as you, exactly as written (no shell). It     │                   │ ┃
+│ │ - export const get│  can run files that sandboxed commands changed.                          │                   │ ┃
+│ │ + export const get│  ┌────────────────────────────────────────────────────────────────────┐  │                   │ ┃
+│ ╰───────────────────│  │$ bun test tests/stats.test.ts -t 'mean of an empty list'           │  │───────────────────╯ ┃
+│                     │  │in the workspace · timeout 120s · runs with your permissions        │  │                     ┃
+│ Assistant           │  └────────────────────────────────────────────────────────────────────┘  │                     ┃
+│ Done. The helper now│  sandbox on: session grant unavailable                                   │                     ┃
+│                     │                                                                          │                     ┃
+│ Assistant ⠿  waiting│                                                     [ Deny ]  [ Allow ]  │                     ┃
+│                     │                                                                          │                     ┃
+│ ╭─ Command ─────────╰──────────────────────────────────────────────────────────────────────────╯───────────────────╮ ┃
+│ │ ⠋  waiting for approval                                                                                          │ ┃
+│ │ bun test fetch                                                                                                   │ ┃
+│ ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯ ┃
+│                                                                                                                      ┃
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ Answer the approval first                                                                                            │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+ Waiting for approval · y allow · n deny · ! always · esc deny   ! always  pgup/pgdn scroll  home/end top/end           

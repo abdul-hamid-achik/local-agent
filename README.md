@@ -390,7 +390,7 @@ On macOS, `--sandbox-commands` (headless or Tuimark) or `/sandbox on` (Tuimark) 
 this machine; writes only in the workspace, never a `.git` folder's hooks or config, a `.gitattributes` or `.local-agent`; no reads in the home folder beyond
 the workspace and toolchains. Deny rules still refuse and ask rules still ask (headless, they refuse); allow rules and session grants run
 confined too. What a sandboxed command writes in the workspace still runs as you when something outside runs it (`package.json`
-scripts, hooks managed by husky or lefthook, a `Makefile`).
+scripts, hooks managed by husky or lefthook, a `Makefile`). With `/sandbox loopback` (or `--sandbox-loopback`) a confined command may also use TCP to this machine; see https://local-agent.dev/safety#loopback-opt-in.
 A successful edit does not imply that verification passed.
 
 Use `--session-db PATH` to opt into a separate experimental database. Do not
