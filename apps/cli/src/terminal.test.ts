@@ -603,7 +603,11 @@ test("inline writes the prompt, the approval, the tool result and the reply to s
 
   await terminal.mockInput.pasteBracketedText("go");
   terminal.mockInput.pressEnter();
-  await terminal.waitForFrame((frame) => frame.includes("Edit notes.txt?"));
+  // The card waits on the model's reply, so this waits by time: counted in
+  // frames, a slow runner ran out of them before the fixture answered.
+  await expect
+    .poll(() => terminal.captureCharFrame(), { timeout: 5_000 })
+    .toContain("Edit notes.txt?");
   // The preview is in the scrollback; the dialog keeps one line of it.
   expect(written.join("")).toContain("-before");
   expect(terminal.captureCharFrame()).toContain("Diff printed above");
