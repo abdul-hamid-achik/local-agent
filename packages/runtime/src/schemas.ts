@@ -48,6 +48,7 @@ export const RunEventSchema = z.discriminatedUnion("type", [
     inputTokens: z.number().int().nonnegative(),
     outputTokens: z.number().int().nonnegative(),
     /** Ollama's own counters, present when the server reports them. Durations are nanoseconds. */
+    loadDuration: z.number().nonnegative().optional(),
     promptEvalCount: z.number().int().nonnegative().optional(),
     promptEvalDuration: z.number().nonnegative().optional(),
     evalCount: z.number().int().nonnegative().optional(),

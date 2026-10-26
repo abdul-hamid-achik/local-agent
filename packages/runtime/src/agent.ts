@@ -1826,6 +1826,19 @@ export type AgentEvent =
       left: number;
       sent: number;
     }
+  | {
+      /**
+       * Ollama's counters for one model call a `task` subagent made. The
+       * child's own events are drained, so this is the only trace of what
+       * it cost; a context meter must not read it as the parent's request.
+       */
+      type: "subagent_usage";
+      inputTokens: number;
+      outputTokens: number;
+      loadDuration?: number;
+      promptEvalDuration?: number;
+      evalDuration?: number;
+    }
   | { type: "turn_complete"; messages: Message[] };
 
 export type { SessionContext };
@@ -1952,7 +1965,8 @@ async function admitTurn(
   if (provider.type === "openai_local") {
     const admission = await admitOpenAILocalModel(provider, signal);
     signal.throwIfAborted();
-    if (admission.status === "rejected") throw new Error(admission.message);
+    if (admission.status === "rejected")
+      throw new AdmissionError(admission.message);
     const capabilities = ["completion", "tools"];
     admitted.set(key, capabilities);
     return capabilities;
@@ -1960,15 +1974,20 @@ async function admitTurn(
   const admission = await admitOllamaModel(provider, signal);
   signal.throwIfAborted();
   if (admission.status !== "validated")
-    throw new Error(
+    throw new AdmissionError(
       admission.status === "rejected" && admission.code === "not_installed"
         ? admission.message
         : `Model admission ${admission.status}: ${admission.message}`,
     );
   if (!admission.capabilities.includes("tools"))
-    throw new Error("Agent requires a model with tools capability");
+    throw new AdmissionError("Agent requires a model with tools capability");
   admitted.set(key, admission.capabilities);
   return admission.capabilities;
+}
+
+/** The provider's model was refused before the turn asked it anything. */
+export class AdmissionError extends Error {
+  override name = "AdmissionError";
 }
 
 /**
@@ -2736,6 +2755,22 @@ async function* agentTurn(
             "complete";
           try {
             for await (const event of child) {
+              if (event.type === "done")
+                yield {
+                  type: "subagent_usage",
+                  inputTokens: event.inputTokens,
+                  outputTokens: event.outputTokens,
+                  ...(event.loadDuration !== undefined
+                    ? { loadDuration: event.loadDuration }
+                    : {}),
+                  ...(event.promptEvalDuration !== undefined
+                    ? { promptEvalDuration: event.promptEvalDuration }
+                    : {}),
+                  ...(event.evalDuration !== undefined
+                    ? { evalDuration: event.evalDuration }
+                    : {}),
+                };
+              else if (event.type === "subagent_usage") yield event;
               if (
                 event.type === "message" &&
                 event.message.role === "assistant"

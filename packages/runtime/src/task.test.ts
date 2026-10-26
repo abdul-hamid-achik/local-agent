@@ -7,7 +7,8 @@ import { resolveProvider } from "#runtime/config";
 import { Workspace } from "#runtime/workspace";
 
 type Call = { name: string; arguments: Record<string, unknown> };
-type Step = { calls?: Call[]; text?: string };
+/** `usage` is what Ollama reports for the call: prompt and output tokens. */
+type Step = { calls?: Call[]; text?: string; usage?: [number, number] };
 type Body = {
   messages: { role: string; content: string }[];
   tools: { function: { name: string } }[];
@@ -28,6 +29,9 @@ const reply = (step: Step) =>
           : {}),
       },
       done: true,
+      ...(step.usage
+        ? { prompt_eval_count: step.usage[0], eval_count: step.usage[1] }
+        : {}),
     })}\n`,
   );
 
@@ -195,6 +199,32 @@ test("task runs a read-only subagent; its calls and final answer surface only in
           event.message.content.includes("The value is 1."),
       ),
     ).toEqual([]);
+  } finally {
+    await run.cleanup();
+  }
+});
+
+test("each model call a subagent makes reaches the parent's stream as subagent_usage, never as done", async () => {
+  const run = await harness({
+    parent: [{ calls: [{ name: "task", arguments: { prompt: "Look" } }] }],
+    child: (index) =>
+      index === 0
+        ? { calls: [list("src")], usage: [120, 7] }
+        : { text: "Seen.", usage: [180, 3] },
+  });
+  try {
+    expect(run.childBodies).toHaveLength(2);
+    // A context meter reads `done` as the parent's own request: the
+    // child's calls must not look like one.
+    expect(run.events.filter((event) => event.type === "done")).toHaveLength(
+      run.parentBodies.length,
+    );
+    expect(
+      run.events.filter((event) => event.type === "subagent_usage"),
+    ).toEqual([
+      { type: "subagent_usage", inputTokens: 120, outputTokens: 7 },
+      { type: "subagent_usage", inputTokens: 180, outputTokens: 3 },
+    ]);
   } finally {
     await run.cleanup();
   }

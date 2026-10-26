@@ -5,6 +5,7 @@ export {
   type OpenAILocalAdmission,
 } from "#runtime/admission";
 export {
+  AdmissionError,
   type AgentEvent,
   type AgentOptions,
   type Answer,
@@ -94,6 +95,16 @@ export {
   probeProvider,
 } from "#runtime/probe";
 export {
+  type ReceiptStatus,
+  receiptOutcome,
+  receiptProblem,
+  receiptRunId,
+  type StopReason,
+  TURN_RECEIPT_SCHEMA,
+  type TurnReceipt,
+  TurnReceiptRecorder,
+} from "#runtime/receipt";
+export {
   inspectRecovery,
   RECONCILE_NOTE_MAX,
   type RecoveryItem,
@@ -124,6 +135,7 @@ export {
   chat,
   INVALID_ARGUMENTS,
   parseOpenAISSE,
+  TunnelLostError,
 } from "#runtime/transport";
 export {
   type ChangeLine,

@@ -500,6 +500,11 @@ async function* openAILocalChat(
   });
 }
 
+/** A Chalupa tunnel dropped mid-request; the GPU behind it may still run. */
+export class TunnelLostError extends Error {
+  override name = "TunnelLostError";
+}
+
 /** Transport only: tool calls are data, never authority to execute. */
 export async function* chat(
   provider: Provider,
@@ -573,6 +578,7 @@ export async function* chat(
         // Ollama's own counters, only the ones it reported.
         const reported: Record<string, number> = {};
         for (const [key, value] of [
+          ["loadDuration", part.load_duration],
           ["promptEvalCount", part.prompt_eval_count],
           ["promptEvalDuration", part.prompt_eval_duration],
           ["evalCount", part.eval_count],
@@ -598,7 +604,7 @@ export async function* chat(
     // A Chalupa endpoint is a tunnel: when it drops, say so, and that the
     // GPU behind it may still be running (Chalupa owns it, not this run).
     if (config.type === "ollama_remote" && !signal.aborted && tunnelLost(error))
-      throw new Error(
+      throw new TunnelLostError(
         `The Chalupa tunnel to ${config.base_url} was lost (${error instanceof Error ? error.message.split("\n")[0] : "connection closed"}). The GPU may still be running: run chalupa status.`,
         { cause: error },
       );
